@@ -159,7 +159,7 @@ struct drm_backend {
 	uint32_t min_height, max_height;
 	int no_addfb2;
 
-	struct wl_list sprite_list;
+	struct wl_list plane_list;
 	int sprites_are_broken;
 	int sprites_hidden;
 
@@ -1074,12 +1074,15 @@ drm_output_repaint(struct weston_output *output_base,
 	/*
 	 * Now, update all the sprite surfaces
 	 */
-	wl_list_for_each(s, &backend->sprite_list, link) {
+	wl_list_for_each(s, &backend->plane_list, link) {
 		uint32_t flags = 0, fb_id = 0;
 		drmVBlank vbl = {
 			.request.type = DRM_VBLANK_RELATIVE | DRM_VBLANK_EVENT,
 			.request.sequence = 1,
 		};
+
+		if (s->type != WDRM_PLANE_TYPE_OVERLAY)
+			continue;
 
 		if ((!s->current && !s->next) ||
 		    !drm_plane_crtc_supported(output, s->possible_crtcs))
@@ -1354,8 +1357,11 @@ drm_output_prepare_overlay_view(struct drm_output *output,
 	if (!drm_view_transform_supported(ev))
 		return NULL;
 
-	wl_list_for_each(p, &b->sprite_list, link) {
+	wl_list_for_each(p, &b->plane_list, link) {
 		if (!drm_plane_crtc_supported(output, p->possible_crtcs))
+			continue;
+
+		if (p->type != WDRM_PLANE_TYPE_OVERLAY)
 			continue;
 
 		if (!p->next) {
@@ -2905,7 +2911,7 @@ drm_plane_create(struct drm_backend *b, const drmModePlane *kplane)
 		plane->type = WDRM_PLANE_TYPE_OVERLAY;
 
 	weston_plane_init(&plane->base, b->compositor, 0, 0);
-	wl_list_insert(&b->sprite_list, &plane->link);
+	wl_list_insert(&b->plane_list, &plane->link);
 
 	return plane;
 }
@@ -2968,12 +2974,7 @@ create_sprites(struct drm_backend *b)
 		if (!drm_plane)
 			continue;
 
-		/* Ignore non-overlay planes for now. */
-		if (drm_plane->type != WDRM_PLANE_TYPE_OVERLAY) {
-			drm_plane_destroy(drm_plane);
-			continue;
-		}
-
+		if (drm_plane->type == WDRM_PLANE_TYPE_OVERLAY)
 		weston_compositor_stack_plane(b->compositor, &drm_plane->base,
 					      &b->compositor->primary_plane);
 	}
@@ -2993,7 +2994,7 @@ destroy_sprites(struct drm_backend *backend)
 {
 	struct drm_plane *plane, *next;
 
-	wl_list_for_each_safe(plane, next, &backend->sprite_list, link)
+	wl_list_for_each_safe(plane, next, &backend->plane_list, link)
 		drm_plane_destroy(plane);
 }
 
@@ -3263,11 +3264,14 @@ session_notify(struct wl_listener *listener, void *data)
 		output = container_of(compositor->output_list.next,
 				      struct drm_output, base.link);
 
-		wl_list_for_each(sprite, &b->sprite_list, link)
+		wl_list_for_each(sprite, &b->plane_list, link) {
+			if (sprite->type != WDRM_PLANE_TYPE_OVERLAY)
+				continue;
 			drmModeSetPlane(b->drm.fd,
 					sprite->plane_id,
 					output->crtc_id, 0, 0,
 					0, 0, 0, 0, 0, 0, 0, 0);
+		}
 	};
 }
 
@@ -3613,7 +3617,7 @@ drm_backend_create(struct weston_compositor *compositor,
 						  MODIFIER_CTRL | MODIFIER_ALT,
 						  switch_vt_binding, compositor);
 
-	wl_list_init(&b->sprite_list);
+	wl_list_init(&b->plane_list);
 	create_sprites(b);
 
 	if (udev_input_init(&b->input,
