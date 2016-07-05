@@ -338,6 +338,8 @@ text_input_show_input_panel(struct wl_client *client,
 			       text_input->surface);
 		wl_signal_emit(&ec->update_input_panel_signal,
 			       &text_input->cursor_rectangle);
+		if (text_input->manager->current_panel == NULL)
+			text_input->manager->current_panel = text_input;
 	}
 }
 
