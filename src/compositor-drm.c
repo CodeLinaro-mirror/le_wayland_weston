@@ -267,9 +267,9 @@ struct drm_output {
 	struct drm_fb *cursor_fb[2];
 	struct drm_plane *cursor_plane;
 	struct weston_plane fb_plane;
+	struct drm_plane *primary_plane;
 	struct weston_view *cursor_view;
 	int current_cursor;
-	struct drm_fb *current, *next;
 	struct backlight *backlight;
 
 	struct drm_fb *dumb[2];
@@ -909,13 +909,13 @@ drm_output_prepare_scanout_view(struct drm_output *output,
 		return NULL;
 	}
 
-	output->next = drm_fb_get_from_bo(bo, b, format);
-	if (!output->next) {
+	output->primary_plane->next = drm_fb_get_from_bo(bo, b, format);
+	if (!output->primary_plane->next) {
 		gbm_bo_destroy(bo);
 		return NULL;
 	}
 
-	drm_fb_set_buffer(output->next, buffer);
+	drm_fb_set_buffer(output->primary_plane->next, buffer);
 
 	return &output->fb_plane;
 }
@@ -936,8 +936,8 @@ drm_output_render_gl(struct drm_output *output, pixman_region32_t *damage)
 		return;
 	}
 
-	output->next = drm_fb_get_from_bo(bo, b, output->format);
-	if (!output->next) {
+	output->primary_plane->next = drm_fb_get_from_bo(bo, b, output->format);
+	if (!output->primary_plane->next) {
 		weston_log("failed to get drm_fb for bo\n");
 		gbm_surface_release_buffer(output->surface, bo);
 		return;
@@ -960,7 +960,7 @@ drm_output_render_pixman(struct drm_output *output, pixman_region32_t *damage)
 
 	output->current_image ^= 1;
 
-	output->next = output->dumb[output->current_image];
+	output->primary_plane->next = output->dumb[output->current_image];
 	pixman_renderer_output_set_buffer(&output->base,
 					  output->image[output->current_image]);
 
@@ -1046,16 +1046,17 @@ drm_output_repaint(struct weston_output *output_base,
 	if (output->destroy_pending)
 		return -1;
 
-	if (!output->next)
+	if (!output->primary_plane->next)
 		drm_output_render(output, damage);
-	if (!output->next)
+	if (!output->primary_plane->next)
 		return -1;
 
 	mode = container_of(output->base.current_mode, struct drm_mode, base);
-	if (!output->current ||
-	    output->current->stride != output->next->stride) {
+	if (!output->primary_plane->current ||
+	    output->primary_plane->current->stride !=
+	     output->primary_plane->next->stride) {
 		ret = drmModeSetCrtc(backend->drm.fd, output->crtc_id,
-				     output->next->fb_id, 0, 0,
+				     output->primary_plane->next->fb_id, 0, 0,
 				     &output->connector_id, 1,
 				     &mode->mode_info);
 		if (ret) {
@@ -1066,7 +1067,7 @@ drm_output_repaint(struct weston_output *output_base,
 	}
 
 	if (drmModePageFlip(backend->drm.fd, output->crtc_id,
-			    output->next->fb_id,
+			    output->primary_plane->next->fb_id,
 			    DRM_MODE_PAGE_FLIP_EVENT, output) < 0) {
 		weston_log("queueing pageflip failed: %m\n");
 		goto err_pageflip;
@@ -1131,9 +1132,9 @@ drm_output_repaint(struct weston_output *output_base,
 
 err_pageflip:
 	output->cursor_view = NULL;
-	if (output->next) {
-		drm_output_release_fb(output, output->next);
-		output->next = NULL;
+	if (output->primary_plane->next) {
+		drm_output_release_fb(output, output->primary_plane->next);
+		output->primary_plane->next = NULL;
 	}
 
 	return -1;
@@ -1159,7 +1160,7 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
 	if (output->destroy_pending)
 		return;
 
-	if (!output->current) {
+	if (!output->primary_plane->current) {
 		/* We can't page flip if there's no mode set */
 		goto finish_frame;
 	}
@@ -1193,7 +1194,7 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
 	/* Immediate query didn't provide valid timestamp.
 	 * Use pageflip fallback.
 	 */
-	fb_id = output->current->fb_id;
+	fb_id = output->primary_plane->current->fb_id;
 
 	if (drmModePageFlip(backend->drm.fd, output->crtc_id, fb_id,
 			    DRM_MODE_PAGE_FLIP_EVENT, output) < 0) {
@@ -1264,9 +1265,9 @@ page_flip_handler(int fd, unsigned int frame,
 	 * we just want to page flip to the current buffer to get an accurate
 	 * timestamp */
 	if (output->page_flip_pending) {
-		drm_output_release_fb(output, output->current);
-		output->current = output->next;
-		output->next = NULL;
+		drm_output_release_fb(output, output->primary_plane->current);
+		output->primary_plane->current = output->primary_plane->next;
+		output->primary_plane->next = NULL;
 	}
 
 	output->page_flip_pending = 0;
@@ -1835,9 +1836,9 @@ drm_output_switch_mode(struct weston_output *output_base, struct weston_mode *mo
 		WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED;
 
 	/* reset rendering stuff. */
-	drm_output_release_fb(output, output->current);
-	drm_output_release_fb(output, output->next);
-	output->current = output->next = NULL;
+	drm_output_release_fb(output, output->primary_plane->current);
+	drm_output_release_fb(output, output->primary_plane->next);
+	output->primary_plane->current = output->primary_plane->next = NULL;
 
 	if (b->use_pixman) {
 		drm_output_fini_pixman(output);
@@ -2698,6 +2699,60 @@ connector_get_current_mode(drmModeConnector *connector, int drm_fd,
 }
 
 static void
+drm_output_init_primary_plane(struct drm_output *output)
+{
+	struct drm_backend *b =
+		(struct drm_backend *) output->base.compositor->backend;
+	struct drm_plane *plane;
+
+	if (b->universal_planes) {
+		wl_list_for_each(plane, &b->plane_list, link) {
+			if (plane->type != WDRM_PLANE_TYPE_PRIMARY)
+				continue;
+			if (plane->output)
+				continue;
+			if (!drm_plane_crtc_supported(output,
+						      plane->possible_crtcs))
+				continue;
+
+			plane->output = output;
+			output->primary_plane = plane;
+			break;
+		}
+	}
+	else {
+		/* XXX: Gross open-coding ... ? */
+		plane = zalloc(sizeof(*plane) + sizeof(uint32_t));
+		if (!plane) {
+			weston_log("%s: out of memory\n", __func__);
+			return;
+		}
+
+		weston_plane_init(&plane->base, b->compositor, 0, 0);
+		wl_list_insert(&b->plane_list, &plane->link);
+
+		plane->plane_id = 0;
+		plane->possible_crtcs = 0;
+		plane->output = output;
+		plane->current = NULL;
+		plane->next = NULL;
+		plane->backend = b;
+		plane->count_formats = 1;
+		plane->formats[0] = output->format;
+		plane->type = WDRM_PLANE_TYPE_PRIMARY;
+
+		output->primary_plane = plane;
+	}
+
+	/* Unlike the cursor plane, we don't stack the primary plane into
+	 * the base list, because it's implicitly placed at the bottom. The
+	 * base compositor's primary_plane covers everything we construct
+	 * with our renderer, with each output taking a chunk of the
+	 * base primary_plane. So here we just internally treat this plane
+	 * as a partial shadow of weston_compositor::primary_plane. */
+}
+
+static void
 drm_output_init_cursor(struct drm_output *output)
 {
 	struct drm_backend *b =
@@ -2871,6 +2926,12 @@ create_output_for_connector(struct drm_backend *b,
 			   connector->mmWidth, connector->mmHeight,
 			   transform, scale);
 
+	drm_output_init_primary_plane(output);
+	if (!output->primary_plane) {
+		weston_log("Failed to find primary plane for output %s\n",
+			   output->base.name);
+		goto err_output;
+	}
 	drm_output_init_cursor(output);
 	
 	if (b->use_pixman) {
@@ -3288,7 +3349,7 @@ drm_backend_set_modes(struct drm_backend *backend)
 	int ret;
 
 	wl_list_for_each(output, &backend->compositor->output_list, base.link) {
-		if (!output->current) {
+		if (!output->primary_plane->current) {
 			/* If something that would cause the output to
 			 * switch mode happened while in another vt, we
 			 * might not have a current drm_fb. In that case,
@@ -3300,7 +3361,7 @@ drm_backend_set_modes(struct drm_backend *backend)
 
 		drm_mode = (struct drm_mode *) output->base.current_mode;
 		ret = drmModeSetCrtc(backend->drm.fd, output->crtc_id,
-				     output->current->fb_id, 0, 0,
+				     output->primary_plane->current->fb_id, 0, 0,
 				     &output->connector_id, 1,
 				     &drm_mode->mode_info);
 		if (ret < 0) {
@@ -3475,7 +3536,8 @@ recorder_frame_notify(struct wl_listener *listener, void *data)
 	if (!output->recorder)
 		return;
 
-	ret = drmPrimeHandleToFD(b->drm.fd, output->current->handle,
+	ret = drmPrimeHandleToFD(b->drm.fd,
+				 output->primary_plane->current->handle,
 				 DRM_CLOEXEC, &fd);
 	if (ret) {
 		weston_log("[libva recorder] "
@@ -3484,7 +3546,7 @@ recorder_frame_notify(struct wl_listener *listener, void *data)
 	}
 
 	ret = vaapi_recorder_frame(output->recorder, fd,
-				   output->current->stride);
+				   output->primary_plane->current->stride);
 	if (ret < 0) {
 		weston_log("[libva recorder] aborted: %m\n");
 		recorder_destroy(output);
