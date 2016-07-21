@@ -285,6 +285,9 @@ struct drm_plane {
 
 	enum wdrm_plane_type type;
 
+	struct weston_view *view;
+	struct wl_listener view_destroy;
+
 	struct drm_fb *current, *next;
 	struct drm_output *output;
 	//struct drm_compositor *compositor;
@@ -1223,6 +1226,17 @@ drm_output_check_scanout_format(struct drm_output *output,
 	return 0;
 }
 
+/**
+ * Try to use the primary DRM plane to directly display a full-screen view
+ *
+ * If a surface covers an entire output and is unoccluded, attempt to directly
+ * pageflip the primary DRM plane (not to be confused with the primary Weston
+ * plane) to the buffer. In legacy DRM usage, this will use drmModePageFlip;
+ * in atomic, this is just another plane.
+ *
+ * @param output Output to target
+ * @param ev View to prospectively use the primary plane
+ */
 static struct weston_plane *
 drm_output_prepare_scanout_view(struct drm_output *output,
 				struct weston_view *ev)
@@ -1986,6 +2000,7 @@ drm_output_prepare_overlay_view(struct drm_output *output,
 	struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
 	struct wl_resource *buffer_resource;
 	struct drm_plane *p;
+	struct drm_plane *cur = NULL;
 	struct linux_dmabuf_buffer *dmabuf;
 	int found = 0;
 	struct gbm_bo *bo;
@@ -2022,23 +2037,14 @@ drm_output_prepare_overlay_view(struct drm_output *output,
 	if (!drm_view_transform_supported(ev))
 		return NULL;
 
+	/* Find the current view this plane is assigned to, if any. */
 	wl_list_for_each(p, &b->plane_list, link) {
-		if (!drm_plane_crtc_supported(output, p->possible_crtcs))
+		if (p->view != ev || p->output != output)
 			continue;
 
-		if (p->type != WDRM_PLANE_TYPE_OVERLAY)
-			continue;
-
-		if (!p->next) {
-			found = 1;
-			break;
-		}
+		cur = p;
+		break;
 	}
-
-	/* No sprites available */
-	if (!found)
-		return NULL;
-
 	if ((dmabuf = linux_dmabuf_buffer_get(buffer_resource))) {
 #ifdef HAVE_GBM_FD_IMPORT
 		/* XXX: TODO:
@@ -2068,22 +2074,76 @@ drm_output_prepare_overlay_view(struct drm_output *output,
 		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_WL_BUFFER,
 				   buffer_resource, GBM_BO_USE_SCANOUT);
 	}
-	if (!bo)
-		return NULL;
 
-	format = drm_output_check_plane_format(p, ev, bo);
-	if (format == 0) {
-		gbm_bo_destroy(bo);
+	wl_list_for_each(p, &b->plane_list, link) {
+		if (!bo)
+			continue;
+
+		if (!drm_plane_crtc_supported(output, p->possible_crtcs))
+			continue;
+
+		if (p->type != WDRM_PLANE_TYPE_OVERLAY)
+			continue;
+
+		format = drm_output_check_plane_format(p, ev, bo);
+		if (format == 0)
+			continue;
+
+		/* XXX: At this point, we need two runs through assign_planes;
+		 *      one to prepare any necessary views, and see if there
+		 *      are any currently-unused planes. This process may
+		 *      actually free up some planes for other views to use;
+		 *      if any planes have been freed up, we should do another
+		 *      pass to see if any planeless views can use any planes
+		 *      which have just been freed. But we want to cache what
+		 *      we can, so we're not, e.g., calling gbm_bo_import
+		 *      twice. */
+		if (!p->current && !p->next && !p->view) {
+			found = 1;
+			assert(p->output == NULL);
+			break;
+		}
+
+		/* XXX: Factor out all the above to see if we can just use the
+		 *      current plane still. */
+		if (p == cur) {
+			found = 1;
+			break;
+		}
+	}
+
+	/* If this buffer (view) was previously on a plane, but is being moved
+	 * off, then get rid of it. */
+	if (cur && (!found || cur != p)) {
+		assert(cur->next == NULL);
+		cur->output = NULL;
+		wl_list_remove(&cur->view_destroy.link);
+		cur->view = NULL;
+		cur = NULL;
+	}
+
+	/* No planes available. */
+	if (!found) {
+		if (bo)
+			gbm_bo_destroy(bo);
 		return NULL;
 	}
 
-	p->next = drm_fb_get_from_bo(bo, b, format);
-	if (!p->next) {
-		gbm_bo_destroy(bo);
-		return NULL;
+	if (cur && cur->current &&
+	    cur->current->buffer_ref.buffer == ev->surface->buffer_ref.buffer) {
+		p->next = p->current;
+	} else {
+		p->next = drm_fb_get_from_bo(bo, b, format);
+		if (!p->next) {
+			gbm_bo_destroy(bo);
+			return NULL;
+		}
+		drm_fb_set_buffer(p->next, ev->surface->buffer_ref.buffer);
 	}
-
-	drm_fb_set_buffer(p->next, ev->surface->buffer_ref.buffer);
+	p->output = output;
+	p->view = ev;
+	if (!wl_signal_get(&ev->destroy_signal, p->view_destroy.notify))
+		wl_signal_add(&ev->destroy_signal, &p->view_destroy);
 
 	box = pixman_region32_extents(&ev->transform.boundingbox);
 	p->base.x = box->x1;
@@ -2373,6 +2433,8 @@ drm_assign_planes(struct weston_output *output_base)
 					plane->next = NULL;
 				}
 				plane->output = NULL;
+				plane->view = NULL;
+				wl_list_remove(&plane->view_destroy.link);
 				next_plane = NULL;
 			}
 		}
@@ -3789,6 +3851,31 @@ err_free:
 }
 
 /**
+ * Handle destruction of a view active on a KMS plane
+ *
+ * Called when the weston_view currently being displayed on a KMS
+ * plane has been destroyed. The very act of destroying a view on
+ * an active plane will cause a repaint to be scheduled, but we
+ * still need to disable the plane itself.
+ *
+ * @param listener view_destroy listener struct from the plane
+ * @param data The view being destroyed
+ */
+static void
+drm_plane_view_destroyed(struct wl_listener *listener, void *data)
+{
+	struct drm_plane *plane =
+		container_of(listener, struct drm_plane, view_destroy);
+
+	if (plane->view != data)
+		weston_log("plane %d contains different view data [%p!=%p]\n",
+			plane->plane_id, plane->view, data);
+	plane->view = NULL;
+	plane->output = NULL;
+	weston_log("view %p destroyed for plane %d\n", data, plane->plane_id);
+}
+
+/**
  * Create a drm_plane for a hardware plane
  *
  * Creates one drm_plane structure for a hardware plane, and initialises its
@@ -3814,6 +3901,7 @@ drm_plane_create(struct drm_backend *b, const drmModePlane *kplane)
 		return NULL;
 	}
 
+	weston_plane_init(&plane->base, b->compositor, 0, 0);
 	plane->possible_crtcs = kplane->possible_crtcs;
 	plane->plane_id = kplane->plane_id;
 	plane->current = NULL;
@@ -3821,6 +3909,7 @@ drm_plane_create(struct drm_backend *b, const drmModePlane *kplane)
 	plane->output = NULL;
 	plane->backend = b;
 	plane->count_formats = kplane->count_formats;
+	plane->view_destroy.notify = drm_plane_view_destroyed;
 	memcpy(plane->formats, kplane->formats,
 	       kplane->count_formats * sizeof(kplane->formats[0]));
 
