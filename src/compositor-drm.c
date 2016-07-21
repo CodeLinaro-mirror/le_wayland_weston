@@ -1260,6 +1260,11 @@ drm_output_prepare_scanout_view(struct drm_output *output,
 	if (ev->geometry.scissor_enabled)
 		return NULL;
 
+	if (output->primary_plane->current &&
+	    output->primary_plane->current->buffer_ref.buffer == buffer) {
+		output->primary_plane->next = output->primary_plane->current;
+		goto out;
+	}
 	bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_WL_BUFFER,
 			   buffer->resource, GBM_BO_USE_SCANOUT);
 
@@ -1281,6 +1286,7 @@ drm_output_prepare_scanout_view(struct drm_output *output,
 
 	drm_fb_set_buffer(output->primary_plane->next, buffer);
 
+out:
 	return &output->fb_plane;
 }
 
