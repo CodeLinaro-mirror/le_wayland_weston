@@ -4598,7 +4598,7 @@ drm_backend_create(struct weston_compositor *compositor,
 	 *
 	 * These can be enabled again when nuclear/atomic support lands.
 	 */
-	b->sprites_are_broken = 1;
+
 	b->compositor = compositor;
 
 	section = weston_config_get_section(config, "core", NULL, NULL);
