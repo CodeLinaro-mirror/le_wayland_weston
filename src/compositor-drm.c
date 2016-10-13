@@ -360,6 +360,17 @@ static struct gl_renderer_interface *gl_renderer;
 
 static const char default_seat[] = "seat0";
 
+#define is_pseudo_planar_format(f) \
+	(((f) == GBM_FORMAT_NV12) || ((f) == GBM_FORMAT_NV21) || \
+	 ((f) == GBM_FORMAT_NV16) || ((f) == GBM_FORMAT_NV61))
+
+#define is_planar_format(f) \
+	(((f) == GBM_FORMAT_YUV410) || ((f) == GBM_FORMAT_YVU410) || \
+	 ((f) == GBM_FORMAT_YUV411) || ((f) == GBM_FORMAT_YVU411) || \
+	 ((f) == GBM_FORMAT_YUV420) || ((f) == GBM_FORMAT_YVU420) || \
+	 ((f) == GBM_FORMAT_YUV422) || ((f) == GBM_FORMAT_YVU422) || \
+	 ((f) == GBM_FORMAT_YUV444) || ((f) == GBM_FORMAT_YVU444))
+
 /**
  * Return a string describing the type of a DRM object
  */
@@ -1134,7 +1145,19 @@ drm_fb_get_from_bo(struct gbm_bo *bo,
 	if (format && !backend->no_addfb2) {
 		handles[0] = fb->handle;
 		pitches[0] = fb->stride;
-		offsets[0] = 0;
+		offsets[0] = gbm_bo_get_offset(bo);
+
+		/* Need to plug in with bufdef utility once it's ready */
+		switch (format) {
+		case GBM_FORMAT_NV12:
+			handles[1] = fb->handle;
+			pitches[1] = fb->stride;
+			offsets[1] = offsets[0] + ((width + 127) & ~127) * ((height + 31) & ~31);
+			break;
+		default:
+			if (is_pseudo_planar_format(format) || is_planar_format(format))
+				weston_log("Unsupported format 0x%x", format);
+		}
 
 		ret = drmModeAddFB2(backend->drm.fd, width, height,
 				    format, handles, pitches, offsets,
