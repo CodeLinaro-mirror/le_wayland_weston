@@ -1949,10 +1949,15 @@ page_flip_handler(int fd, unsigned int frame,
 	if (b->atomic_modeset) {
 		wl_list_for_each_safe(plane, plane_tmp,
 				      &output->plane_flip_list, flip_link) {
-			if (plane->current != plane->next)
-				drm_output_release_fb(output, plane->current);
-			plane->current = plane->next;
-			plane->next = NULL;
+			if (plane->type == WDRM_PLANE_TYPE_CURSOR) {
+				output->cursor_view = NULL;
+				plane->view = NULL;
+			} else {
+				if (plane->current != plane->next)
+					drm_output_release_fb(output, plane->current);
+				plane->current = plane->next;
+				plane->next = NULL;
+			}
 			wl_list_remove(&plane->flip_link);
 		}
 	}
@@ -2372,6 +2377,75 @@ drm_output_set_cursor(struct drm_output *output)
 }
 
 static void
+setup_plane_geometry(struct drm_output *output, struct weston_view *ev, struct drm_plane *p)
+{
+	struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
+	pixman_region32_t src_rect, dest_rect;
+	pixman_box32_t *box, tbox;
+	wl_fixed_t sx1, sy1, sx2, sy2;
+
+	/*dst rect*/
+	pixman_region32_init(&dest_rect);
+	pixman_region32_intersect(&dest_rect, &ev->transform.boundingbox,
+				  &output->base.region);
+	pixman_region32_translate(&dest_rect, -output->base.x, -output->base.y);
+	box = pixman_region32_extents(&dest_rect);
+	p->base.x = box->x1;
+	p->base.y = box->y1;
+	tbox = weston_transformed_rect(output->base.width,
+				       output->base.height,
+				       output->base.transform,
+				       output->base.current_scale,
+				       *box);
+	p->dest_x = tbox.x1;
+	p->dest_y = tbox.y1;
+	p->dest_w = tbox.x2 - tbox.x1;
+	p->dest_h = tbox.y2 - tbox.y1;
+	pixman_region32_fini(&dest_rect);
+
+	/*src rect*/
+	pixman_region32_init(&src_rect);
+	pixman_region32_intersect(&src_rect, &ev->transform.boundingbox,
+				  &output->base.region);
+	box = pixman_region32_extents(&src_rect);
+
+	weston_view_from_global_fixed(ev,
+				      wl_fixed_from_int(box->x1),
+				      wl_fixed_from_int(box->y1),
+				      &sx1, &sy1);
+	weston_view_from_global_fixed(ev,
+				      wl_fixed_from_int(box->x2),
+				      wl_fixed_from_int(box->y2),
+				      &sx2, &sy2);
+
+	if (sx1 < 0)
+		sx1 = 0;
+	if (sy1 < 0)
+		sy1 = 0;
+	if (sx2 > wl_fixed_from_int(ev->surface->width))
+		sx2 = wl_fixed_from_int(ev->surface->width);
+	if (sy2 > wl_fixed_from_int(ev->surface->height))
+		sy2 = wl_fixed_from_int(ev->surface->height);
+
+	tbox.x1 = sx1;
+	tbox.y1 = sy1;
+	tbox.x2 = sx2;
+	tbox.y2 = sy2;
+
+	tbox = weston_transformed_rect(wl_fixed_from_int(ev->surface->width),
+				       wl_fixed_from_int(ev->surface->height),
+				       viewport->buffer.transform,
+				       viewport->buffer.scale,
+				       tbox);
+
+	p->src_x = tbox.x1 << 8;
+	p->src_y = tbox.y1 << 8;
+	p->src_w = (tbox.x2 - tbox.x1) << 8;
+	p->src_h = (tbox.y2 - tbox.y1) << 8;
+	pixman_region32_fini(&src_rect);
+}
+
+static void
 drm_assign_planes(struct weston_output *output_base)
 {
 	struct drm_backend *b =
@@ -2456,20 +2530,44 @@ drm_assign_planes(struct weston_output *output_base)
 							  output);
 			if (ret != 0) {
 				drmModeAtomicSetCursor(req, saved_cursor);
-				if (plane->next) {
-					drm_output_release_fb(output,
-							      plane->next);
-					plane->next = NULL;
+				/*Cursor plane's bo can't be released*/
+				if (plane->type != WDRM_PLANE_TYPE_CURSOR) {
+					if (plane->next) {
+						drm_output_release_fb(output,
+								      plane->next);
+						plane->next = NULL;
+					}
+					plane->output = NULL;
+					plane->view = NULL;
+					wl_list_remove(&plane->view_destroy.link);
 				}
-				plane->output = NULL;
-				plane->view = NULL;
-				wl_list_remove(&plane->view_destroy.link);
 				next_plane = NULL;
 			}
 		}
 
 		if (next_plane == NULL)
 			next_plane = primary;
+
+		/*Update hw cursor image*/
+		if (output->cursor_plane &&
+			next_plane == &output->cursor_plane->base) {
+			if (pixman_region32_not_empty(&output->cursor_plane->base.damage)) {
+				struct gbm_bo *bo;
+
+				pixman_region32_fini(&output->cursor_plane->base.damage);
+				pixman_region32_init(&output->cursor_plane->base.damage);
+				output->cursor_plane->next =
+					output->cursor_fb[output->current_cursor];
+				bo = output->cursor_bo[output->current_cursor];
+				output->current_cursor ^= 1;
+				output->cursor_plane->current =
+					output->cursor_fb[output->current_cursor];
+
+				cursor_bo_update(b, bo, ev);
+			}
+			setup_plane_geometry(output, ev, output->cursor_plane);
+			output->cursor_plane->view = ev;
+		}
 
 		weston_view_move_to_plane(ev, next_plane);
 
@@ -2491,6 +2589,15 @@ drm_assign_planes(struct weston_output *output_base)
 
 		pixman_region32_fini(&surface_overlap);
 	}
+
+	/*If no hw cursor, reset cursor plane*/
+	if (output->cursor_plane &&
+		output->cursor_plane->view == NULL) {
+		output->cursor_plane->next = NULL;
+		output->cursor_plane->current = NULL;
+		output->cursor_view = NULL;
+	}
+
 	pixman_region32_fini(&overlap);
 
 	if (b->atomic_modeset)
