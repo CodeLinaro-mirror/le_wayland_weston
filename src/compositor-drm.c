@@ -1951,13 +1951,23 @@ page_flip_handler(int fd, unsigned int frame,
 				      &output->plane_flip_list, flip_link) {
 			if (plane->type == WDRM_PLANE_TYPE_CURSOR) {
 				output->cursor_view = NULL;
-				plane->view = NULL;
 			} else {
 				if (plane->current != plane->next)
 					drm_output_release_fb(output, plane->current);
 				plane->current = plane->next;
 				plane->next = NULL;
+				/*Keep primary and cursor's output since they are fixed
+				 *in init plane*/
+				if (plane->type == WDRM_PLANE_TYPE_OVERLAY) {
+					/*If current is also NULL, set plane->output to NULL which means
+					 *this plane can be used by any output later*/
+					if (plane->current == NULL)
+						plane->output = NULL;
+					if (plane->view)
+						wl_list_remove(&plane->view_destroy.link);
+				}
 			}
+			plane->view = NULL;
 			wl_list_remove(&plane->flip_link);
 		}
 	}
@@ -2071,14 +2081,6 @@ drm_output_prepare_overlay_view(struct drm_output *output,
 	if (!drm_view_transform_supported(ev))
 		return NULL;
 
-	/* Find the current view this plane is assigned to, if any. */
-	wl_list_for_each(p, &b->plane_list, link) {
-		if (p->view != ev || p->output != output)
-			continue;
-
-		cur = p;
-		break;
-	}
 	if ((dmabuf = linux_dmabuf_buffer_get(buffer_resource))) {
 #ifdef HAVE_GBM_FD_IMPORT
 		/* XXX: TODO:
@@ -2109,11 +2111,15 @@ drm_output_prepare_overlay_view(struct drm_output *output,
 				   buffer_resource, GBM_BO_USE_SCANOUT);
 	}
 
+	if (!bo)
+		return NULL;
+
+	/*The top view has more chance to get the overlay plane*/
 	wl_list_for_each(p, &b->plane_list, link) {
-		if (!bo)
+		if (!drm_plane_crtc_supported(output, p->possible_crtcs))
 			continue;
 
-		if (!drm_plane_crtc_supported(output, p->possible_crtcs))
+		if (p->output && p->output != output)
 			continue;
 
 		if (p->type != WDRM_PLANE_TYPE_OVERLAY)
@@ -2123,61 +2129,28 @@ drm_output_prepare_overlay_view(struct drm_output *output,
 		if (format == 0)
 			continue;
 
-		/* XXX: At this point, we need two runs through assign_planes;
-		 *      one to prepare any necessary views, and see if there
-		 *      are any currently-unused planes. This process may
-		 *      actually free up some planes for other views to use;
-		 *      if any planes have been freed up, we should do another
-		 *      pass to see if any planeless views can use any planes
-		 *      which have just been freed. But we want to cache what
-		 *      we can, so we're not, e.g., calling gbm_bo_import
-		 *      twice. */
-		if (!p->current && !p->next && !p->view) {
-			found = 1;
-			assert(p->output == NULL);
-			break;
-		}
-
-		/* XXX: Factor out all the above to see if we can just use the
-		 *      current plane still. */
-		if (p == cur) {
+		if (!p->next && !p->view) {
 			found = 1;
 			break;
 		}
-	}
-
-	/* If this buffer (view) was previously on a plane, but is being moved
-	 * off, then get rid of it. */
-	if (cur && (!found || cur != p)) {
-		assert(cur->next == NULL);
-		cur->output = NULL;
-		wl_list_remove(&cur->view_destroy.link);
-		cur->view = NULL;
-		cur = NULL;
 	}
 
 	/* No planes available. */
 	if (!found) {
-		if (bo)
-			gbm_bo_destroy(bo);
+		gbm_bo_destroy(bo);
 		return NULL;
 	}
 
-	if (cur && cur->current &&
-	    cur->current->buffer_ref.buffer == ev->surface->buffer_ref.buffer) {
-		p->next = p->current;
-	} else {
-		p->next = drm_fb_get_from_bo(bo, b, format);
-		if (!p->next) {
-			gbm_bo_destroy(bo);
-			return NULL;
-		}
-		drm_fb_set_buffer(p->next, ev->surface->buffer_ref.buffer);
+	p->next = drm_fb_get_from_bo(bo, b, format);
+	if (!p->next) {
+		gbm_bo_destroy(bo);
+		return NULL;
 	}
+	drm_fb_set_buffer(p->next, ev->surface->buffer_ref.buffer);
+
 	p->output = output;
 	p->view = ev;
-	if (!wl_signal_get(&ev->destroy_signal, p->view_destroy.notify))
-		wl_signal_add(&ev->destroy_signal, &p->view_destroy);
+	wl_signal_add(&ev->destroy_signal, &p->view_destroy);
 
 	box = pixman_region32_extents(&ev->transform.boundingbox);
 	p->base.x = box->x1;
@@ -4007,7 +3980,6 @@ drm_plane_view_destroyed(struct wl_listener *listener, void *data)
 		weston_log("plane %d contains different view data [%p!=%p]\n",
 			plane->plane_id, plane->view, data);
 	plane->view = NULL;
-	plane->output = NULL;
 	weston_log("view %p destroyed for plane %d\n", data, plane->plane_id);
 }
 
@@ -4081,7 +4053,7 @@ drm_plane_destroy(struct drm_plane *plane)
 			0, 0, 0, 0, 0, 0, 0, 0);
 	if (plane->current)
 		drm_output_release_fb(plane->output, plane->current);
-	if (plane->next)
+	if (plane->next != plane->current)
 		drm_output_release_fb(plane->output, plane->next);
 	weston_plane_release(&plane->base);
 	wl_list_remove(&plane->link);
