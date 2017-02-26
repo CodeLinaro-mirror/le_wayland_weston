@@ -674,7 +674,28 @@ drm_output_repaint(struct weston_output *output_base,
 
 	output->page_flip_pending = 1;
 
-	drm_output_set_cursor(output);
+	//drm_output_set_cursor(output);
+
+
+
+    drmVBlank vbl = {
+        .request.type = DRM_VBLANK_RELATIVE | DRM_VBLANK_EVENT,
+        .request.sequence = 1,
+    };
+
+    /*
+     * Queue a vblank signal so we know when the surface
+     * becomes active on the display or has been replaced.
+     */
+    vbl.request.signal = (unsigned long)output;
+    ret = drmWaitVBlank(backend->drm.fd, &vbl);
+    if (ret) {
+        weston_log("vblank event request failed: %d: %s\n",
+            ret, strerror(errno));
+    }
+
+    output->vblank_pending = 1;
+
 
 	/*
 	 * Now, update all the sprite surfaces
@@ -788,6 +809,8 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
 	 */
 	fb_id = output->current->fb_id;
 
+    weston_log("%s: Invoking PageFlip\n",__FUNCTION__);
+
 	if (drmModePageFlip(backend->drm.fd, output->crtc_id, fb_id,
 			    DRM_MODE_PAGE_FLIP_EVENT, output) < 0) {
 		weston_log("queueing pageflip failed: %m\n");
@@ -818,8 +841,8 @@ static void
 vblank_handler(int fd, unsigned int frame, unsigned int sec, unsigned int usec,
 	       void *data)
 {
-	struct drm_sprite *s = (struct drm_sprite *)data;
-	struct drm_output *output = s->output;
+	//struct drm_sprite *s = (struct drm_sprite *)data;
+	struct drm_output *output = (struct drm_output *) data;// s->output;
 	struct timespec ts;
 	uint32_t flags = PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
 			 PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
@@ -827,9 +850,9 @@ vblank_handler(int fd, unsigned int frame, unsigned int sec, unsigned int usec,
 	drm_output_update_msc(output, frame);
 	output->vblank_pending = 0;
 
-	drm_output_release_fb(output, s->current);
-	s->current = s->next;
-	s->next = NULL;
+	//drm_output_release_fb(output, s->current);
+	//s->current = s->next;
+	//s->next = NULL;
 
 	if (!output->page_flip_pending) {
 		ts.tv_sec = sec;
@@ -3149,7 +3172,7 @@ drm_backend_create(struct weston_compositor *compositor,
 	if (udev_input_init(&b->input,
 			    compositor, b->udev, param->seat_id) < 0) {
 		weston_log("failed to create input devices\n");
-		goto err_sprite;
+		//goto err_sprite;
 	}
 
 	if (create_outputs(b, param->connector, drm_device) < 0) {
@@ -3251,6 +3274,7 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 
 	parse_options(drm_options, ARRAY_LENGTH(drm_options), argc, argv);
 
+	param.connector = 31;
 	b = drm_backend_create(compositor, &param, argc, argv, config);
 	if (b == NULL)
 		return -1;
