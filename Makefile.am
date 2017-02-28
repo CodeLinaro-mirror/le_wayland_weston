@@ -60,12 +60,16 @@ CLEANFILES = weston.ini				\
 	$(BUILT_SOURCES)
 
 bin_PROGRAMS += weston
+if ENABLE_DRM_COMPOSITOR
+COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
+COMPOSITOR_CFLAGS += -DENABLE_EGL
+endif
 
 weston_LDFLAGS = -export-dynamic
 weston_CPPFLAGS = $(AM_CPPFLAGS) -DIN_WESTON
 weston_CFLAGS = $(AM_CFLAGS) $(COMPOSITOR_CFLAGS) $(LIBUNWIND_CFLAGS)
 weston_LDADD = $(COMPOSITOR_LIBS) $(LIBUNWIND_LIBS) \
-	$(DLOPEN_LIBS) -lm libshared.la
+	$(DLOPEN_LIBS) -lm libshared.la  -lgbm -lEGL_adreno -lGLESv2_adreno
 
 weston_SOURCES =					\
 	src/git-version.h				\
@@ -198,12 +202,14 @@ westoninclude_HEADERS =				\
 	shared/zalloc.h				\
 	shared/platform.h
 
-if ENABLE_EGL
+if  ENABLE_DRM_COMPOSITOR
+DRM_COMPOSITOR_CFLAGS += -DENABLE_EGL	-DADRENO_WAYLAND_PLATFORM
 module_LTLIBRARIES += gl-renderer.la
 gl_renderer_la_LDFLAGS = -module -avoid-version
 gl_renderer_la_LIBADD = $(COMPOSITOR_LIBS) $(EGL_LIBS)
 gl_renderer_la_CFLAGS =				\
 	$(COMPOSITOR_CFLAGS)			\
+	$(DRM_COMPOSITOR_CFLAGS)		\
 	$(EGL_CFLAGS)				\
 	$(GL_RENDERER_CFLAGS)			\
 	$(AM_CFLAGS)
