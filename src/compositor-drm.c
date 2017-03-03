@@ -89,13 +89,6 @@
 #define GBM_BO_USE_CURSOR GBM_BO_USE_CURSOR_64X64
 #endif
 
-#define SDM_STRATEGY_OPTIMIZATION
-
-#ifdef SDM_STRATEGY_OPTIMIZATION
-#include <sdm_strategy_plugin/sdm_strategy_plugin_interface.h>
-static struct StrategyPluginInterface *sdm_strategy_plugin;
-#endif
-
 /* #define ATOMIC_DEBUG 1 */
 
 static int option_current_mode = 0;
@@ -239,13 +232,6 @@ struct drm_backend {
 
 	int32_t cursor_width;
 	int32_t cursor_height;
-
-#ifdef SDM_STRATEGY_OPTIMIZATION
-	/*For sdm strategy plugin*/
-	bool use_sdm_strategy;
-	plugin_handle_t sdm_plugin;
-	client_handle_t sdm_client;
-#endif
 };
 
 struct drm_mode {
@@ -322,19 +308,6 @@ struct drm_plane {
 	uint32_t formats[];
 };
 
-#ifdef SDM_STRATEGY_OPTIMIZATION
-/*
- *Hook view info for preparing sdm structure.
- *Only used in drm_assign_planes_use_sdm_strategy
- */
-struct sdm_layer {
-	struct wl_list link; /* drm_output::sdm_layer_list */
-	struct weston_view *view;
-	bool is_cursor;
-	pixman_region32_t overlap;
-};
-#endif
-
 struct drm_output {
 	struct weston_output   base;
 
@@ -374,12 +347,6 @@ struct drm_output {
 	struct wl_listener recorder_frame_listener;
 
 	struct wl_list plane_flip_list; /* drm_plane::flip_link */
-
-#ifdef SDM_STRATEGY_OPTIMIZATION
-	/*For sdm strategy plugin*/
-	display_handle_t sdm_display;
-	struct wl_list sdm_layer_list; /* sdm_layer::link */
-#endif
 };
 
 struct drm_parameters {
@@ -1692,15 +1659,6 @@ drm_output_repaint_atomic(struct weston_output *output_base,
 
 	output->dpms = WESTON_DPMS_ON;
 
-#ifdef SDM_STRATEGY_OPTIMIZATION
-	if (b->use_sdm_strategy) {
-		ret = sdm_strategy_plugin->Commit(b->sdm_client, &output->sdm_display, 1, 0);
-		if (ret != PLUGIN_ERROR_NONE) {
-			weston_log("fail to commit strategy to sdm! err=%d\n", ret);
-		}
-	}
-#endif
-
 	return 0;
 
 err_pageflip:
@@ -1996,7 +1954,6 @@ page_flip_handler(int fd, unsigned int frame,
 			} else {
 				if (plane->current != plane->next)
 					drm_output_release_fb(output, plane->current);
-				/*maybe current and next belong to different view!*/
 				plane->current = plane->next;
 				plane->next = NULL;
 				/*Keep primary and cursor's output since they are fixed
@@ -2042,40 +1999,6 @@ page_flip_handler(int fd, unsigned int frame,
 	}
 }
 
-static bool
-is_transparent_gbm_format(uint32_t format)
-{
-	return (format == GBM_FORMAT_ARGB8888 ||
-		format == GBM_FORMAT_BGRA8888 ||
-		format == GBM_FORMAT_RGBA8888 ||
-		format == GBM_FORMAT_ABGR8888);
-}
-
-static uint32_t
-convert_to_opaque_gbm_format(uint32_t format)
-{
-	uint32_t ret = GBM_FORMAT_XRGB8888;
-
-	switch (format) {
-	case GBM_FORMAT_ARGB8888:
-		ret = GBM_FORMAT_XRGB8888;
-		break;
-	case GBM_FORMAT_BGRA8888:
-		ret = GBM_FORMAT_BGRX8888;
-		break;
-	case GBM_FORMAT_RGBA8888:
-		ret = GBM_FORMAT_RGBX8888;
-		break;
-	case GBM_FORMAT_ABGR8888:
-		ret = GBM_FORMAT_XBGR8888;
-		break;
-	default:
-		break;
-	}
-
-	return ret;
-}
-
 static uint32_t
 drm_output_check_plane_format(struct drm_plane *p,
 			       struct weston_view *ev, struct gbm_bo *bo)
@@ -2084,7 +2007,7 @@ drm_output_check_plane_format(struct drm_plane *p,
 
 	format = gbm_bo_get_format(bo);
 
-	if (is_transparent_gbm_format(format)) {
+	if (format == GBM_FORMAT_ARGB8888) {
 		pixman_region32_t r;
 
 		pixman_region32_init_rect(&r, 0, 0,
@@ -2093,7 +2016,7 @@ drm_output_check_plane_format(struct drm_plane *p,
 		pixman_region32_subtract(&r, &r, &ev->surface->opaque);
 
 		if (!pixman_region32_not_empty(&r))
-			format = convert_to_opaque_gbm_format(format);
+			format = GBM_FORMAT_XRGB8888;
 
 		pixman_region32_fini(&r);
 	}
@@ -2121,6 +2044,7 @@ drm_output_prepare_overlay_view(struct drm_output *output,
 	struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
 	struct wl_resource *buffer_resource;
 	struct drm_plane *p;
+	struct drm_plane *cur = NULL;
 	struct linux_dmabuf_buffer *dmabuf;
 	int found = 0;
 	struct gbm_bo *bo;
@@ -2425,1010 +2349,6 @@ drm_output_set_cursor(struct drm_output *output)
 	}
 }
 
-#ifdef SDM_STRATEGY_OPTIMIZATION
-static uint32_t
-get_mapped_format_from_shm(uint32_t fmt)
-{
-	uint32_t ret = PLUGIN_BUFFER_FORMAT_INVALID;
-
-	switch (fmt) {
-	case WL_SHM_FORMAT_ARGB8888:
-		ret = PLUGIN_BUFFER_FORMAT_BGRA_8888;
-		break;
-	case WL_SHM_FORMAT_XRGB8888:
-		ret = PLUGIN_BUFFER_FORMAT_BGRX_8888;
-		break;
-	case WL_SHM_FORMAT_ABGR8888:
-		ret = PLUGIN_BUFFER_FORMAT_RGBA_8888;
-		break;
-	case WL_SHM_FORMAT_XBGR8888:
-		ret = PLUGIN_BUFFER_FORMAT_RGBX_8888;
-		break;
-	case WL_SHM_FORMAT_BGRA8888:
-	case WL_SHM_FORMAT_RGBA8888:
-		ret = PLUGIN_BUFFER_FORMAT_ARGB_8888;
-		break;
-	case WL_SHM_FORMAT_ARGB4444:
-	case WL_SHM_FORMAT_ABGR4444:
-		ret = PLUGIN_BUFFER_FORMAT_RGBA_4444;
-		break;
-	case WL_SHM_FORMAT_ARGB1555:
-	case WL_SHM_FORMAT_ABGR1555:
-		ret = PLUGIN_BUFFER_FORMAT_RGBA_5551;
-		break;
-	case WL_SHM_FORMAT_RGB565:
-		ret = PLUGIN_BUFFER_FORMAT_BGR_565;
-		break;
-	case WL_SHM_FORMAT_BGR565:
-		ret = PLUGIN_BUFFER_FORMAT_RGB_565;
-		break;
-	case WL_SHM_FORMAT_RGB888:
-		ret = PLUGIN_BUFFER_FORMAT_BGR_888;
-		break;
-	case WL_SHM_FORMAT_BGR888:
-		ret = PLUGIN_BUFFER_FORMAT_RGB_888;
-		break;
-	default:
-		break;
-	}
-
-	return ret;
-}
-
-static uint32_t
-get_mapped_format_from_gbm(uint32_t fmt)
-{
-	uint32_t ret = PLUGIN_BUFFER_FORMAT_INVALID;
-
-	switch (fmt) {
-	case GBM_FORMAT_ARGB8888:
-		ret = PLUGIN_BUFFER_FORMAT_BGRA_8888;
-		break;
-	case GBM_FORMAT_XRGB8888:
-		ret = PLUGIN_BUFFER_FORMAT_BGRX_8888;
-		break;
-	case GBM_FORMAT_ABGR8888:
-		ret = PLUGIN_BUFFER_FORMAT_RGBA_8888;
-		break;
-	case GBM_FORMAT_XBGR8888:
-		ret = PLUGIN_BUFFER_FORMAT_RGBX_8888;
-		break;
-	case GBM_FORMAT_BGRA8888:
-	case GBM_FORMAT_RGBA8888:
-		ret = PLUGIN_BUFFER_FORMAT_ARGB_8888;
-		break;
-	case GBM_FORMAT_ARGB4444:
-	case GBM_FORMAT_ABGR4444:
-		ret = PLUGIN_BUFFER_FORMAT_RGBA_4444;
-		break;
-	case GBM_FORMAT_ARGB1555:
-	case GBM_FORMAT_ABGR1555:
-		ret = PLUGIN_BUFFER_FORMAT_RGBA_5551;
-		break;
-	case GBM_FORMAT_RGB565:
-		ret = PLUGIN_BUFFER_FORMAT_BGR_565;
-		break;
-	case GBM_FORMAT_BGR565:
-		ret = PLUGIN_BUFFER_FORMAT_RGB_565;
-		break;
-	case GBM_FORMAT_RGB888:
-		ret = PLUGIN_BUFFER_FORMAT_BGR_888;
-		break;
-	case GBM_FORMAT_BGR888:
-		ret = PLUGIN_BUFFER_FORMAT_RGB_888;
-		break;
-	case GBM_FORMAT_NV12:
-		ret = PLUGIN_BUFFER_FORMAT_YCbCr_420_SP_VENUS;
-		break;
-	default:
-		break;
-	}
-
-	return ret;
-}
-
-static void
-setup_sprite_geometry(struct drm_plane *p, struct weston_view *ev, struct LayerGeometry *layer)
-{
-	pixman_box32_t *box;
-
-	box = pixman_region32_extents(&ev->transform.boundingbox);
-	p->base.x = box->x1;
-	p->base.y = box->y1;
-	p->dest_x = layer->dst_rect.left;
-	p->dest_y = layer->dst_rect.top;
-	p->dest_w = layer->dst_rect.right - layer->dst_rect.left;
-	p->dest_h = layer->dst_rect.bottom - layer->dst_rect.top;
-	p->src_x = ((int32_t)layer->src_rect.left) << 16;
-	p->src_y = ((int32_t)layer->src_rect.top) << 16;
-	p->src_w = ((uint32_t)(layer->src_rect.right - layer->src_rect.left)) << 16;
-	p->src_h = ((uint32_t)(layer->src_rect.bottom - layer->src_rect.top)) << 16;
-}
-
-static void
-compute_src_dst_rect(struct drm_output *output, struct weston_view *ev, struct Rect *src_ret, struct Rect *dst_ret)
-{
-	struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
-	pixman_region32_t src_rect, dest_rect;
-	pixman_box32_t *box, tbox;
-	wl_fixed_t sx1, sy1, sx2, sy2;
-
-	/* dst rect */
-	pixman_region32_init(&dest_rect);
-	pixman_region32_intersect(&dest_rect, &ev->transform.boundingbox,
-				  &output->base.region);
-	pixman_region32_translate(&dest_rect, -output->base.x, -output->base.y);
-	box = pixman_region32_extents(&dest_rect);
-	tbox = weston_transformed_rect(output->base.width,
-				       output->base.height,
-				       output->base.transform,
-				       output->base.current_scale,
-				       *box);
-	dst_ret->left = (float)tbox.x1;
-	dst_ret->top = (float)tbox.y1;
-	dst_ret->right = (float)tbox.x2;
-	dst_ret->bottom = (float)tbox.y2;
-	pixman_region32_fini(&dest_rect);
-
-	/* src rect */
-	pixman_region32_init(&src_rect);
-	pixman_region32_intersect(&src_rect, &ev->transform.boundingbox,
-				  &output->base.region);
-	box = pixman_region32_extents(&src_rect);
-
-	weston_view_from_global_fixed(ev,
-				      wl_fixed_from_int(box->x1),
-				      wl_fixed_from_int(box->y1),
-				      &sx1, &sy1);
-	weston_view_from_global_fixed(ev,
-				      wl_fixed_from_int(box->x2),
-				      wl_fixed_from_int(box->y2),
-				      &sx2, &sy2);
-
-	if (sx1 < 0)
-		sx1 = 0;
-	if (sy1 < 0)
-		sy1 = 0;
-	if (sx2 > wl_fixed_from_int(ev->surface->width))
-		sx2 = wl_fixed_from_int(ev->surface->width);
-	if (sy2 > wl_fixed_from_int(ev->surface->height))
-		sy2 = wl_fixed_from_int(ev->surface->height);
-
-	tbox.x1 = sx1;
-	tbox.y1 = sy1;
-	tbox.x2 = sx2;
-	tbox.y2 = sy2;
-
-	tbox = weston_transformed_rect(wl_fixed_from_int(ev->surface->width),
-				       wl_fixed_from_int(ev->surface->height),
-				       viewport->buffer.transform,
-				       viewport->buffer.scale,
-				       tbox);
-
-	src_ret->left = (float)(tbox.x1 >> 8);
-	src_ret->top = (float)(tbox.y1 >> 8);
-	src_ret->right = (float)(tbox.x2 >> 8);
-	src_ret->bottom = (float)(tbox.y2 >> 8);
-	pixman_region32_fini(&src_rect);
-}
-
-static int
-compute_dirty_region(struct weston_view *ev, struct RectArray *dirty)
-{
-	pixman_region32_t temp;
-	struct weston_surface *es = ev->surface;
-	pixman_box32_t *rectangles = NULL;
-	int n, i;
-
-	pixman_region32_init(&temp);
-	pixman_region32_intersect_rect(&temp, &es->damage, 0, 0, es->width, es->height);
-	rectangles = pixman_region32_rectangles(&temp, &n);
-	if (!n) {
-		pixman_region32_fini(&temp);
-		return 0;
-	}
-
-	dirty->rects = zalloc(n * sizeof(struct Rect));
-	if (dirty->rects == NULL) {
-		weston_log("out of memory for allocating dirty region\n");
-		return -1;
-	}
-	for (i = 0; i < n; i++) {
-		dirty->rects[i].left = (float)rectangles[i].x1;
-		dirty->rects[i].top = (float)rectangles[i].y1;
-		dirty->rects[i].right = (float)rectangles[i].x2;
-		dirty->rects[i].bottom = (float)rectangles[i].y2;
-	}
-	dirty->count = n;
-
-	pixman_region32_fini(&temp);
-	return 0;
-}
-
-static uint8_t
-get_global_alpha(struct weston_view *ev)
-{
-	if (ev->alpha > 1.0f)
-		return 0xFF;
-	else if (ev->alpha < 0.0f)
-		return 0;
-	else
-		return (uint8_t)(0xFF * ev->alpha);
-}
-
-static int
-get_visible_region(struct drm_output *output, struct weston_view *ev, pixman_region32_t *aboved_opaque, struct RectArray *visible)
-{
-	pixman_region32_t temp;
-	pixman_box32_t *rectangles = NULL;
-	int n, i;
-
-	pixman_region32_init(&temp);
-	pixman_region32_copy(&temp, &ev->transform.boundingbox);
-	pixman_region32_subtract(&temp, &temp, aboved_opaque);
-	pixman_region32_intersect(&temp, &output->base.region, &temp);
-	pixman_region32_translate(&temp, -output->base.x, -output->base.y);
-
-	rectangles = pixman_region32_rectangles(&temp, &n);
-	if (!n) {
-		pixman_region32_fini(&temp);
-		return 0;
-	}
-
-	visible->rects = zalloc(n * sizeof(struct Rect));
-	if (visible->rects == NULL) {
-		weston_log("out of memory for allocating visible region\n");
-		return -1;
-	}
-	for (i = 0; i < n; i++) {
-		visible->rects[i].left = (float)rectangles[i].x1;
-		visible->rects[i].top = (float)rectangles[i].y1;
-		visible->rects[i].right = (float)rectangles[i].x2;
-		visible->rects[i].bottom = (float)rectangles[i].y2;
-	}
-	visible->count = n;
-
-	pixman_region32_fini(&temp);
-
-	return 0;
-}
-
-static int
-prepare_faked_fb_layer_geometry(struct drm_output *output, struct LayerGeometry *fb_layer)
-{
-	fb_layer->width = output->base.width;
-	fb_layer->height = output->base.height;
-	fb_layer->format = get_mapped_format_from_gbm(output->format);
-	fb_layer->composition = PLUGIN_COMPOSITION_FB_TARGET;
-
-	fb_layer->src_rect.left = (float)0.0;
-	fb_layer->src_rect.top = (float)0.0;
-	fb_layer->src_rect.right = (float)output->base.width;
-	fb_layer->src_rect.bottom = (float)output->base.height;
-	fb_layer->dst_rect.left = (float)0.0;
-	fb_layer->dst_rect.top = (float)0.0;
-	fb_layer->dst_rect.right = (float)output->base.width;
-	fb_layer->dst_rect.bottom = (float)output->base.height;
-
-	fb_layer->visible_regions.rects = zalloc(sizeof(struct Rect));
-	if (fb_layer->visible_regions.rects == NULL) {
-		weston_log("out of memory for allocating fb visible region\n");
-		return -1;
-	}
-	fb_layer->visible_regions.rects[0] = fb_layer->dst_rect;
-	fb_layer->visible_regions.count = 1;
-
-	fb_layer->dirty_regions.rects = zalloc(sizeof(struct Rect));
-	if (fb_layer->dirty_regions.rects == NULL) {
-		weston_log("out of memory for allocating fb dirty region\n");
-		return -1;
-	}
-	fb_layer->dirty_regions.rects[0] = fb_layer->dst_rect;
-	fb_layer->dirty_regions.count = 1;
-
-	fb_layer->blending = PLUGIN_BLENDING_NONE;
-	/*
-	 * output->base.width/height should be already transformed, so just
-	 * keep no transform for output.
-	 */
-	fb_layer->transform = PLUGIN_TRANSFORM_NORMAL;
-	fb_layer->plane_alpha = 0xFF;
-	fb_layer->flags.skip = 0;
-	fb_layer->flags.is_cursor = 0;
-	fb_layer->flags.has_ubwc_buf = 0;
-
-	return 0;
-}
-
-static struct LayersConfig *
-allocate_layer_config_memory(int view_count)
-{
-	struct LayersConfig *config;
-	struct LayerGeometry *layers;
-
-	config = (struct LayersConfig *)zalloc(sizeof(*config));
-	if (config == NULL) {
-		weston_log("fail to allocate layers configuration\n");
-		return NULL;
-	}
-
-	layers = (struct LayerGeometry *) zalloc(view_count * sizeof(struct LayerGeometry));
-	if (layers == NULL) {
-		weston_log("fail to allocate layer geometry array\n");
-		free(config);
-		return NULL;
-	}
-
-	config->layers = layers;
-	return config;
-}
-
-static void
-free_layer_config_memory(struct LayersConfig *config)
-{
-	uint32_t i;
-
-	if (!config)
-		return;
-
-	if (!config->layers) {
-		free(config);
-		return;
-	}
-
-	for (i = 0; i < config->count; i++) {
-		struct LayerGeometry *layer = &config->layers[i];
-		if (layer->visible_regions.rects)
-			free(layer->visible_regions.rects);
-		if (layer->dirty_regions.rects)
-			free(layer->dirty_regions.rects);
-	}
-
-	free(config->layers);
-	free(config);
-}
-
-static bool
-is_cursor_view(struct drm_output *output, struct weston_view *ev)
-{
-	struct drm_backend *b =
-		(struct drm_backend *)output->base.compositor->backend;
-	struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
-
-	if (b->gbm == NULL)
-		return false;
-	if (output->cursor_plane == NULL)
-		return false;
-	if (output->base.transform != WL_OUTPUT_TRANSFORM_NORMAL)
-		return false;
-	if (viewport->buffer.scale != output->base.current_scale)
-		return false;
-	if (output->cursor_view)
-		return false;
-	if (ev->output_mask != (1u << output->base.id))
-		return false;
-	if (b->cursors_are_broken)
-		return false;
-	if (ev->geometry.scissor_enabled)
-		return false;
-	if (ev->surface->buffer_ref.buffer == NULL ||
-	    !wl_shm_buffer_get(ev->surface->buffer_ref.buffer->resource) ||
-	    ev->surface->width > b->cursor_width ||
-	    ev->surface->height > b->cursor_height)
-		return false;
-
-	output->cursor_view = ev;
-	return true;
-}
-
-static bool
-is_sdm_support_buffer(struct weston_buffer *buffer)
-{
-	return buffer && buffer->resource && !wl_shm_buffer_get(buffer->resource);
-}
-
-static bool
-is_sdm_support_view(struct weston_view *view, struct drm_output *output, pixman_region32_t *overlap, bool is_cursor)
-{
-	/* rotation is not supported yet */
-	return (view->output_mask == (1u << output->base.id) &&
-		view->surface->buffer_viewport.buffer.transform == output->base.transform &&
-			!pixman_region32_not_empty(overlap) &&
-			(is_cursor || is_sdm_support_buffer(view->surface->buffer_ref.buffer)));
-}
-
-static bool
-need_convert_gbm_format(struct weston_view *ev, uint32_t format)
-{
-	pixman_region32_t r;
-	bool need_convert = false;
-
-	if (is_transparent_gbm_format(format)) {
-		pixman_region32_init_rect(&r, 0, 0,
-					  ev->surface->width,
-					  ev->surface->height);
-		pixman_region32_subtract(&r, &r, &ev->surface->opaque);
-
-		if (!pixman_region32_not_empty(&r))
-			need_convert = true;
-
-		pixman_region32_fini(&r);
-	}
-
-	return need_convert;
-}
-
-static int
-prepare_normal_layer_geometry(struct drm_output *output, struct LayerGeometry *layer, struct sdm_layer *sdm_layer)
-{
-	struct drm_backend *b =
-		(struct drm_backend *)output->base.compositor->backend;
-	struct weston_view *ev = sdm_layer->view;
-	struct weston_surface *es = ev->surface;
-	bool is_cursor = sdm_layer->is_cursor;
-	uint32_t format;
-
-	/* Prepare layer buffer information */
-	layer->width = es->width;
-	layer->height = es->height;
-
-	if (is_cursor) {
-		struct wl_shm_buffer *shm_buffer =
-			wl_shm_buffer_get(es->buffer_ref.buffer->resource);
-		format = wl_shm_buffer_get_format(shm_buffer);
-		layer->format = get_mapped_format_from_shm(format);
-	} else {
-		struct gbm_bo *bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_WL_BUFFER,
-				es->buffer_ref.buffer->resource, GBM_BO_USE_SCANOUT);
-		if (bo == NULL) {
-			weston_log("%s: fail to import gbm bo!\n", __func__);
-		}
-		format = gbm_bo_get_format(bo);
-		gbm_bo_destroy(bo);
-		if (need_convert_gbm_format(ev, format))
-			format = convert_to_opaque_gbm_format(format);
-		layer->format = get_mapped_format_from_gbm(format);
-	}
-
-	/* Get src/dst rect */
-	compute_src_dst_rect(output, ev, &layer->src_rect, &layer->dst_rect);
-	/* Get visible rects */
-	if (get_visible_region(output, ev, &sdm_layer->overlap, &layer->visible_regions))
-		return -1;
-	/*
-	 * Get dirty rects. It's not surprised a view has null damage region, that means
-	 * the buffer content of view is not changed since last frame, eg. cursor.
-	 */
-	if (compute_dirty_region(ev, &layer->dirty_regions))
-		return -1;
-	/* Get blending. Now Weston only support premultipled alpha */
-	/* TODO: update property alpha, blend_op */
-	if (ev->alpha == 1.0f)
-		layer->blending = PLUGIN_BLENDING_NONE;
-	else
-		layer->blending = PLUGIN_BLENDING_PREMULTIPLIED;
-	/* Set no transform for view since bounding box already been applied by transform */
-	layer->transform = PLUGIN_TRANSFORM_NORMAL;
-	/* Get global alpha */
-	layer->plane_alpha = get_global_alpha(ev);
-
-	/* TODO: update property src_config, csc, color_fill, scaler ... */
-	layer->flags.is_cursor = is_cursor;
-	/* TODO:Check if view has a ubwc buffer. Now set it to false */
-	layer->flags.has_ubwc_buf = 0;
-	/* Initialize all views with GPU composition first, SDM will update them after prepare */
-	layer->composition = PLUGIN_COMPOSITION_GPU;
-	/* Hook ev to plugin, then we can assign these ev to different plane later. */
-	layer->usr_data = (void *)sdm_layer;
-
-	return 0;
-}
-
-static struct sdm_layer *
-create_sdm_layer(struct drm_output *output, struct weston_view *ev, pixman_region32_t *overlap, bool is_cursor)
-{
-	struct sdm_layer *layer;
-
-	layer = zalloc(sizeof(*layer));
-	if (layer == NULL) {
-		return NULL;
-	}
-
-	layer->view = ev;
-	layer->is_cursor = is_cursor;
-	pixman_region32_init(&layer->overlap);
-	pixman_region32_copy(&layer->overlap, overlap);
-
-	return layer;
-}
-
-static void
-destroy_sdm_layer(struct sdm_layer *layer)
-{
-	pixman_region32_fini(&layer->overlap);
-	wl_list_remove(&layer->link);
-	free(layer);
-}
-
-#define GET_GPU_TARGET_SLOT(max_layers)	((max_layers) - 1)
-/* Cursor is fixed in (gpu_target_index-1) slot in SDM */
-#define GET_CURSOR_SLOT(max_layers)	((max_layers) - 2)
-
-static int
-setup_layer_configs(struct drm_output *output, struct LayersConfig *layers_config)
-{
-	struct sdm_layer *sdm_layer = NULL, *next_sdm_layer = NULL;
-	struct LayerGeometry *layer = NULL;
-	uint32_t gpu_target_index = GET_GPU_TARGET_SLOT(layers_config->count);
-	uint32_t index = 0;
-	int slot;
-
-	/* If no view can be handled by SDM, just skip below and fake fb target directly. */
-	if (gpu_target_index > 0) {
-		wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
-			if (sdm_layer->is_cursor) {
-				slot = GET_CURSOR_SLOT(layers_config->count);
-			} else {
-				slot = index++;
-			}
-
-			layer = &layers_config->layers[slot];
-
-			if(prepare_normal_layer_geometry(output, layer, sdm_layer)) {
-				weston_log("fail to prepare layer %p\n", layer);
-				return -1;
-			}
-		}
-	}
-
-	layer = &layers_config->layers[gpu_target_index];
-	if (prepare_faked_fb_layer_geometry(output, layer)) {
-		weston_log("fail to prepare faked fb\n");
-		return -1;
-	}
-
-	return 0;
-}
-
-static struct weston_plane *
-assigne_plane_for_layer(struct drm_output *output, struct LayerGeometry *layer)
-{
-	struct weston_output *output_base = &output->base;
-	struct drm_backend *b =
-		(struct drm_backend *)output_base->compositor->backend;
-	struct sdm_layer *sdm_layer = (struct sdm_layer *)layer->usr_data;
-	struct weston_view *ev = sdm_layer->view;
-	struct weston_surface *es = ev->surface;
-	struct drm_plane *plane = NULL;
-	struct weston_plane *primary, *next_plane = NULL;
-	struct gbm_bo *bo = NULL;
-	int found = 0;
-
-	primary = &output_base->compositor->primary_plane;
-
-	if (layer->composition == PLUGIN_COMPOSITION_GPU) {
-		/* Reset cursor plane if there isn't a possible cursor */
-		if (sdm_layer->is_cursor) {
-			plane = output->cursor_plane;
-			if (plane) {
-				plane->next = NULL;
-				plane->current = NULL;
-				plane->view = NULL;
-				output->cursor_view = NULL;
-			}
-		}
-		next_plane = primary;
-		ev->psf_flags = 0;
-	} else if (layer->composition == PLUGIN_COMPOSITION_OVERLAY) {
-		uint32_t format;
-
-		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_WL_BUFFER,
-			es->buffer_ref.buffer->resource, GBM_BO_USE_SCANOUT);
-		if (bo == NULL) {
-			weston_log("%s: fail to import gbm bo!\n", __func__);
-			goto err_out;
-		}
-
-		/* Find a free overlay plane */
-		wl_list_for_each(plane, &b->plane_list, link) {
-			if (!drm_plane_crtc_supported(output, plane->possible_crtcs))
-				continue;
-
-			if (plane->output && plane->output != output)
-				continue;
-
-			if (plane->type != WDRM_PLANE_TYPE_OVERLAY)
-				continue;
-
-			format = drm_output_check_plane_format(plane, ev, bo);
-			if (format == 0)
-				continue;
-
-			if (!plane->next && !plane->view) {
-				found = 1;
-				break;
-			}
-		}
-
-		/* No planes available */
-		if (!found) {
-			gbm_bo_destroy(bo);
-			goto err_out;
-		}
-
-		plane->next = drm_fb_get_from_bo(bo, b, format);
-		if (!plane->next) {
-			weston_log("%s: drm_fb_get_from_bo fail!!\n", __func__);
-			gbm_bo_destroy(bo);
-			goto err_out;
-		}
-		drm_fb_set_buffer(plane->next, ev->surface->buffer_ref.buffer);
-
-		plane->output = output;
-		plane->view = ev;
-		wl_signal_add(&ev->destroy_signal, &plane->view_destroy);
-
-		setup_sprite_geometry(plane, ev, layer);
-
-		next_plane = &plane->base;
-		ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
-	} else {
-		assert(output->cursor_plane);
-
-		plane = output->cursor_plane;
-		plane->view = ev;
-
-		if (pixman_region32_not_empty(&plane->base.damage)) {
-			pixman_region32_fini(&plane->base.damage);
-			pixman_region32_init(&plane->base.damage);
-			plane->next =
-				output->cursor_fb[output->current_cursor];
-			bo = output->cursor_bo[output->current_cursor];
-			output->current_cursor ^= 1;
-			plane->current =
-				output->cursor_fb[output->current_cursor];
-
-			cursor_bo_update(b, bo, ev);
-		}
-
-		setup_sprite_geometry(plane, ev, layer);
-
-		next_plane = &plane->base;
-		ev->psf_flags = 0;
-	}
-
-err_out:
-	return next_plane;
-}
-
-static int
-apply_strategy_for_views(struct drm_output *output, struct LayersConfig *layers_config, drmModeAtomicReqPtr req)
-{
-	struct weston_output *output_base = &output->base;
-	struct drm_backend *b =
-		(struct drm_backend *)output_base->compositor->backend;
-	struct sdm_layer *sdm_layer = NULL;
-	struct LayerGeometry *layer = NULL;
-	struct drm_plane *plane = NULL;
-	struct weston_plane *primary, *next_plane = NULL;
-	uint32_t i;
-
-	primary = &output_base->compositor->primary_plane;
-
-	for (i = 0; i < layers_config->count - 1; i++) {
-		struct weston_view *ev = NULL;
-
-		layer = &layers_config->layers[i];
-		sdm_layer = (struct sdm_layer *)layer->usr_data;
-		ev = sdm_layer->view;
-
-		next_plane = assigne_plane_for_layer(output, layer);
-		if (next_plane == NULL)
-			return -1;
-
-
-		/* Check whether or not the kernel likes this import. */
-		if (b->atomic_modeset && next_plane && next_plane != primary && next_plane != &output->fb_plane) {
-			int ret;
-			plane =	container_of(next_plane, struct drm_plane, base);
-
-			int saved_cursor = drmModeAtomicGetCursor(req);
-
-			/* This is not matched with an update_success, as we
-			 * never actually commit it, just check that it could
-			 * potentially be committed at some stage. */
-			drm_plane_update_begin(plane);
-			ret = drm_output_populate_atomic_plane(output, plane,
-							       req, false);
-			if (ret > 0)
-				ret = drmModeAtomicCommit(b->drm.fd, req,
-							  DRM_MODE_ATOMIC_TEST_ONLY,
-							  output);
-			if (ret != 0) {
-				drmModeAtomicSetCursor(req, saved_cursor);
-				return -1;
-			}
-		}
-
-		weston_view_move_to_plane(ev, next_plane);
-	}
-
-	return 0;
-}
-
-static void
-reset_assigned_planes(struct drm_output *output)
-{
-	struct weston_output *output_base = &output->base;
-	struct drm_backend *b =
-		(struct drm_backend *)output_base->compositor->backend;
-	struct drm_plane *plane = NULL;
-
-	wl_list_for_each(plane, &b->plane_list, link) {
-		if (plane->output != output)
-			continue;
-
-		if (plane->type == WDRM_PLANE_TYPE_PRIMARY)
-			continue;
-
-		if (plane->type == WDRM_PLANE_TYPE_CURSOR) {
-			plane->next = NULL;
-			plane->current = NULL;
-			plane->view = NULL;
-			continue;
-		}
-
-		if (plane->next) {
-			drm_output_release_fb(output,
-					      plane->next);
-			plane->next = NULL;
-			/* If no one uses it in last frame, release it */
-			if (plane->current == NULL)
-				plane->output = NULL;
-		}
-		if (plane->view)
-			wl_list_remove(&plane->view_destroy.link);
-		plane->view = NULL;
-	}
-}
-
-static void
-assign_views_for_gpu_composition(struct drm_output *output)
-{
-	struct weston_output *output_base = &output->base;
-	struct drm_backend *b =
-		(struct drm_backend *)output_base->compositor->backend;
-	struct weston_view *ev, *next;
-	struct weston_plane *primary = &output_base->compositor->primary_plane;
-
-	wl_list_for_each_safe(ev, next, &output_base->compositor->view_list, link) {
-		struct weston_surface *es = ev->surface;
-
-		if (b->use_pixman ||
-		    (es->buffer_ref.buffer &&
-		    (!wl_shm_buffer_get(es->buffer_ref.buffer->resource) ||
-		     (ev->surface->width <= 64 && ev->surface->height <= 64))))
-			es->keep_buffer = true;
-		else
-			es->keep_buffer = false;
-		ev->psf_flags = 0;
-
-		weston_view_move_to_plane(ev, primary);
-	}
-}
-
-/*
- * This happens only when fail to apply sdm strategy to Weston.
- * this is the last chance to update sdm, if it fail again, do nothing
- */
-static void
-reset_sdm(struct drm_output *output)
-{
-	struct weston_output *output_base = &output->base;
-	struct drm_backend *b =
-		(struct drm_backend *)output_base->compositor->backend;
-	struct LayersConfig *layers_config = NULL;
-	struct Property prop;
-	uint32_t view_count = 0;
-
-	/* Release all resources occupied by this display */
-	memset(&prop, 0, sizeof(prop));
-	prop.opcode = PLUGIN_PURGE_DISPLAY_RESOURCE;
-	sdm_strategy_plugin->UpdateProperty(b->sdm_client, &prop, true, 0);
-
-	/* Only reserve memory for fb layer */
-	view_count = 1;
-	layers_config = allocate_layer_config_memory(view_count);
-	if (layers_config == NULL)
-		return;
-	layers_config->count = view_count;
-
-	if (setup_layer_configs(output, layers_config)) {
-		free_layer_config_memory(layers_config);
-		return;
-	}
-
-	sdm_strategy_plugin->Prepare(b->sdm_client, &output->sdm_display, 1, &layers_config, 0);
-
-	free_layer_config_memory(layers_config);
-
-	return;
-}
-
-/*
- * The basic principle for assignment is using SDM strategy filter first, once
- * fail to get a SDM strategy, all views will be assigned to primary plane for
- * GPU composition.
- */
-static void
-drm_assign_planes_use_sdm_strategy(struct weston_output *output_base)
-{
-	struct drm_backend *b =
-		(struct drm_backend *)output_base->compositor->backend;
-	struct drm_output *output = (struct drm_output *)output_base;
-	struct weston_view *ev, *next;
-	struct weston_plane *primary;
-	pixman_region32_t overlap, surface_overlap;
-	drmModeAtomicReqPtr req = NULL;
-	struct LayersConfig *layers_config;
-	struct sdm_layer *sdm_layer, *next_sdm_layer;
-	uint32_t view_count = 0;
-	uint32_t error = PLUGIN_ERROR_NONE;
-
-	uint32_t err = 0;
-
-	primary = &output_base->compositor->primary_plane;
-
-	if (b->atomic_modeset) {
-		req = drmModeAtomicAlloc();
-		if (!req)
-			goto error_fallback_to_gpu_composition;
-	}
-
-	/*
-	 * If a view is covered by an union of opaque regions, the content of this view will
-	 * be invisible
-	 */
-	pixman_region32_init(&overlap);
-
-	/* 1. Compute how many views which can be handled by SDM module */
-	/* Some views may neither be composited by GPU nor display engine directly,
-	 * they are in the "skip" status, even no buffer is attached. We can't pass them
-	 * to SDM because format check will fail which may cause SDM can't filter
-	 * correct strategy result. If so, assign those views directly to primary plane.
-	 * TODO: How to handle scanout view in SDM? Now ignore it.
-	 */
-	wl_list_for_each_safe(ev, next, &output_base->compositor->view_list, link) {
-		bool is_cursor = false;
-		struct weston_surface *es = ev->surface;
-
-		/* Test whether this buffer can ever go into a plane:
-		 * non-shm, or small enough to be a cursor.
-		 *
-		 * Also, keep a reference when using the pixman renderer.
-		 * That makes it possible to do a seamless switch to the GL
-		 * renderer and since the pixman renderer keeps a reference
-		 * to the buffer anyway, there is no side effects.
-		 */
-		if (b->use_pixman ||
-		    (es->buffer_ref.buffer &&
-		    (!wl_shm_buffer_get(es->buffer_ref.buffer->resource) ||
-		     (ev->surface->width <= 64 && ev->surface->height <= 64))))
-			es->keep_buffer = true;
-		else
-			es->keep_buffer = false;
-
-		pixman_region32_init(&surface_overlap);
-		pixman_region32_intersect(&surface_overlap, &overlap,
-					  &ev->transform.boundingbox);
-
-		is_cursor = is_cursor_view(output, ev);
-
-		/*
-		 * SDM can't handle overlap or a view without an attached buffer,
-		 * just skip it and fallback to primary plane directly.
-		 */
-		if(!is_sdm_support_view(ev, output, &surface_overlap, is_cursor)) {
-			weston_view_move_to_plane(ev, primary);
-			ev->psf_flags = 0;
-			pixman_region32_fini(&surface_overlap);
-			pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
-			continue;
-		}
-
-		sdm_layer = create_sdm_layer(output, ev, &surface_overlap, is_cursor);
-		if (sdm_layer == NULL) {
-			weston_log("out of memory for sdm_layer\n");
-			pixman_region32_fini(&surface_overlap);
-			goto error_alloc_sdm_layer;
-		}
-		/* Insert view which can be handled by sdm in z-order */
-		wl_list_insert(output->sdm_layer_list.prev, &sdm_layer->link);
-
-		pixman_region32_fini(&surface_overlap);
-
-		view_count++;
-	}
-	/*
-	 * SDM always need FB target layer, however, in Weston there is no explicit
-	 * fb target view, need to fake one
-	 */
-	view_count++;
-
-	/* 2. Allocate memory for layers' configuration */
-	layers_config = allocate_layer_config_memory(view_count);
-	if (layers_config == NULL) {
-		goto error_alloc_sdm_layer;
-	}
-	layers_config->count = view_count;
-
-	/* 3. Prepare layer information according to weston view */
-	err = setup_layer_configs(output, layers_config);
-	if (err)
-		goto error_alloc_layers;
-
-	/* 4. Try SDM strategy */
-	error = sdm_strategy_plugin->Prepare(b->sdm_client, &output->sdm_display, 1, &layers_config, 0);
-	if (error != PLUGIN_ERROR_NONE) {
-		weston_log("fail to use sdm strategy for prepare! err=%d!\n", error);
-		goto error_alloc_layers;
-	}
-
-	/* 5. Assign view according to strategy result */
-	err = apply_strategy_for_views(output, layers_config, req);
-	if (err)
-		goto error_assign_view;
-
-        /* Reset cursor plane if no hw cursor */
-	if (output->cursor_plane &&
-		output->cursor_plane->view == NULL) {
-		output->cursor_plane->next = NULL;
-		output->cursor_plane->current = NULL;
-		output->cursor_view = NULL;
-	}
-
-	wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
-		destroy_sdm_layer(sdm_layer);
-	}
-
-	free_layer_config_memory(layers_config);
-
-	pixman_region32_fini(&overlap);
-
-	if (b->atomic_modeset)
-		drmModeAtomicFree(req);
-
-	return;
-
-error_assign_view:
-	/* Reset all planes corresponding to this output except fb plane */
-	if (b->atomic_modeset) {
-		reset_assigned_planes(output);
-	}
-	reset_sdm(output);
-
-error_alloc_layers:
-	free_layer_config_memory(layers_config);
-
-error_alloc_sdm_layer:
-	wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
-		destroy_sdm_layer(sdm_layer);
-	}
-
-	pixman_region32_fini(&overlap);
-
-	if (b->atomic_modeset)
-		drmModeAtomicFree(req);
-
-error_fallback_to_gpu_composition:
-	assign_views_for_gpu_composition(output);
-
-	output->cursor_view = NULL;
-
-	return;
-}
-#endif /* SDM_STRATEGY_OPTIMIZATION*/
-
 static void
 setup_plane_geometry(struct drm_output *output, struct weston_view *ev, struct drm_plane *p)
 {
@@ -3700,13 +2620,6 @@ drm_output_destroy(struct weston_output *output_base)
 	}
 
 	weston_plane_release(&output->fb_plane);
-
-#ifdef SDM_STRATEGY_OPTIMIZATION
-	if (b->use_sdm_strategy) {
-		if (output->sdm_display)
-			sdm_strategy_plugin->DestroyDisplay(b->sdm_client, output->sdm_display);
-	}
-#endif
 
 	weston_output_destroy(&output->base);
 
@@ -4168,7 +3081,7 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 	else {
 		ret = drmModeConnectorSetProperty(b->drm.fd,
 						  output->connector_id,
-						  output->dpms_prop->prop_id,
+					 	  output->dpms_prop->prop_id,
 						  level);
 		if (ret) {
 			weston_log("DRM: DPMS: failed property set for %s\n",
@@ -4707,136 +3620,6 @@ connector_get_current_mode(drmModeConnector *connector, int drm_fd,
 	return 0;
 }
 
-#ifdef SDM_STRATEGY_OPTIMIZATION
-static void
-get_pipes(struct HWResourceConfig *info)
-{
-	info->num_rgb_pipe = 4;
-	info->num_vig_pipe = 4;
-	info->num_cursor_pipe = 2;
-	info->num_dma_pipe = 2;
-}
-
-static void
-get_plugin_hw_resource_info(struct drm_backend *b, struct HWResourceConfig *hw_res_info)
-{
-	int i;
-
-	/*TODO: Require from DRM*/
-	get_pipes(hw_res_info);
-	/*Hardcode below info*/
-	hw_res_info->num_blending_stages = 7;
-	hw_res_info->num_rotator = 0;
-	hw_res_info->num_control = 0;
-	hw_res_info->num_mixer_to_disp = 0;
-	hw_res_info->max_scale_up = 20;
-	hw_res_info->max_scale_down = 4;
-	hw_res_info->max_bandwidth_low = 9600000;
-	hw_res_info->max_bandwidth_high = 9600000;
-	hw_res_info->max_mixer_width = MAX_MIXER_WIDTH;
-	hw_res_info->max_pipe_width = MAX_PIPE_WIDTH;
-	hw_res_info->max_cursor_size = 128;
-	hw_res_info->max_pipe_bw = 4500000;
-	hw_res_info->max_sde_clk = 412500000;
-	hw_res_info->clk_fudge_factor = (float)105.0/(float)100.0;
-	hw_res_info->macrotile_nv12_factor = 8;
-	hw_res_info->macrotile_factor = 4;
-	hw_res_info->linear_factor = 1;
-	hw_res_info->scale_factor = 1;
-	hw_res_info->extra_fudge_factor = 2;
-	hw_res_info->has_ubwc = true;
-	hw_res_info->has_decimation = true;
-	hw_res_info->has_rotator_downscale = true;
-	hw_res_info->has_non_scalar_rgb = false;
-	hw_res_info->is_src_split = false;
-	hw_res_info->perf_calc = false;
-	hw_res_info->has_dyn_bw_support = false;
-	if (hw_res_info->has_dyn_bw_support) {
-		for (i = 0; i < PLUGIN_BW_MODE_MAX; i++) {
-			hw_res_info->dyn_bw_info.total_bw_limit[i] = hw_res_info->max_bandwidth_low;
-			hw_res_info->dyn_bw_info.pipe_bw_limit[i] = hw_res_info->max_pipe_width;
-		}
-		/*TODO:individual setting for each slot?*/
-	}
-}
-
-static void
-get_plugin_panel_info(struct drm_output *output, struct PanelInfo *panel)
-{
-	uint32_t length = 0;
-
-	panel->port = PLUGIN_PORT_DTV;
-	panel->mode = PLUGIN_MODE_VIDEO;
-	panel->partial_update = false;
-	panel->left_align = 0;
-	panel->width_align = 0;
-	panel->top_align = 0;
-	panel->height_align = 0;
-	panel->min_roi_width = 0;
-	panel->min_roi_height = 0;
-	panel->needs_roi_merge = false;
-	panel->dynamic_fps = false;
-	panel->min_fps = 0;
-	panel->max_fps = 0;
-	panel->is_primary_panel = (output->base.id == 0) ? true : false;
-	panel->left_split = 0;
-	panel->right_split = 0;
-	length = strlen(output->base.name);
-	if (length >= 256)
-		length = 255;
-	strncpy(panel->panel_name, output->base.name, length);
-	panel->panel_name[length] = '\0';
-}
-
-static void
-get_plugin_display_info(struct DisplayAttributes *attrib, drmModeModeInfo *mode, uint32_t max_mixer_width)
-{
-	attrib->x_pixels = mode->hdisplay;
-	attrib->y_pixels = mode->vdisplay;
-	/*TODO: x_dpi, y_dpi need to get from DRM property*/
-	attrib->x_dpi = 0;
-	attrib->y_dpi = 0;
-	attrib->fps = mode->vrefresh;
-	attrib->vsync_period_ns = (uint32_t)(1000000000L / mode->vrefresh);
-	attrib->v_front_porch = mode->vsync_start - mode->vdisplay;
-	attrib->v_back_porch = mode->vtotal - mode->vsync_end;
-	attrib->v_pulse_width = mode->vsync_end - mode->vsync_start;
-	attrib->h_total = mode->htotal;
-	attrib->split_left = mode->hdisplay;
-	if (attrib->x_pixels > max_mixer_width) {
-		attrib->is_device_split = true;
-		attrib->split_left = mode->hdisplay / 2;
-		attrib->h_total += (mode->htotal - mode->hdisplay);
-	}
-}
-
-/*
- * This is hardcode to compatible with kernel configuration.
- * NOTE: Below value need to be modified to match kernel configuration strictly!
- */
-static int
-get_plugin_display_max_mixer_stages(uint32_t type)
-{
-	int max_mixer_stages = 0;
-
-	switch (type) {
-		case PLUGIN_PRIMARY_DISPLAY:
-			max_mixer_stages = 5;
-			break;
-		case PLUGIN_SECOND_DISPLAY:
-			max_mixer_stages = 4;
-			break;
-		case PLUGIN_TERTIARY_DISPLAY:
-			max_mixer_stages = 3;
-			break;
-		default:
-			break;
-	}
-
-	return max_mixer_stages;
-}
-#endif /* SDM_STRATEGY_OPTIMIZATION */
-
 static void
 drm_output_init_primary_plane(struct drm_output *output)
 {
@@ -4977,9 +3760,6 @@ create_output_for_connector(struct drm_backend *b,
 	char *s;
 	enum output_config config;
 	uint32_t transform;
-#ifdef SDM_STRATEGY_OPTIMIZATION
-        struct DisplayParameter disp_para;
-#endif
 
 	i = find_crtc_for_connector(b, resources, connector);
 	if (i < 0) {
@@ -4999,10 +3779,6 @@ create_output_for_connector(struct drm_backend *b,
 	output->base.serial_number = "unknown";
 	wl_list_init(&output->base.mode_list);
 	wl_list_init(&output->plane_flip_list);
-#ifdef SDM_STRATEGY_OPTIMIZATION
-	if (b->use_sdm_strategy)
-		wl_list_init(&output->sdm_layer_list);
-#endif
 
 	section = weston_config_get_section(b->compositor->config, "output", "name",
 					    output->base.name);
@@ -5096,6 +3872,7 @@ create_output_for_connector(struct drm_backend *b,
 		goto err_output;
 	}
 	drm_output_init_cursor(output);
+
 	if (!output_properties_init(output))
 		goto err_output;
 
@@ -5132,12 +3909,7 @@ create_output_for_connector(struct drm_backend *b,
 	else
 		output->base.repaint = drm_output_repaint;
 	output->base.destroy = drm_output_destroy;
-#ifdef SDM_STRATEGY_OPTIMIZATION
-	if (b->use_sdm_strategy)
-		output->base.assign_planes = drm_assign_planes_use_sdm_strategy;
-	else
-#endif
-		output->base.assign_planes = drm_assign_planes;
+	output->base.assign_planes = drm_assign_planes;
 	output->base.set_dpms = drm_set_dpms;
 	output->base.switch_mode = drm_output_switch_mode;
 
@@ -5163,41 +3935,6 @@ create_output_for_connector(struct drm_backend *b,
 	/* Set native_ fields, so weston_output_mode_switch_to_native() works */
 	output->base.native_mode = output->base.current_mode;
 	output->base.native_scale = output->base.current_scale;
-
-#ifdef SDM_STRATEGY_OPTIMIZATION
-	if (b->use_sdm_strategy) {
-		struct drm_plane *plane = NULL;
-		uint32_t counts = 0;
-
-		memset(&disp_para, 0, sizeof(disp_para));
-		/*Is it correct?*/
-		disp_para.type = output->base.id;
-		/*Fill panel info*/
-		get_plugin_panel_info(output, &disp_para.panel);
-		/*Fill display attribute*/
-		get_plugin_display_info(&disp_para.attribs, &current->mode_info, MAX_MIXER_WIDTH);
-		disp_para.max_blending_stages = get_plugin_display_max_mixer_stages(disp_para.type);
-		/*Get all virtual planes for a display. One virtual plane is corresponding to
-		 *a possible weston view*/
-		wl_list_for_each(plane, &b->plane_list, link) {
-			int crtc;
-
-			for (crtc = 0; crtc < b->num_crtcs; crtc++) {
-				if (b->crtcs[crtc] != output->crtc_id)
-					continue;
-				if (plane->type != WDRM_PLANE_TYPE_CURSOR &&
-					plane->possible_crtcs & (1 << crtc))
-					counts++;
-			}
-		}
-		disp_para.max_layers = counts;
-
-		output->sdm_display = sdm_strategy_plugin->CreateDisplay(b->sdm_client, &disp_para, 0);
-		if (output->sdm_display == NULL) {
-			goto err_output;
-		}
-	}
-#endif
 
 	return 0;
 
@@ -5314,13 +4051,10 @@ drm_plane_destroy(struct drm_plane *plane)
 	drmModeSetPlane(plane->backend->drm.fd,
 			plane->plane_id, 0, 0, 0,
 			0, 0, 0, 0, 0, 0, 0, 0);
-
 	if (plane->current)
 		drm_output_release_fb(plane->output, plane->current);
-	/*start repaint loop may cause next = current, avoid release twice*/
 	if (plane->next != plane->current)
 		drm_output_release_fb(plane->output, plane->next);
-
 	weston_plane_release(&plane->base);
 	wl_list_remove(&plane->link);
 	plane_properties_release(plane);
@@ -5578,13 +4312,6 @@ drm_destroy(struct weston_compositor *ec)
 	weston_launcher_destroy(ec->launcher);
 
 	close(b->drm.fd);
-
-#ifdef SDM_STRATEGY_OPTIMIZATION
-	if (b->use_sdm_strategy) {
-		sdm_strategy_plugin->DestroyClient(b->sdm_client);
-		sdm_strategy_plugin->Deinit(b->sdm_plugin);
-	}
-#endif
 
 	free(b);
 }
@@ -5944,43 +4671,6 @@ renderer_switch_binding(struct weston_keyboard *keyboard, uint32_t time,
 	switch_to_gl_renderer(b);
 }
 
-#ifdef SDM_STRATEGY_OPTIMIZATION
-static void *
-load_sdm_plugin_module(const char *name, const char *entrypoint)
-{
-	char path[1024];
-	void *module, *interface;
-
-	if (name == NULL)
-		return NULL;
-
-	snprintf(path, sizeof path, "%s/%s", LIBDIR, name);
-
-	module = dlopen(path, RTLD_NOW | RTLD_NOLOAD);
-	if (module) {
-		weston_log("Module '%s' already loaded\n", path);
-		dlclose(module);
-		return NULL;
-	}
-
-	weston_log("Loading module '%s'\n", path);
-	module = dlopen(path, RTLD_NOW);
-	if (!module) {
-		weston_log("Failed to load module: %s\n", dlerror());
-		return NULL;
-	}
-
-	interface = dlsym(module, entrypoint);
-	if (!interface) {
-		weston_log("Failed to lookup sdm interface: %s\n", dlerror());
-		dlclose(module);
-		return NULL;
-	}
-
-	return interface;
-}
-#endif
-
 static struct drm_backend *
 drm_backend_create(struct weston_compositor *compositor,
 		      struct drm_parameters *param,
@@ -5993,10 +4683,6 @@ drm_backend_create(struct weston_compositor *compositor,
 	struct wl_event_loop *loop;
 	const char *path;
 	uint32_t key;
-#ifdef SDM_STRATEGY_OPTIMIZATION
-	struct StrategyPluginConfig plugin_config;
-	struct ClientConfigs client_config;
-#endif
 
 	weston_log("initializing drm backend\n");
 
@@ -6081,45 +4767,10 @@ drm_backend_create(struct weston_compositor *compositor,
 	wl_list_init(&b->plane_list);
 	create_sprites(b);
 
-#ifdef SDM_STRATEGY_OPTIMIZATION
-	/*There is no need to apply SDM strategy if atomic modeset is disable because
-	 *the performance is so poor when multiple overlays are launched if no atomic
-	 *modeset. SDM strategy can change nothing in that case.*/
-	b->use_sdm_strategy = b->atomic_modeset ? true: false;
-
-	if (b->use_sdm_strategy) {
-		sdm_strategy_plugin = load_sdm_plugin_module("libsdm_strategy_plugin.so",
-								"StrategyPluginInterface");
-		if (!sdm_strategy_plugin) {
-			weston_log("fail to load sdm strategy plugin\n");
-			goto err_sprite;
-		}
-
-		memset(&plugin_config, 0, sizeof(plugin_config));
-
-		plugin_config.compositor_caps = 0;
-		get_plugin_hw_resource_info(b, &plugin_config.hw_res_config);
-
-		/*Initialize sdm strategy plugin*/
-		b->sdm_plugin = sdm_strategy_plugin->Init(&plugin_config, 0);
-
-		/*Create plugin client*/
-		memset(&client_config, 0, sizeof(client_config));
-		b->sdm_client = sdm_strategy_plugin->CreateClient(&client_config, 0);
-		if (b->sdm_client == NULL) {
-			goto err_sdm_plugin;
-		}
-	}
-#endif
-
 	if (udev_input_init(&b->input,
 			    compositor, b->udev, param->seat_id) < 0) {
 		weston_log("failed to create input devices\n");
-#ifdef SDM_STRATEGY_OPTIMIZATION
-		goto err_sdm_plugin;
-#else
 		goto err_sprite;
-#endif
 	}
 
 	if (create_outputs(b, param->connector, drm_device) < 0) {
@@ -6185,14 +4836,6 @@ err_drm_source:
 	wl_event_source_remove(b->drm_source);
 err_udev_input:
 	udev_input_destroy(&b->input);
-#ifdef SDM_STRATEGY_OPTIMIZATION
-err_sdm_plugin:
-	if (b->use_sdm_strategy) {
-		if (b->sdm_client)
-			sdm_strategy_plugin->DestroyClient(b->sdm_client);
-		sdm_strategy_plugin->Deinit(b->sdm_plugin);
-	}
-#endif
 err_sprite:
 	gbm_device_destroy(b->gbm);
 	destroy_sprites(b);

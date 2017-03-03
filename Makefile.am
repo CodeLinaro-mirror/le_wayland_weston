@@ -39,8 +39,7 @@ tests/weston-ivi.ini : $(srcdir)/ivi-shell/weston.ini.in
 
 all-local : weston.ini ivi-shell/weston.ini
 
-AM_CFLAGS = $(GCC_CFLAGS)			\
-	-DLIBDIR='"$(libdir)"'
+AM_CFLAGS = $(GCC_CFLAGS)
 
 AM_CPPFLAGS = 					\
 	-I$(top_srcdir)/src			\
