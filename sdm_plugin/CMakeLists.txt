@@ -25,7 +25,7 @@ add_library (sdm_strategy_plugin SHARED
 include_directories (${LOCAL_PATH})
 include_directories (${SYSROOTINC_PATH})
 include_directories (${SDM_PUBLIC_HEADER_INC})
-include_directories (${SDM_PROPRIETARY_HEADER_INC})
+include_directories (${SDM_HEADER_INC})
 include_directories (${SCALAR_HEADER_INC})
 
 link_directories(${SYSROOT_LIBDIR})
