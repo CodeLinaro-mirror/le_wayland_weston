@@ -3270,33 +3270,11 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 		{ WESTON_OPTION_BOOLEAN, "use-pixman", 0, &param.use_pixman },
 	};
 
-	// check for ASOC card
-	int tries = 10;
-	FILE *fp = NULL;
-	char refsoundcardInfo[256];
-	char line[256];
-	bool audio_codec_present = false;
 	param.seat_id = default_seat;
+
 	parse_options(drm_options, ARRAY_LENGTH(drm_options), argc, argv);
+
 	param.connector = 31;
-
-	snprintf(refsoundcardInfo, sizeof(refsoundcardInfo), "soc:qcom,msm_ext_disp:qcom,msm-");
-
-	while (--tries) {
-		fp = fopen("/sys/kernel/debug/asoc/codecs", "r");
-
-		if (fp != NULL) {
-			while (fgets(line, sizeof(line), fp)) {
-				if (strncmp(line, refsoundcardInfo, strlen(refsoundcardInfo)) == 0) {
-					audio_codec_present = 1;
-					fclose(fp);
-					break;
-				}
-			}
-		}
-		sleep(1);
-	}
-
 	b = drm_backend_create(compositor, &param, argc, argv, config);
 	if (b == NULL)
 		return -1;
