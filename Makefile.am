@@ -441,7 +441,8 @@ demo_clients =					\
 	weston-fullscreen			\
 	weston-stacking				\
 	weston-calibrator			\
-	weston-scaler
+	weston-scaler				\
+	weston-pll
 
 if INSTALL_DEMO_CLIENTS
 bin_PROGRAMS += $(demo_clients)
@@ -604,6 +605,13 @@ weston_scaler_SOURCES = clients/scaler.c
 weston_scaler_LDADD = libtoytoolkit.la
 weston_scaler_CFLAGS = $(AM_CFLAGS) $(CLIENT_CFLAGS)
 
+weston_pll_SOURCES = clients/pll.c
+nodist_weston_pll_SOURCES =			\
+	protocol/pll-protocol.c				\
+	protocol/pll-client-protocol.h
+weston_pll_LDADD = $(CLIENT_LIBS)
+weston_pll_CFLAGS = $(AM_CFLAGS) $(CLIENT_CFLAGS)
+
 if HAVE_CAIRO_GLESV2
 demo_clients += weston-nested weston-nested-client
 
@@ -757,7 +765,9 @@ BUILT_SOURCES +=					\
 	protocol/ivi-hmi-controller-protocol.c		\
 	protocol/ivi-hmi-controller-client-protocol.h	\
 	protocol/ivi-application-protocol.c		\
-	protocol/ivi-application-client-protocol.h
+	protocol/ivi-application-client-protocol.h	\
+	protocol/pll-client-protocol.h			\
+	protocol/pll-protocol.c
 
 westondatadir = $(datadir)/weston
 dist_westondata_DATA =				\
