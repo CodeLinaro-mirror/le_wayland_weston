@@ -3274,7 +3274,7 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 
 	parse_options(drm_options, ARRAY_LENGTH(drm_options), argc, argv);
 
-	param.connector = 31;
+	param.connector = 32;
 	b = drm_backend_create(compositor, &param, argc, argv, config);
 	if (b == NULL)
 		return -1;
