@@ -27,8 +27,11 @@ include_directories (${SYSROOTINC_PATH})
 include_directories (${SDM_PUBLIC_HEADER_INC})
 include_directories (${SDM_HEADER_INC})
 include_directories (${SCALAR_HEADER_INC})
+include_directories (${DISPLAY_VERSION_HEADER_INC})
 
 link_directories(${SYSROOT_LIBDIR})
+link_directories(${SCALAR_LIB_DIR})
+link_directories(${SDM_LIB_DIR})
 
 target_link_libraries (sdm_strategy_plugin stdc++)
 target_link_libraries (sdm_strategy_plugin glib-2.0)
