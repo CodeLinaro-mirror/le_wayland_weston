@@ -117,6 +117,8 @@ nodist_weston_SOURCES =					\
 	protocol/presentation_timing-server-protocol.h	\
 	protocol/scaler-protocol.c			\
 	protocol/scaler-server-protocol.h		\
+	protocol/pll-protocol.c			\
+	protocol/pll-server-protocol.h		\
 	protocol/linux-dmabuf-protocol.c		\
 	protocol/linux-dmabuf-server-protocol.h
 
@@ -1338,7 +1340,8 @@ EXTRA_DIST +=					\
 	protocol/scaler.xml			\
 	protocol/ivi-application.xml		\
 	protocol/ivi-hmi-controller.xml		\
-	protocol/linux-dmabuf.xml
+	protocol/linux-dmabuf.xml		\
+	protocol/pll.xml
 
 #
 # manual test modules in tests subdirectory
