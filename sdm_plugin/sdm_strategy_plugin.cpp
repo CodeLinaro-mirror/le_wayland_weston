@@ -29,11 +29,14 @@
 
 
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 #include <fcntl.h>
 #include <errno.h>
+
+#include <linux/msm_mdp.h>
 
 #include "debug.h"
 #include "sdm_strategy_plugin.h"
@@ -42,6 +45,21 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/*
+ * StrategyPluginFormatSupport contains the bit map of supported formats for each hw blocks.
+ * For eg: if Cursor supports MDP_RGBA_8888[bit-13] and MDP_RGB_565[bit-0], then cursor pipe array
+ * contains { 0x01[0-3], 0x00[4-7], 0x00[8-12], 0x01[13-16], 0x00[17-20], 0x00[21-24], 0x00[24-28] }
+ */
+const std::bitset<8> StrategyPluginFormatSupport[PLUGIN_SUBBLOCK_MAX][BITS_TO_BYTES(MDP_IMGTYPE_LIMIT1)] = {
+  { 0xFF, 0xF5, 0x1C, 0x1E, 0x20, 0xFF, 0x01, 0x00, 0xFE, 0x1F },  /* PLUGIN_VIG_PIPE */
+  { 0x33, 0xE0, 0x00, 0x16, 0x00, 0xBF, 0x00, 0x00, 0xFE, 0x07 },  /* PLUGIN_RGB_PIPE */
+  { 0x33, 0xE0, 0x00, 0x16, 0x00, 0xBF, 0x00, 0x00, 0xFE, 0x07 },  /* PLUGIN_DMA_PIPE */
+  { 0x12, 0x60, 0x0C, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x00 },  /* PLUGIN_CURSOR_PIPE */
+  { 0xFF, 0xF5, 0x1C, 0x1E, 0x20, 0xFF, 0x01, 0x00, 0xFE, 0x1F },  /* PLUGIN_ROTATOR_INPUT */
+  { 0xFF, 0xF5, 0x1C, 0x1E, 0x20, 0xFF, 0x01, 0x00, 0xFE, 0x1F },  /* PLUGIN_ROTATOR_OUTPUT */
+  { 0x3F, 0xF4, 0x10, 0x1E, 0x20, 0xFF, 0x01, 0x00, 0xAA, 0x16 },  /* PLUGIN_WB_INTF_OUTPUT */
+};
 
 struct StrategyPlugin global_plugin;
 struct StrategyPlugin *global_plugin_ptr = &global_plugin;
@@ -149,17 +167,115 @@ PluginLogDeinit(void)
 	sdm_plugin_debug_priority = SDM_PLUGIN_DEBUG_LEVEL_VERBOSE;
 }
 
+static sdm::LayerBufferFormat
+MDPFormatToSDMFormat(int mdp_format)
+{
+	switch (mdp_format) {
+	case MDP_ARGB_8888:              return sdm::kFormatARGB8888;
+	case MDP_RGBA_8888:              return sdm::kFormatRGBA8888;
+	case MDP_BGRA_8888:              return sdm::kFormatBGRA8888;
+	case MDP_XRGB_8888:              return sdm::kFormatXRGB8888;
+	case MDP_RGBX_8888:              return sdm::kFormatRGBX8888;
+	case MDP_BGRX_8888:              return sdm::kFormatBGRX8888;
+	case MDP_RGBA_5551:              return sdm::kFormatRGBA5551;
+	case MDP_RGBA_4444:              return sdm::kFormatRGBA4444;
+	case MDP_RGB_888:                return sdm::kFormatRGB888;
+	case MDP_BGR_888:                return sdm::kFormatBGR888;
+	case MDP_RGB_565:                return sdm::kFormatRGB565;
+	case MDP_BGR_565:                return sdm::kFormatBGR565;
+	case MDP_RGBA_8888_UBWC:         return sdm::kFormatRGBA8888Ubwc;
+	case MDP_RGBX_8888_UBWC:         return sdm::kFormatRGBX8888Ubwc;
+	case MDP_RGB_565_UBWC:           return sdm::kFormatBGR565Ubwc;
+	case MDP_Y_CB_CR_H2V2:           return sdm::kFormatYCbCr420Planar;
+	case MDP_Y_CR_CB_H2V2:           return sdm::kFormatYCrCb420Planar;
+	case MDP_Y_CR_CB_GH2V2:          return sdm::kFormatYCrCb420PlanarStride16;
+	case MDP_Y_CBCR_H2V2:            return sdm::kFormatYCbCr420SemiPlanar;
+	case MDP_Y_CRCB_H2V2:            return sdm::kFormatYCrCb420SemiPlanar;
+	case MDP_Y_CBCR_H2V2_VENUS:      return sdm::kFormatYCbCr420SemiPlanarVenus;
+	case MDP_Y_CBCR_H1V2:            return sdm::kFormatYCbCr422H1V2SemiPlanar;
+	case MDP_Y_CRCB_H1V2:            return sdm::kFormatYCrCb422H1V2SemiPlanar;
+	case MDP_Y_CBCR_H2V1:            return sdm::kFormatYCbCr422H2V1SemiPlanar;
+	case MDP_Y_CRCB_H2V1:            return sdm::kFormatYCrCb422H2V1SemiPlanar;
+	case MDP_Y_CBCR_H2V2_UBWC:       return sdm::kFormatYCbCr420SPVenusUbwc;
+	case MDP_Y_CRCB_H2V2_VENUS:      return sdm::kFormatYCrCb420SemiPlanarVenus;
+	case MDP_YCBYCR_H2V1:            return sdm::kFormatYCbCr422H2V1Packed;
+	case MDP_RGBA_1010102:           return sdm::kFormatRGBA1010102;
+	case MDP_ARGB_2101010:           return sdm::kFormatARGB2101010;
+	case MDP_RGBX_1010102:           return sdm::kFormatRGBX1010102;
+	case MDP_XRGB_2101010:           return sdm::kFormatXRGB2101010;
+	case MDP_BGRA_1010102:           return sdm::kFormatBGRA1010102;
+	case MDP_ABGR_2101010:           return sdm::kFormatABGR2101010;
+	case MDP_BGRX_1010102:           return sdm::kFormatBGRX1010102;
+	case MDP_XBGR_2101010:           return sdm::kFormatXBGR2101010;
+	case MDP_RGBA_1010102_UBWC:      return sdm::kFormatRGBA1010102Ubwc;
+	case MDP_RGBX_1010102_UBWC:      return sdm::kFormatRGBX1010102Ubwc;
+	case MDP_Y_CBCR_H2V2_P010:       return sdm::kFormatYCbCr420P010;
+	case MDP_Y_CBCR_H2V2_TP10_UBWC:  return sdm::kFormatYCbCr420TP10Ubwc;
+	default:                         return sdm::kFormatInvalid;
+	}
+}
+
+static void
+PluginPopulateSupportedFormatMap(const std::bitset<8> *format_supported, uint32_t format_count,
+				sdm::HWSubBlockType sub_blk_type, sdm::HWResourceInfo *res_info)
+{
+	std::vector <sdm::LayerBufferFormat> supported_sdm_formats;
+	for (uint32_t mdp_format = 0; mdp_format < format_count; mdp_format++) {
+		if (format_supported[mdp_format >> 3][mdp_format & 7]) {
+			sdm::LayerBufferFormat sdm_format = MDPFormatToSDMFormat(INT(mdp_format));
+			if (sdm_format != sdm::kFormatInvalid) {
+				supported_sdm_formats.push_back(sdm_format);
+			}
+		}
+	}
+
+	res_info->supported_formats_map.erase(sub_blk_type);
+	res_info->supported_formats_map.insert(make_pair(sub_blk_type, supported_sdm_formats));
+}
+
+static void
+PluginInitSupportedFormatMap(sdm::HWResourceInfo *res_info)
+{
+	res_info->supported_formats_map.clear();
+
+	for (int sub_blk_type = INT(PLUGIN_PIPE_TYPE_VIG); sub_blk_type < INT(PLUGIN_SUBBLOCK_MAX); sub_blk_type++) {
+		PluginPopulateSupportedFormatMap(StrategyPluginFormatSupport[sub_blk_type], MDP_IMGTYPE_LIMIT1,
+				(sdm::HWSubBlockType)sub_blk_type, res_info);
+	}
+}
+
+static void
+PluginInitHwPipe(sdm::HWResourceInfo *res_info, struct PluginPipes *pipes)
+{
+	for (uint32_t index = 0; index < pipes->count; index++) {
+		sdm::HWPipeCaps pipe_caps;
+		struct PluginPipeCaps *plugin_pipe_caps = &pipes->pipe_caps[index];
+
+		pipe_caps.type = (sdm::PipeType)plugin_pipe_caps->type;
+		if (plugin_pipe_caps->type == PLUGIN_PIPE_TYPE_VIG)
+			res_info->num_vig_pipe++;
+		else if (plugin_pipe_caps->type == PLUGIN_PIPE_TYPE_RGB)
+			res_info->num_rgb_pipe++;
+		else if (plugin_pipe_caps->type == PLUGIN_PIPE_TYPE_DMA)
+			res_info->num_dma_pipe++;
+		else if (plugin_pipe_caps->type == PLUGIN_PIPE_TYPE_CURSOR)
+			res_info->num_cursor_pipe++;
+
+		pipe_caps.id = plugin_pipe_caps->id;
+		pipe_caps.max_rects = plugin_pipe_caps->max_rects;
+
+		res_info->hw_pipes.push_back(pipe_caps);
+	}
+}
+
 static int
 GetResource(struct HWResourceConfig *config, sdm::HWResourceInfo &info)
 {
+	PluginInitSupportedFormatMap(&info);
+
 	info.hw_version = 1;
 	info.hw_revision = 0;
-	info.num_dma_pipe = config->num_dma_pipe;
-	info.num_vig_pipe = config->num_vig_pipe;
-	info.num_rgb_pipe = config->num_rgb_pipe;
-	info.num_cursor_pipe = config->num_cursor_pipe;
 	info.num_blending_stages = config->num_blending_stages;
-	info.num_rotator = config->num_rotator;
 	info.num_control = config->num_control;
 	info.num_mixer_to_disp = config->num_mixer_to_disp;
 	info.smp_total = 0;
@@ -180,15 +296,36 @@ GetResource(struct HWResourceConfig *config, sdm::HWResourceInfo &info)
 	info.linear_factor = config->linear_factor;
 	info.scale_factor = config->scale_factor;
 	info.extra_fudge_factor = config->extra_fudge_factor;
+	info.amortizable_threshold = config->amortizable_threshold;
+	info.system_overhead_lines = config->system_overhead_lines;
 	info.has_bwc = false;
 	info.has_ubwc = config->has_ubwc;
 	info.has_decimation = config->has_decimation;
 	info.has_macrotile = false; /* set according to user scenarios */
-	info.has_rotator_downscale = config->has_rotator_downscale;
 	info.has_non_scalar_rgb = config->has_non_scalar_rgb;
 	info.is_src_split = config->is_src_split;
 	info.perf_calc = config->perf_calc;
 	info.has_dyn_bw_support = config->has_dyn_bw_support;
+	info.separate_rotator = config->separate_rotator;
+	info.has_qseed3 = config->has_qseed3;
+	info.has_concurrent_writeback = config->has_concurrent_writeback;
+	info.has_avr = config->has_avr;
+
+	/* HW Rotator info. Now don't support it */
+	info.hw_rot_info.type = config->hw_rot_info.type;
+	info.hw_rot_info.num_rotator = config->hw_rot_info.num_rotator;
+	info.hw_rot_info.has_downscale = config->hw_rot_info.has_downscale;
+	info.hw_rot_info.device_path = "";
+
+	/* HW scalar info*/
+	info.hw_dest_scalar_info.count = config->hw_dest_scalar_info.count;
+	info.hw_dest_scalar_info.max_input_width = config->hw_dest_scalar_info.max_input_width;
+	info.hw_dest_scalar_info.max_output_width = config->hw_dest_scalar_info.max_output_width;
+	info.hw_dest_scalar_info.max_scale_up = config->hw_dest_scalar_info.max_scale_up;
+
+	/* HW pipe initialization */
+	PluginInitHwPipe(&info, &config->hw_pipes);
+
 	info.dyn_bw_info.cur_mode = config->dyn_bw_info.cur_mode;
 	for (int i = 0; i < PLUGIN_BW_MODE_MAX; i++) {
 		info.dyn_bw_info.total_bw_limit[i] = config->dyn_bw_info.total_bw_limit[i];
@@ -199,28 +336,28 @@ GetResource(struct HWResourceConfig *config, sdm::HWResourceInfo &info)
 }
 
 static int
-GetDisplayAttribs(struct DisplayAttributes *src, sdm::HWDisplayAttributes &attribs)
+GetDisplayAttribs(struct PluginDisplayAttributes *src, sdm::HWDisplayAttributes &attribs)
 {
 	attribs.is_device_split = src->is_device_split;
-	attribs.split_left = src->split_left;
 	attribs.v_front_porch = src->v_front_porch;
 	attribs.v_back_porch = src->v_back_porch;
 	attribs.v_pulse_width = src->v_pulse_width;
 	attribs.h_total = src->h_total;
-	attribs.x_pixels = src->x_pixels;
-	attribs.y_pixels = src->y_pixels;
-	attribs.x_dpi = src->x_dpi;
-	attribs.y_dpi = src->y_dpi;
-	attribs.fps = src->fps;
-	attribs.vsync_period_ns = src->vsync_period_ns;
+	attribs.x_pixels = src->config_variable_info.x_pixels;
+	attribs.y_pixels = src->config_variable_info.y_pixels;
+	attribs.x_dpi = src->config_variable_info.x_dpi;
+	attribs.y_dpi = src->config_variable_info.y_dpi;
+	attribs.fps = src->config_variable_info.fps;
+	attribs.vsync_period_ns = src->config_variable_info.vsync_period_ns;
+	attribs.is_yuv = src->config_variable_info.is_yuv;
 
 	return PLUGIN_ERROR_NONE;
 }
 
 static int
-GetPanelInfo(struct PanelInfo *src, sdm::HWPanelInfo &panel)
+GetPanelInfo(struct PluginPanelInfo *src, sdm::HWPanelInfo &panel)
 {
-	panel.port = (sdm::HWDisplayPort)src->port;
+	panel.port = (sdm::DisplayPort)src->port;
 	panel.mode = (sdm::HWDisplayMode)src->mode;
 	panel.partial_update = src->partial_update;
 	panel.left_align = src->left_align;
@@ -244,6 +381,24 @@ GetPanelInfo(struct PanelInfo *src, sdm::HWPanelInfo &panel)
 	return PLUGIN_ERROR_NONE;
 }
 
+static void
+GetMixerAttributes(sdm::HWDisplayAttributes *disp_attribs, sdm::HWPanelInfo *panel,
+			sdm::HWMixerAttributes &mixer_attributes)
+{
+	mixer_attributes.width = disp_attribs->x_pixels;
+	mixer_attributes.height = disp_attribs->y_pixels;
+	mixer_attributes.split_left = disp_attribs->is_device_split ?
+		panel->split_info.left_split : mixer_attributes.width;
+}
+
+static void
+GetFBConfig(sdm::HWDisplayAttributes *disp_attribs, sdm::HWMixerAttributes *mixer_attributes, sdm::DisplayConfigVariableInfo &fb_config)
+{
+	fb_config = *disp_attribs;
+	/* Override x_pixels and y_pixels of frame buffer with mixer width and height */
+	fb_config.x_pixels = mixer_attributes->width;
+	fb_config.y_pixels = mixer_attributes->height;
+}
 
 plugin_handle_t
 SDMPluginInit(struct StrategyPluginConfig *config, uint32_t flags)
@@ -399,14 +554,15 @@ error_validation:
 
 static int
 CreateStrategyMgr(struct StrategyContext *ctx, sdm::DisplayType type, sdm::HWResourceInfo &hw_res_info,
-		sdm::HWDisplayAttributes &attribs, sdm::HWPanelInfo &panel)
+		sdm::HWDisplayAttributes &attribs, sdm::HWPanelInfo &panel, const sdm::HWMixerAttributes &mixer_attributes,
+		const sdm::DisplayConfigVariableInfo &fb_config)
 {
 	sdm::StrategyImpl *strategy_impl = NULL;
 	sdm::PartialUpdateImpl *partial_update_impl = NULL;
 	sdm::DisplayError error = sdm::kErrorNone;
-
-	/*Strategy initialization*/
-	strategy_impl = new sdm::StrategyImpl(type, panel.mode);
+	
+	/* Strategy initialization */
+	strategy_impl = new sdm::StrategyImpl(type, panel.mode, panel.s3d_mode, mixer_attributes, fb_config);
 	if (strategy_impl == NULL) {
 		SDM_PLUGIN_LOGE("fail to create StrategyImpl\n");
 		return PLUGIN_ERROR_MEMORY;
@@ -422,6 +578,8 @@ CreateStrategyMgr(struct StrategyContext *ctx, sdm::DisplayType type, sdm::HWRes
 	sdm::PartialUpdateImpl::Create(type,
 					hw_res_info,
 					panel,
+					mixer_attributes,
+					attribs,
 					&partial_update_impl);
 	if (partial_update_impl == NULL) {
 		SDM_PLUGIN_LOGI("No partial update.\n");
@@ -449,7 +607,7 @@ DestroyStrategyMgr(struct StrategyContext *strategy_ctx)
 }
 
 display_handle_t
-SDMPluginCreateDisplay(client_handle_t handle, DisplayParameter *para, uint32_t flags)
+SDMPluginCreateDisplay(client_handle_t handle, PluginDisplayParameter *para, uint32_t flags)
 {
 	struct StrategyClient *client = static_cast<struct StrategyClient *>(handle);
 	struct Display *display = NULL;
@@ -509,12 +667,20 @@ SDMPluginCreateDisplay(client_handle_t handle, DisplayParameter *para, uint32_t 
 		goto error_display;
 	}
 
+	/* Get mixer attributes */
+	GetMixerAttributes(&display->attribs, &display->panel, display->mixer_attributes);
+
+	/* Get fb config */
+	GetFBConfig(&display->attribs, &display->mixer_attributes, display->fb_config);
+
 	/* Create strategy manager */
 	strategy_ctx = &display->ctx.strategy_ctx;
 	error = CreateStrategyMgr(strategy_ctx, (sdm::DisplayType)type,
 				global_plugin_ptr->hw_res_info,
 				display->attribs,
-				display->panel);
+				display->panel,
+				display->mixer_attributes,
+				display->fb_config);
 	if (error != PLUGIN_ERROR_NONE) {
 		goto error_strategy_mgr;
 	}
@@ -523,6 +689,7 @@ SDMPluginCreateDisplay(client_handle_t handle, DisplayParameter *para, uint32_t 
 	error = global_plugin_ptr->res_impl->RegisterDisplay((sdm::DisplayType)type,
 						display->attribs,
 						display->panel,
+						display->mixer_attributes,
 						&disp_res_ctx);
 	if (error != sdm::kErrorNone) {
 		SDM_PLUGIN_LOGE("fail to register display\n");
@@ -541,6 +708,7 @@ SDMPluginCreateDisplay(client_handle_t handle, DisplayParameter *para, uint32_t 
 	display->ctx.fallback = false;
 	display->ctx.max_layers = para->max_layers;
 	display->ctx.partial_update_enable = false;/* different from default value since it's not support now */
+	display->layer_stack = sdm::LayerStack();
 
 	client->displays[type] = display;
 	global_plugin_ptr->displays_mask |= disp_mask;
@@ -678,113 +846,41 @@ SDMPluginDestroyClient(client_handle_t handle)
 	return PLUGIN_ERROR_NONE;
 }
 
-static void
-AssignLayerRegionsAddress(sdm::LayerRectArray *region,
-				uint32_t rect_count,
-				uint8_t **base_address)
-{
-	if (rect_count) {
-		region->rect = reinterpret_cast<sdm::LayerRect *>(*base_address);
-		for (uint32_t i = 0; i < rect_count; i++) {
-			region->rect[i] = sdm::LayerRect();
-		}
-		*base_address += rect_count * sizeof(sdm::LayerRect);
-	}
-	region->count = rect_count;
-}
-
 static int
-AllocLayerStackMemory(struct Display *d, struct LayersConfig *configs)
+AllocLayerStackMemory(struct Display *d, struct PluginLayersConfig *configs)
 {
-	size_t request_size = 0;
 	uint32_t i, total_layers;
+	sdm::LayerStack *layer_stack = &d->layer_stack;
+
 
 	if (configs->count == 0 || configs->layers == NULL) {
 		SDM_PLUGIN_LOGE("no layer config?!\n");
 		return PLUGIN_ERROR_PARAMETER;
 	}
 
-	/* Assuming FB target is involved in the configs. TODO: Add blit target layers */
+	/* Free old layer stack */
+	for (sdm::Layer *layer : layer_stack->layers) {
+		layer->visible_regions.clear();
+		layer->dirty_regions.clear();
+		delete layer->input_buffer;
+		delete layer;
+	}
+	*layer_stack = {};
+
+	/* Assuming FB target is involved in the configs */
 	total_layers = configs->count;
-	request_size = total_layers * (sizeof(sdm::Layer) + sizeof(sdm::LayerBuffer));
-
-	/* calculate total buffer size */
 	for (i = 0; i < total_layers; i++) {
-		uint32_t num_visible_rects = 0;
-		uint32_t num_dirty_rects = 0;
-
-		if (i < configs->count) {
-			struct LayerGeometry *layer_geometry = &configs->layers[i];
-			if (layer_geometry == NULL) {
-				SDM_PLUGIN_LOGE("no layer geometry for display %p!\n", d);
-				return PLUGIN_ERROR_PARAMETER;
-			}
-
-			/* It's permissive the visible/dirty region can be NULL */
-			num_visible_rects = layer_geometry->visible_regions.count;
-			num_dirty_rects = layer_geometry->dirty_regions.count;
-		}
-		uint32_t num_rects = num_visible_rects + num_dirty_rects;
-		request_size += num_rects * sizeof(sdm::LayerRect);
-	}
-
-	/* This should not happen! */
-	if (request_size == 0) {
-		SDM_PLUGIN_LOGE("wrong reqeust buffer size!\n");
-		return PLUGIN_ERROR_PARAMETER;
-	}
-
-	if (request_size < MIN_ALLOC_MEMORY_SIZE)
-		request_size = MIN_ALLOC_MEMORY_SIZE;
-
-	/* allocate buffer */
-	if (d->raw_buf_size < request_size) {
-		delete[] d->raw_buf;
-		d->raw_buf = new uint8_t[request_size];
-		if (d->raw_buf == NULL) {
-			SDM_PLUGIN_LOGE("fail to allocate layer stack memory for display%d, size=%d\n", i, (unsigned int)request_size);
-			return PLUGIN_ERROR_MEMORY;
-		}
-		d->raw_buf_size = request_size;
-	}
-
-	/* assign memory for layer stack */
-	uint8_t *current_address = d->raw_buf;
-	d->layer_stack = sdm::LayerStack();
-	sdm::LayerStack *layer_stack = &d->layer_stack;
-	layer_stack->layers = reinterpret_cast<sdm::Layer *>(current_address);
-	/* TODO: add blit target */
-	layer_stack->layer_count = total_layers;
-	current_address += total_layers * sizeof(sdm::Layer);
-
-	for (i = 0; i < total_layers; i++) {
-		uint32_t num_visible_rects = 0;
-		uint32_t num_dirty_rects = 0;
-
-		if (i < configs->count) {
-			struct LayerGeometry *layer_geometry = &configs->layers[i];
-			num_visible_rects = layer_geometry->visible_regions.count;
-			num_dirty_rects = layer_geometry->dirty_regions.count;
-		}
-
-		sdm::Layer &layer = layer_stack->layers[i];
-		layer = sdm::Layer();
-
-		/* Layer buffer handle address */
-		layer.input_buffer = reinterpret_cast<sdm::LayerBuffer *>(current_address);
-		*layer.input_buffer = sdm::LayerBuffer();
-		current_address += sizeof(sdm::LayerBuffer);
-
-		/* Visible/Dirty rectangle address. TODO: Add blit region */
-		AssignLayerRegionsAddress(&layer.visible_regions, num_visible_rects, &current_address);
-		AssignLayerRegionsAddress(&layer.dirty_regions, num_dirty_rects, &current_address);
+		sdm::Layer *layer = new sdm::Layer();
+		sdm::LayerBuffer *layer_buffer = new sdm::LayerBuffer();
+		layer->input_buffer = layer_buffer;
+		layer_stack->layers.push_back(layer);
 	}
 
 	return PLUGIN_ERROR_NONE;
 }
 
 static sdm::LayerBufferFormat
-GetSDMFormat(uint32_t src_fmt, struct LayerFlags flags)
+PluginFormatToSDMFormat(uint32_t src_fmt, struct LayerFlags flags)
 {
 	sdm::LayerBufferFormat format = sdm::kFormatInvalid;
 
@@ -875,10 +971,13 @@ SetRect(sdm::LayerRect *dst, struct Rect *src)
 }
 
 static void
-SetRectArray(sdm::LayerRectArray *dst, struct RectArray *src)
+SetRectArray(std::vector<sdm::LayerRect> &dst, struct RectArray *src)
 {
-	for (uint32_t i = 0; i < src->count; i++)
-		SetRect(&dst->rect[i], &src->rects[i]);
+	for (uint32_t i = 0; i < src->count; i++) {
+		sdm::LayerRect visible_rect = {};
+		SetRect(&visible_rect, &src->rects[i]);
+		dst.push_back(visible_rect);
+	}
 }
 
 static sdm::LayerBlending
@@ -900,7 +999,7 @@ GetSDMBlending(uint32_t source)
 }
 
 static int
-ConfigLayerStack(struct Display *d, struct LayersConfig *configs)
+ConfigLayerStack(struct Display *d, struct PluginLayersConfig *configs)
 {
 	int error = PLUGIN_ERROR_NONE;
 	uint32_t i;
@@ -908,62 +1007,59 @@ ConfigLayerStack(struct Display *d, struct LayersConfig *configs)
 	sdm::LayerStack *layer_stack = d->hw_layers.info.stack;
 
 	for (i = 0; i < configs->count; i++) {
-		sdm::Layer &layer = layer_stack->layers[i];
-		struct LayerGeometry *layer_geometry = &configs->layers[i];
-		sdm::LayerBuffer *layer_buffer = layer.input_buffer;
+		sdm::Layer *layer = layer_stack->layers.at(i);
+		struct PluginLayerGeometry *layer_geometry = &configs->layers[i];
+		sdm::LayerBuffer *layer_buffer = layer->input_buffer;
 
 		/* 1. Fill buffer information */
 		*layer_buffer = sdm::LayerBuffer();
-		layer_buffer->format = GetSDMFormat(layer_geometry->format, layer_geometry->flags);
+		layer_buffer->format = PluginFormatToSDMFormat(layer_geometry->format, layer_geometry->flags);
 		layer_buffer->width = layer_geometry->width;
 		layer_buffer->height = layer_geometry->height;
+		/* Reset buffer flags */
+		layer_buffer->flags.flags = 0;
 		/* TODO: Below information should be set according to the real user scenario */
 		layer_buffer->flags.secure = false;
 		layer_buffer->flags.video = false;
 		layer_buffer->flags.macro_tile = false;
 		layer_buffer->flags.interlace = false;
 		layer_buffer->flags.secure_display = false;
-		layer_buffer->flags.flags = 0;
 
 		/* 2. Fill layer information */
 		if (layer_geometry->composition == PLUGIN_COMPOSITION_FB_TARGET)
-			layer.composition = sdm::kCompositionGPUTarget;
+			layer->composition = sdm::kCompositionGPUTarget;
 		else
-			layer.composition = sdm::kCompositionGPU;
+			layer->composition = sdm::kCompositionGPU;
 
-		SetRect(&layer.src_rect, &layer_geometry->src_rect);
-		SetRect(&layer.dst_rect, &layer_geometry->dst_rect);
-		SetRectArray(&layer.visible_regions, &layer_geometry->visible_regions);
-		SetRectArray(&layer.dirty_regions, &layer_geometry->dirty_regions);
-		/* TODO: Blit regions */
-		layer.dirty_regions = sdm::LayerRectArray();
+		SetRect(&layer->src_rect, &layer_geometry->src_rect);
+		SetRect(&layer->dst_rect, &layer_geometry->dst_rect);
+		SetRectArray(layer->visible_regions, &layer_geometry->visible_regions);
+		SetRectArray(layer->dirty_regions, &layer_geometry->dirty_regions);
 
-		layer.blending = GetSDMBlending(layer_geometry->blending);
-		layer.plane_alpha = layer_geometry->plane_alpha;
-		layer.transform.flip_horizontal = ((layer_geometry->transform & PLUGIN_TRANSFORM_FLIP_H) > 0);
-		layer.transform.flip_vertical = ((layer_geometry->transform & PLUGIN_TRANSFORM_FLIP_V) > 0);
-		layer.transform.rotation = ((layer_geometry->transform & PLUGIN_TRANSFORM_90) ? 90.0f : 0.0f);
+		layer->blending = GetSDMBlending(layer_geometry->blending);
+		layer->plane_alpha = layer_geometry->plane_alpha;
+		layer->transform.flip_horizontal = ((layer_geometry->transform & PLUGIN_TRANSFORM_FLIP_H) > 0);
+		layer->transform.flip_vertical = ((layer_geometry->transform & PLUGIN_TRANSFORM_FLIP_V) > 0);
+		layer->transform.rotation = ((layer_geometry->transform & PLUGIN_TRANSFORM_90) ? 90.0f : 0.0f);
 
-		layer.frame_rate = d->attribs.fps;
-		layer.csc = sdm::kCSCLimitedRange601;
-		layer.igc = sdm::kIGCNotSpecified;
-		layer.solid_fill_color = 0;
+		layer->frame_rate = d->attribs.fps;
+		layer->solid_fill_color = 0;
 
-		/* Reset flags */
-		layer.flags.flags = 0;
+		/* Reset layer flags */
+		layer->flags.flags = 0;
 
-		layer.flags.skip = layer_geometry->flags.skip;
-		layer.flags.cursor = layer_geometry->flags.is_cursor;
+		layer->flags.skip = layer_geometry->flags.skip;
+		layer->flags.cursor = layer_geometry->flags.is_cursor;
 
-		if (!has_skip_layer && layer.flags.skip) {
+		if (!has_skip_layer && layer->flags.skip) {
 			has_skip_layer = true;
 		}
-		if (!has_cursor_layer && layer.flags.cursor) {
+		if (!has_cursor_layer && layer->flags.cursor) {
 			has_cursor_layer = true;
 		}
-		layer.flags.updating = true;
-		layer.flags.solid_fill = false;
-		layer.flags.single_buffer = false;
+		layer->flags.updating = true;
+		layer->flags.solid_fill = false;
+		layer->flags.single_buffer = false;
 	}
 
 	/* Reset flags */
@@ -982,6 +1078,8 @@ ConfigLayerStack(struct Display *d, struct LayersConfig *configs)
 	layer_stack->flags.animating = false;
 	layer_stack->flags.attributes_changed = false;
 	layer_stack->flags.single_buffered_layer_present = false;
+	layer_stack->flags.s3d_mode_present = false;
+	layer_stack->flags.post_processed_output = false;
 
 	return error;
 }
@@ -993,17 +1091,19 @@ StrategyMgrPrepare(struct Display *d, bool partial_update_enable)
 	sdm::PartialUpdateImpl *partial_update_impl = strategy_ctx->partial_update_impl;
 	sdm::HWLayersInfo *hw_layers_info = &d->hw_layers.info;
 	sdm::LayerStack *layer_stack = hw_layers_info->stack;
-	uint32_t i = 0, fb_layer_index;
+	uint32_t i = 0, fb_layer_index, layer_count = 0;
 	bool split_display = false;
 
-	for (; i < layer_stack->layer_count; i++) {
-		if (layer_stack->layers[i].composition == sdm::kCompositionGPUTarget) {
+	layer_count = layer_stack->layers.size();
+	for (; i < layer_count; i++) {
+		sdm::Layer *layer = layer_stack->layers.at(i);
+		if (layer->composition == sdm::kCompositionGPUTarget) {
 			fb_layer_index = i;
 			break;
 		}
 	}
 
-	if (i == layer_stack->layer_count) {
+	if (i == layer_count) {
 		SDM_PLUGIN_LOGE("no FB target!\n");
 		return PLUGIN_ERROR_UNDEFINED;
 	}
@@ -1015,7 +1115,8 @@ StrategyMgrPrepare(struct Display *d, bool partial_update_enable)
 	/* Generate ROI */
 	if(partial_update_impl == NULL ||
 		(partial_update_impl->GenerateROI(hw_layers_info) != sdm::kErrorNone)) {
-		sdm::LayerRect &dst_rect = layer_stack->layers[fb_layer_index].dst_rect;
+		sdm::Layer *layer = layer_stack->layers.at(fb_layer_index);
+		sdm::LayerRect &dst_rect = layer->dst_rect;
 		/* The destination co-ordinates of the FB layer map to the panel and may be different than source */
 		float fb_x_res = dst_rect.right - dst_rect.left;
 		float fb_y_res = dst_rect.bottom - dst_rect.top;
@@ -1085,26 +1186,27 @@ SupportLayerAsCursor(sdm::Handle disp_res_ctx,
 	sdm::ResourceImpl *res_impl = global_plugin_ptr->res_impl;
 	sdm::LayerStack *layer_stack = hw_layers->info.stack;
 	bool supported = false;
-	uint32_t i;
+	uint32_t i, layer_count = 0;
 
 	if (!layer_stack->flags.cursor_present) {
 		return supported;
 	}
 
+	layer_count = layer_stack->layers.size();
 	/*
 	 * SDM logic is checking gpu_index - 1, why we need to do this?
 	 * Just check if is_cursor is set to true.
 	 */
-	for (i = 0; i < layer_stack->layer_count; i++) {
-		sdm::Layer &layer = layer_stack->layers[i];
-		if (layer.flags.cursor) {
+	for (i = 0; i < layer_count; i++) {
+		sdm::Layer *layer = layer_stack->layers.at(i);
+		if (layer->flags.cursor) {
 			break;
 		}
 	}
-	if (i == layer_stack->layer_count) {
+	if (i == layer_count) {
 		return supported;
 	}
-	sdm::Layer &cursor_layer = layer_stack->layers[i];
+	sdm::Layer *cursor_layer = layer_stack->layers.at(i);
 	if (res_impl->ValidateCursorConfig(disp_res_ctx,
 					cursor_layer, true) == sdm::kErrorNone) {
 		supported = true;
@@ -1128,7 +1230,7 @@ InitStrategyConstrains(struct DisplayContext *ctx,
 	 * Avoid idle fallback, if there is only one app layer.
 	 * TODO(user): App layer count will change for hybrid composition
 	 */
-	uint32_t app_layer_count = hw_layers->info.stack->layer_count - 1;
+	uint32_t app_layer_count = hw_layers->info.stack->layers.size() - 1;
 	if ((app_layer_count > 1 && ctx->idle_fallback) || ctx->fallback) {
 		/* Handle the idle timeout by falling back */
 		constraints->safe_mode = true;
@@ -1166,8 +1268,9 @@ GetNextStrategy(struct StrategyContext *ctx,
 	 * Mark all application layers for GPU composition. Find GPU target buffer and store its index for
 	 * programming the hardware
 	 */
-	for (i = 0; i < layer_stack->layer_count; i++) {
-		sdm::LayerComposition &composition = layer_stack->layers[i].composition;
+	for (i = 0; i < layer_stack->layers.size(); i++) {
+		sdm::Layer *layer = layer_stack->layers.at(i);
+		sdm::LayerComposition &composition = layer->composition;
 		if (composition == sdm::kCompositionGPUTarget) {
 			info->index[hw_layers_count++] = i;
 		} else if (composition != sdm::kCompositionBlitTarget) {
@@ -1294,22 +1397,22 @@ GetSDMLayerConfig(struct sdmLayerConfig *out_config, sdm::HWLayerConfig *hw_laye
 }
 
 static void
-UpdateLayerConfig(sdm::HWLayers *hw_layers, struct LayersConfig *config)
+UpdateLayerConfig(sdm::HWLayers *hw_layers, struct PluginLayersConfig *config)
 {
 	sdm::HWLayersInfo *info = &hw_layers->info;
 
 	for (uint32_t i = 0; i < config->count; i++) {
 		sdm::LayerStack *stack = info->stack;
-		sdm::Layer &layer = stack->layers[i];
+		sdm::Layer *layer = stack->layers.at(i);
 
-		config->layers[i].composition = GetComposition(layer.composition);
+		config->layers[i].composition = GetComposition(layer->composition);
 
 		GetSDMLayerConfig(&config->sdm_layer_configs[i], &hw_layers->config[i]);
 	}
 }
 
 int
-SDMPluginPrepare(client_handle_t handle, display_handle_t displays[], int count, struct LayersConfig **configs, uint32_t flags)
+SDMPluginPrepare(client_handle_t handle, display_handle_t displays[], int count, struct PluginLayersConfig **configs, uint32_t flags)
 {
 	struct StrategyClient *client = static_cast<struct StrategyClient *>(handle);
 	int error = PLUGIN_ERROR_NONE;
@@ -1347,7 +1450,6 @@ SDMPluginPrepare(client_handle_t handle, display_handle_t displays[], int count,
 			continue;
 		}
 
-		/* 1. calculate and allocation buffer for layer stack. This will update d->layer_stack */
 		error = AllocLayerStackMemory(d, configs[i]);
 		if (error) {
 			SDM_PLUGIN_LOGE("alloc layer stack fail for display%d!\n", i);
@@ -1358,20 +1460,19 @@ SDMPluginPrepare(client_handle_t handle, display_handle_t displays[], int count,
 		d->hw_layers.info.stack = &d->layer_stack;
 		d->hw_layers.output_compression = 1.0f;
 
-		/* 2. configurate layer stack */
 		error = ConfigLayerStack(d, configs[i]);
 		if (error) {
 			SDM_PLUGIN_LOGE("config layer stack fail for display%d\n", i);
 			continue;
 		}
 
-		/* 3. do strategy filter */
+		/* do strategy filter */
 		error = DoPrepare(d, false);
 		if (error) {
 			SDM_PLUGIN_LOGE("fail to filter strategy for display%d\n", i);
 			continue;
 		}
-		/* 4. Update composition for configs */
+		/* Update composition for configs */
 		UpdateLayerConfig(&d->hw_layers, configs[i]);
 	}
 
@@ -1537,7 +1638,7 @@ FlushDisplayProperty(struct Display *display, struct DisplayProperty *prop, uint
 	}
 
 	if (masks & PLUGIN_UPDATE_THERMAL_LEVEL_MASK) {
-		if (prop->thermal_level >= MAX_THERMAL_LEVEL)
+		if (prop->thermal_level >= PLUGIN_MAX_THERMAL_LEVEL)
 			ctx->fallback = true;
 		else
 			ctx->fallback = false;
@@ -1564,13 +1665,19 @@ FlushDisplayProperty(struct Display *display, struct DisplayProperty *prop, uint
 		struct StrategyContext *strategy_ctx = &display->ctx.strategy_ctx;
 		uint32_t error = PLUGIN_ERROR_NONE;
 
-		res_impl->ReconfigureDisplay(disp_res_ctx, display->attribs, display->panel);
+		res_impl->ReconfigureDisplay(disp_res_ctx, display->attribs, display->panel, display->mixer_attributes);
 
 		DestroyStrategyMgr(strategy_ctx);
+
+		/* Update fb config */
+		GetFBConfig(&display->attribs, &display->mixer_attributes, display->fb_config);
+
 		error = CreateStrategyMgr(strategy_ctx, display->ctx.type,
 				global_plugin_ptr->hw_res_info,
 				display->attribs,
-				display->panel);
+				display->panel,
+				display->mixer_attributes,
+				display->fb_config);
 		if (error != PLUGIN_ERROR_NONE) {
 			SDM_PLUGIN_LOGE("fail to create strategy manager\n");
 			return error;
