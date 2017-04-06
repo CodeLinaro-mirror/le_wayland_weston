@@ -1178,8 +1178,8 @@ drm_fb_get_from_bo(struct gbm_bo *bo,
 	if (format && !backend->no_addfb2) {
 		handles[0] = fb->handle;
 		pitches[0] = fb->stride;
-		offsets[0] = gbm_bo_get_offset(bo);
-
+		/*todo: should call gbm_bo_get_offset(bo), but gbm don't support yet.*/
+		offsets[0] = 0;
 		/* Need to plug in with bufdef utility once it's ready */
 		switch (format) {
 		case GBM_FORMAT_NV12:
