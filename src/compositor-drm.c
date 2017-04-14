@@ -2830,11 +2830,14 @@ is_sdm_support_buffer(struct weston_buffer *buffer)
 static bool
 is_sdm_support_view(struct weston_view *view, struct drm_output *output, pixman_region32_t *overlap, bool is_cursor)
 {
+	return false;
+
 	/* rotation is not supported yet */
-	return (view->output_mask == (1u << output->base.id) &&
+	/* return (view->output_mask == (1u << output->base.id) &&
 		view->surface->buffer_viewport.buffer.transform == output->base.transform &&
 			!pixman_region32_not_empty(overlap) &&
 			(is_cursor || is_sdm_support_buffer(view->surface->buffer_ref.buffer)));
+	 */
 }
 
 static bool
