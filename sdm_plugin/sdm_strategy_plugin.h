@@ -45,8 +45,8 @@
 #include "sdm_strategy_plugin_interface.h"
 
 /* Below definition should be compatible with SDM */
-#define MIN_ALLOC_MEMORY_SIZE   1024
-#define MAX_THERMAL_LEVEL	3
+#define PLUGIN_MIN_ALLOC_MEMORY_SIZE	1024
+#define PLUGIN_MAX_THERMAL_LEVEL	3
 
 /*
  * Context per display. Mainly used for communicating with SDM strategy manager
@@ -93,12 +93,10 @@ struct Display {
 	 */
 	sdm::HWDisplayAttributes attribs;
 	sdm::HWPanelInfo panel;
+	sdm::HWMixerAttributes mixer_attributes;
+	sdm::DisplayConfigVariableInfo fb_config;
 	sdm::HWLayers hw_layers;
 	sdm::LayerStack layer_stack;
-
-	/* Cache buffer for layer stack allocation */
-	uint8_t *raw_buf;
-	uint32_t raw_buf_size;
 };
 
 /*
@@ -125,9 +123,9 @@ struct DisplayProperty {
 	 * It will be cleared to 0 if all cached properties are flushed to SDM
 	 */
 	uint32_t dirty_bits;
-	struct DisplayAttributes attribs;
-	struct PanelInfo panel;
-	struct LayersConfig layer_configs;
+	struct PluginDisplayAttributes attribs;
+	struct PluginPanelInfo panel;
+	struct PluginLayersConfig layer_configs;
 	uint32_t thermal_level;
 	uint32_t max_mixer_stages;
 	bool partial_update_enable;

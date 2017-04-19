@@ -32,6 +32,7 @@
 #define __SDM_STRATEGY_PLUGIN_INTERFACE_H__
 
 #define MAX_SDE_Layers          16
+#define MAX_HW_PIPES            12
 #define MAX_PIPE_WIDTH          2560
 #define MAX_MIXER_WIDTH         2560
 
@@ -76,6 +77,62 @@ enum {
 	PLUGIN_BUFFER_FORMAT_INVALID = 0xFFFFFFFF,
 };
 
+/* HW pipe type */
+enum PluginPipeType {
+	PLUGIN_PIPE_TYPE_UNUSED = 0,
+	PLUGIN_PIPE_TYPE_VIG,
+	PLUGIN_PIPE_TYPE_RGB,
+	PLUGIN_PIPE_TYPE_DMA,
+	PLUGIN_PIPE_TYPE_CURSOR,
+};
+
+/* HW subblock type */
+enum PluginSubBlockType {
+	PLUGIN_VIG_PIPE = 0,
+	PLUGIN_RGB_PIPE,
+	PLUGIN_DMA_PIPE,
+	PLUGIN_CURSOR_PIPE,
+	PLUGIN_ROTATOR_INPUT,
+	PLUGIN_ROTATOR_OUTPUT,
+	PLUGIN_WB_INTF_OUTPUT,
+	PLUGIN_SUBBLOCK_MAX,
+};
+
+/* HW pipe capability */
+struct PluginPipeCaps {
+	enum PluginPipeType type;
+	uint32_t id;
+	uint32_t max_rects;
+};
+
+/* HW pipe resources */
+struct PluginPipes {
+	struct PluginPipeCaps pipe_caps[MAX_HW_PIPES];
+	uint32_t count;
+};
+
+/* HW rotator type */
+enum PluginRotatorType {
+	PLUGIN_ROT_TYPE_MDSS = 0,
+	PLUGIN_ROT_TYPE_V4L2,
+};
+
+/* HW rotator information */
+struct PluginRotatorInfo {
+	uint32_t type;
+	uint32_t num_rotator;
+	bool has_downscale;
+	char device_path[100];
+};
+
+/* HW scalar information */
+struct PluginDestScalarInfo {
+	uint32_t count;
+	uint32_t max_input_width;
+	uint32_t max_output_width;
+	uint32_t max_scale_up;
+};
+
 /*****************CreateDisplay*****************/
 /* Display type enum */
 enum {
@@ -95,23 +152,24 @@ enum {
 					PLUGIN_TERTIARY_DISPLAY_MASK | \
 					PLUGIN_FOURTH_DISPLAY_MASK)
 
-/* Display attributes information. Similar to HWDisplayAttributes */
-struct DisplayAttributes {
-	bool is_device_split;
-	uint32_t split_left;
+/* Display physical configuration */
+struct PluginDisplayConfigVariableInfo {
+	uint32_t x_pixels;          /* Total number of pixels in X-direction on the display panel. */
+	uint32_t y_pixels;          /* Total number of pixels in Y-direction on the display panel. */
+	float x_dpi;             /* Dots per inch in X-direction. */
+	float y_dpi;             /* Dots per inch in Y-direction. */
+	uint32_t fps;               /* Frame rate per second. */
+	uint32_t vsync_period_ns;   /* VSync period in nanoseconds. */
+	bool is_yuv;            /* If the display output is in YUV format. */
+};
 
-	/* pixels in X-direction on the display panel */
-	uint32_t x_pixels;
-	/* pixels in Y-direction on the display panel */
-	uint32_t y_pixels;
-	/* Dots per inch in X-direction */
-	float x_dpi;
-	/* Dots per inch in Y-direction */
-	float y_dpi;
-	/* Frame rate per second */
-	uint32_t fps;
-	/* VSync period in nanoseconds */
-	uint32_t vsync_period_ns;
+/* Display attributes information. Similar to HWDisplayAttributes */
+struct PluginDisplayAttributes {
+	bool is_device_split;
+	bool is_yuv;
+
+	struct PluginDisplayConfigVariableInfo config_variable_info;
+
 	/* Vertical front porch of panel */
 	uint32_t v_front_porch;
 	/* Vertical front porch of panel */
@@ -122,7 +180,7 @@ struct DisplayAttributes {
 	uint32_t h_total;
 };
 
-/* Panel port information for PanelInfo.port */
+/* Panel port information for PluginPanelInfo.port */
 enum {
 	PLUGIN_PORT_DEFAULT,
 	PLUGIN_PORT_DSI,
@@ -131,15 +189,25 @@ enum {
 	PLUGIN_PORT_LVDS,
 	PLUGIN_PORT_EDP,
 };
-/* Panel mode information for PanelInfo.mode */
+
+/* Panel mode information for PluginPanelInfo.mode */
 enum {
 	PLUGIN_MODE_DEFAULT,
 	PLUGIN_MODE_VIDEO,
 	PLUGIN_MODE_COMMAND,
 };
 
+enum PluginPanelS3DMode {
+	PLUGIN_S3D_MODE_NONE,
+	PLUGIN_S3D_MODE_LR,
+	PLUGIN_S3D_MODE_RL,
+	PLUGIN_S3D_MODE_TB,
+	PLUGIN_S3D_MODE_FP,
+	PLUGIN_S3D_MODE_MAX,
+};
+
 /* Display panel information. Similar to HWPanelInfo */
-struct PanelInfo {
+struct PluginPanelInfo {
 	/* Display port */
 	uint32_t port;
 	/* Display mode */
@@ -168,18 +236,24 @@ struct PanelInfo {
 	uint32_t max_fps;
 	/* Panel is primary display */
 	bool is_primary_panel;
+	/* is hotplug panel */
+	bool is_pluggable;
 	/* Panel split configuration */
 	uint32_t left_split;
 	uint32_t right_split;
 	/* Panel name */
 	char panel_name[256];
+	/* Panel's current s3d mode */
+	enum PluginPanelS3DMode s3d_mode;
+	/* Max panel brightness */
+	int panel_max_brightness;
 };
 
 /* Display parameter for CreateDisplay */
-struct DisplayParameter {
+struct PluginDisplayParameter {
 	uint32_t type;
-	struct DisplayAttributes attribs;
-	struct PanelInfo panel;
+	struct PluginDisplayAttributes attribs;
+	struct PluginPanelInfo panel;
 	uint32_t max_blending_stages;
 	uint32_t max_layers;
 };
@@ -203,12 +277,7 @@ struct DynBwLimit {
 
 /* HW resource infomration. It is similar to HWResourceInfo in SDM module */
 struct HWResourceConfig {
-	uint32_t num_dma_pipe;
-	uint32_t num_vig_pipe;
-	uint32_t num_rgb_pipe;
-	uint32_t num_cursor_pipe;
 	uint32_t num_blending_stages;
-	uint32_t num_rotator;
 	uint32_t num_control;
 	uint32_t num_mixer_to_disp;
 	uint32_t max_scale_up;
@@ -226,14 +295,22 @@ struct HWResourceConfig {
 	uint32_t linear_factor;
 	uint32_t scale_factor;
 	uint32_t extra_fudge_factor;
+	uint32_t amortizable_threshold;
+	uint32_t system_overhead_lines;
 	bool has_ubwc;
 	bool has_decimation;
-	bool has_rotator_downscale;
 	bool has_non_scalar_rgb;
 	bool is_src_split;
 	bool perf_calc;
 	bool has_dyn_bw_support;
+	bool separate_rotator;
+	bool has_qseed3;
+	bool has_concurrent_writeback;
 	struct DynBwLimit dyn_bw_info;
+	struct PluginPipes hw_pipes;
+	struct PluginRotatorInfo hw_rot_info;
+	struct PluginDestScalarInfo hw_dest_scalar_info;
+	bool has_avr;
 };
 
 /*****************Prepare*****************/
@@ -308,7 +385,7 @@ struct sdmLayerConfig {
 };
 
 /* Layer geometry information filled by compositor */
-struct LayerGeometry {
+struct PluginLayerGeometry {
 	/* Buffer information */
 	uint32_t 		width;
 	uint32_t 		height;
@@ -329,10 +406,10 @@ struct LayerGeometry {
 };
 
 /* The configuration of all layers. Filled by compositor */
-struct LayersConfig {
-	struct LayerGeometry *layers;
+struct PluginLayersConfig {
+	struct PluginLayerGeometry *layers;
 	uint32_t count;
-	/* Reserve for user setting. Refer to sdm LayerStackFlags */
+	/* Reserve for user setting. Refer to sdm::LayerStackFlags */
 	uint32_t flags;
 	struct sdmLayerConfig sdm_layer_configs[MAX_SDE_Layers];
 };
@@ -415,9 +492,9 @@ struct DisplayProp {
 		uint32_t max_mixer_stages;
 		uint32_t thermal_level;
 		bool is_idle; /* Used by PLUGIN_QUERY_CAN_SET_IDLE_TIME */
-		struct PanelInfo panel;
-		struct DisplayAttributes attribs;
-		struct LayersConfig layer_configs;
+		struct PluginPanelInfo panel;
+		struct PluginDisplayAttributes attribs;
+		struct PluginLayersConfig layer_configs;
 	};
 };
 
@@ -502,7 +579,7 @@ struct StrategyPluginInterface {
 	 * @flags: user can set special flag for this client, but it's not implemented now
 	 */
 	display_handle_t (*CreateDisplay)(client_handle_t handle,
-					  struct DisplayParameter *para,
+					  struct PluginDisplayParameter *para,
 					  uint32_t flags);
 
 	/*
@@ -526,7 +603,7 @@ struct StrategyPluginInterface {
 	int (*Prepare)(client_handle_t handle,
 		       display_handle_t *displays,
 		       int count,
-		       struct LayersConfig **configs,
+		       struct PluginLayersConfig **configs,
 		       uint32_t flags);
 
 	/*
