@@ -2528,7 +2528,7 @@ get_mapped_format_from_gbm(uint32_t fmt)
 }
 
 static void
-setup_sprite_geometry(struct drm_plane *p, struct weston_view *ev, struct LayerGeometry *layer)
+setup_sprite_geometry(struct drm_plane *p, struct weston_view *ev, struct PluginLayerGeometry *layer)
 {
 	pixman_box32_t *box;
 
@@ -2694,7 +2694,7 @@ get_visible_region(struct drm_output *output, struct weston_view *ev, pixman_reg
 }
 
 static int
-prepare_faked_fb_layer_geometry(struct drm_output *output, struct LayerGeometry *fb_layer)
+prepare_faked_fb_layer_geometry(struct drm_output *output, struct PluginLayerGeometry *fb_layer)
 {
 	fb_layer->width = output->base.width;
 	fb_layer->height = output->base.height;
@@ -2740,19 +2740,19 @@ prepare_faked_fb_layer_geometry(struct drm_output *output, struct LayerGeometry 
 	return 0;
 }
 
-static struct LayersConfig *
+static struct PluginLayersConfig *
 allocate_layer_config_memory(int view_count)
 {
-	struct LayersConfig *config;
-	struct LayerGeometry *layers;
+	struct PluginLayersConfig *config;
+	struct PluginLayerGeometry *layers;
 
-	config = (struct LayersConfig *)zalloc(sizeof(*config));
+	config = (struct PluginLayersConfig *)zalloc(sizeof(*config));
 	if (config == NULL) {
 		weston_log("fail to allocate layers configuration\n");
 		return NULL;
 	}
 
-	layers = (struct LayerGeometry *) zalloc(view_count * sizeof(struct LayerGeometry));
+	layers = (struct PluginLayerGeometry *) zalloc(view_count * sizeof(struct PluginLayerGeometry));
 	if (layers == NULL) {
 		weston_log("fail to allocate layer geometry array\n");
 		free(config);
@@ -2764,7 +2764,7 @@ allocate_layer_config_memory(int view_count)
 }
 
 static void
-free_layer_config_memory(struct LayersConfig *config)
+free_layer_config_memory(struct PluginLayersConfig *config)
 {
 	uint32_t i;
 
@@ -2777,7 +2777,7 @@ free_layer_config_memory(struct LayersConfig *config)
 	}
 
 	for (i = 0; i < config->count; i++) {
-		struct LayerGeometry *layer = &config->layers[i];
+		struct PluginLayerGeometry *layer = &config->layers[i];
 		if (layer->visible_regions.rects)
 			free(layer->visible_regions.rects);
 		if (layer->dirty_regions.rects)
@@ -2859,7 +2859,7 @@ need_convert_gbm_format(struct weston_view *ev, uint32_t format)
 }
 
 static int
-prepare_normal_layer_geometry(struct drm_output *output, struct LayerGeometry *layer, struct sdm_layer *sdm_layer)
+prepare_normal_layer_geometry(struct drm_output *output, struct PluginLayerGeometry *layer, struct sdm_layer *sdm_layer)
 {
 	struct drm_backend *b =
 		(struct drm_backend *)output->base.compositor->backend;
@@ -2955,10 +2955,10 @@ destroy_sdm_layer(struct sdm_layer *layer)
 #define GET_CURSOR_SLOT(max_layers)	((max_layers) - 2)
 
 static int
-setup_layer_configs(struct drm_output *output, struct LayersConfig *layers_config)
+setup_layer_configs(struct drm_output *output, struct PluginLayersConfig *layers_config)
 {
 	struct sdm_layer *sdm_layer = NULL, *next_sdm_layer = NULL;
-	struct LayerGeometry *layer = NULL;
+	struct PluginLayerGeometry *layer = NULL;
 	uint32_t gpu_target_index = GET_GPU_TARGET_SLOT(layers_config->count);
 	uint32_t index = 0;
 	int slot;
@@ -2991,7 +2991,7 @@ setup_layer_configs(struct drm_output *output, struct LayersConfig *layers_confi
 }
 
 static struct weston_plane *
-assigne_plane_for_layer(struct drm_output *output, struct LayerGeometry *layer)
+assigne_plane_for_layer(struct drm_output *output, struct PluginLayerGeometry *layer)
 {
 	struct weston_output *output_base = &output->base;
 	struct drm_backend *b =
@@ -3102,13 +3102,13 @@ err_out:
 }
 
 static int
-apply_strategy_for_views(struct drm_output *output, struct LayersConfig *layers_config, drmModeAtomicReqPtr req)
+apply_strategy_for_views(struct drm_output *output, struct PluginLayersConfig *layers_config, drmModeAtomicReqPtr req)
 {
 	struct weston_output *output_base = &output->base;
 	struct drm_backend *b =
 		(struct drm_backend *)output_base->compositor->backend;
 	struct sdm_layer *sdm_layer = NULL;
-	struct LayerGeometry *layer = NULL;
+	struct PluginLayerGeometry *layer = NULL;
 	struct drm_plane *plane = NULL;
 	struct weston_plane *primary, *next_plane = NULL;
 	uint32_t i;
@@ -3227,7 +3227,7 @@ reset_sdm(struct drm_output *output)
 	struct weston_output *output_base = &output->base;
 	struct drm_backend *b =
 		(struct drm_backend *)output_base->compositor->backend;
-	struct LayersConfig *layers_config = NULL;
+	struct PluginLayersConfig *layers_config = NULL;
 	struct Property prop;
 	uint32_t view_count = 0;
 
@@ -3270,7 +3270,7 @@ drm_assign_planes_use_sdm_strategy(struct weston_output *output_base)
 	struct weston_plane *primary;
 	pixman_region32_t overlap, surface_overlap;
 	drmModeAtomicReqPtr req = NULL;
-	struct LayersConfig *layers_config;
+	struct PluginLayersConfig *layers_config;
 	struct sdm_layer *sdm_layer, *next_sdm_layer;
 	uint32_t view_count = 0;
 	uint32_t error = PLUGIN_ERROR_NONE;
@@ -4709,12 +4709,33 @@ connector_get_current_mode(drmModeConnector *connector, int drm_fd,
 
 #ifdef SDM_STRATEGY_OPTIMIZATION
 static void
-get_pipes(struct HWResourceConfig *info)
+get_pipe_caps(struct PluginPipes *pipes)
 {
-	info->num_rgb_pipe = 4;
-	info->num_vig_pipe = 4;
-	info->num_cursor_pipe = 2;
-	info->num_dma_pipe = 2;
+	int index = 0;
+
+	/*
+	 * The DRM plane may not be mapped to hw plane one to one in DTS, there may be
+	 * 2 hw pipes bound to 1 DRM plane, so we can't get unique pipe id for each hw
+	 * pipe from DRM plane. Hardcode it from 0 to 11 temporarily.
+	 * 4 vig pipe, 4 rgb pipe, 2 dma pipe and 2 cursor pipe.
+	 */
+	for (index; index < MAX_HW_PIPES; index++) {
+		struct PluginPipeCaps *cap = &pipes->pipe_caps[index];
+
+		if (index < 4)
+			cap->type = PLUGIN_PIPE_TYPE_VIG;
+		else if (index < 8)
+			cap->type = PLUGIN_PIPE_TYPE_RGB;
+		else if (index < 10)
+			cap->type = PLUGIN_PIPE_TYPE_DMA;
+		else
+			cap->type = PLUGIN_PIPE_TYPE_CURSOR;
+
+		cap->id = index;
+		cap->max_rects = 0;
+	}
+
+	pipes->count = MAX_HW_PIPES;
 }
 
 static void
@@ -4722,11 +4743,21 @@ get_plugin_hw_resource_info(struct drm_backend *b, struct HWResourceConfig *hw_r
 {
 	int i;
 
-	/*TODO: Require from DRM*/
-	get_pipes(hw_res_info);
-	/*Hardcode below info*/
+	/* TODO: Require from DRM */
+	get_pipe_caps(&hw_res_info->hw_pipes);
+	/* HW rotator info */
+	hw_res_info->separate_rotator = 0;
+	hw_res_info->hw_rot_info.type = PLUGIN_ROT_TYPE_MDSS;
+	hw_res_info->hw_rot_info.num_rotator = 0;
+	hw_res_info->hw_rot_info.has_downscale = true;
+	hw_res_info->hw_rot_info.device_path[0] = '\0';
+	/* Scalar info */
+	hw_res_info->hw_dest_scalar_info.count = 0;
+	hw_res_info->hw_dest_scalar_info.max_input_width = 0;
+	hw_res_info->hw_dest_scalar_info.max_output_width = 0;
+	hw_res_info->hw_dest_scalar_info.max_scale_up = 1;
+	/* Hardcode below info */
 	hw_res_info->num_blending_stages = 7;
-	hw_res_info->num_rotator = 0;
 	hw_res_info->num_control = 0;
 	hw_res_info->num_mixer_to_disp = 0;
 	hw_res_info->max_scale_up = 20;
@@ -4744,24 +4775,28 @@ get_plugin_hw_resource_info(struct drm_backend *b, struct HWResourceConfig *hw_r
 	hw_res_info->linear_factor = 1;
 	hw_res_info->scale_factor = 1;
 	hw_res_info->extra_fudge_factor = 2;
+	hw_res_info->amortizable_threshold = 0;
+	hw_res_info->system_overhead_lines = 0;
 	hw_res_info->has_ubwc = true;
 	hw_res_info->has_decimation = true;
-	hw_res_info->has_rotator_downscale = true;
 	hw_res_info->has_non_scalar_rgb = false;
 	hw_res_info->is_src_split = false;
 	hw_res_info->perf_calc = false;
 	hw_res_info->has_dyn_bw_support = false;
+	hw_res_info->has_qseed3 = true;
+	hw_res_info->has_concurrent_writeback = false;
+	hw_res_info->has_avr = false;
 	if (hw_res_info->has_dyn_bw_support) {
 		for (i = 0; i < PLUGIN_BW_MODE_MAX; i++) {
 			hw_res_info->dyn_bw_info.total_bw_limit[i] = hw_res_info->max_bandwidth_low;
 			hw_res_info->dyn_bw_info.pipe_bw_limit[i] = hw_res_info->max_pipe_width;
 		}
-		/*TODO:individual setting for each slot?*/
+		/* TODO:individual setting for each slot? */
 	}
 }
 
 static void
-get_plugin_panel_info(struct drm_output *output, struct PanelInfo *panel)
+get_plugin_panel_info(struct drm_output *output, struct PluginPanelInfo *panel)
 {
 	uint32_t length = 0;
 
@@ -4789,23 +4824,22 @@ get_plugin_panel_info(struct drm_output *output, struct PanelInfo *panel)
 }
 
 static void
-get_plugin_display_info(struct DisplayAttributes *attrib, drmModeModeInfo *mode, uint32_t max_mixer_width)
+get_plugin_display_info(struct PluginDisplayAttributes *attrib, struct PluginPanelInfo *panel, drmModeModeInfo *mode, uint32_t max_mixer_width)
 {
-	attrib->x_pixels = mode->hdisplay;
-	attrib->y_pixels = mode->vdisplay;
+	attrib->config_variable_info.x_pixels = mode->hdisplay;
+	attrib->config_variable_info.y_pixels = mode->vdisplay;
 	/*TODO: x_dpi, y_dpi need to get from DRM property*/
-	attrib->x_dpi = 0;
-	attrib->y_dpi = 0;
-	attrib->fps = mode->vrefresh;
-	attrib->vsync_period_ns = (uint32_t)(1000000000L / mode->vrefresh);
+	attrib->config_variable_info.x_dpi = 0;
+	attrib->config_variable_info.y_dpi = 0;
+	attrib->config_variable_info.fps = mode->vrefresh;
+	attrib->config_variable_info.vsync_period_ns = (uint32_t)(1000000000L / mode->vrefresh);
 	attrib->v_front_porch = mode->vsync_start - mode->vdisplay;
 	attrib->v_back_porch = mode->vtotal - mode->vsync_end;
 	attrib->v_pulse_width = mode->vsync_end - mode->vsync_start;
 	attrib->h_total = mode->htotal;
-	attrib->split_left = mode->hdisplay;
-	if (attrib->x_pixels > max_mixer_width) {
+	if (panel->left_split ||
+		attrib->config_variable_info.x_pixels > max_mixer_width) {
 		attrib->is_device_split = true;
-		attrib->split_left = mode->hdisplay / 2;
 		attrib->h_total += (mode->htotal - mode->hdisplay);
 	}
 }
@@ -4978,7 +5012,7 @@ create_output_for_connector(struct drm_backend *b,
 	enum output_config config;
 	uint32_t transform;
 #ifdef SDM_STRATEGY_OPTIMIZATION
-        struct DisplayParameter disp_para;
+        struct PluginDisplayParameter disp_para;
 #endif
 
 	i = find_crtc_for_connector(b, resources, connector);
@@ -5175,7 +5209,7 @@ create_output_for_connector(struct drm_backend *b,
 		/*Fill panel info*/
 		get_plugin_panel_info(output, &disp_para.panel);
 		/*Fill display attribute*/
-		get_plugin_display_info(&disp_para.attribs, &current->mode_info, MAX_MIXER_WIDTH);
+		get_plugin_display_info(&disp_para.attribs, &disp_para.panel, &current->mode_info, MAX_MIXER_WIDTH);
 		disp_para.max_blending_stages = get_plugin_display_max_mixer_stages(disp_para.type);
 		/*Get all virtual planes for a display. One virtual plane is corresponding to
 		 *a possible weston view*/
