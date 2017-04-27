@@ -2550,6 +2550,28 @@ destroy_sprites(struct drm_backend *backend)
 	}
 }
 
+static bool
+is_primary_connector(struct drm_backend *b, drmModeConnector *connector)
+{
+	drmModePropertyBlobPtr cap_blob = NULL;
+	drmModePropertyPtr property;
+	int i;
+
+	for (i = 0; i < connector->count_props && !cap_blob; i++) {
+		property = drmModeGetProperty(b->drm.fd, connector->props[i]);
+		if (!property)
+			continue;
+		if ((property->flags & DRM_MODE_PROP_BLOB) &&
+		    !strcmp(property->name, "capabilities")) {
+			cap_blob = drmModeGetPropertyBlob(b->drm.fd,
+							   connector->prop_values[i]);
+		}
+		drmModeFreeProperty(property);
+	}
+
+	return cap_blob && strstr(cap_blob->data, "display type=primary");
+}
+
 static int
 create_outputs(struct drm_backend *b, uint32_t option_connector,
 	       struct udev_device *drm_device)
@@ -2586,8 +2608,9 @@ create_outputs(struct drm_backend *b, uint32_t option_connector,
 			continue;
 
 		if (connector->connection == DRM_MODE_CONNECTED &&
-		    (option_connector == 0 ||
-		     connector->connector_id == option_connector)) {
+			(option_connector == 0 ||
+			 connector->connector_id == option_connector) &&
+			 is_primary_connector(b, connector)) {
 			if (create_output_for_connector(b, resources,
 							connector, x, y,
 							drm_device) < 0) {
@@ -3274,7 +3297,6 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 
 	parse_options(drm_options, ARRAY_LENGTH(drm_options), argc, argv);
 
-	param.connector = 31;
 	b = drm_backend_create(compositor, &param, argc, argv, config);
 	if (b == NULL)
 		return -1;
