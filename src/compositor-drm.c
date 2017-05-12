@@ -1,6 +1,7 @@
 /*
  * Copyright © 2008-2011 Kristian Høgsberg
  * Copyright © 2011 Intel Corporation
+ * Copyright (c) 2017, The Linux Foundation. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -169,6 +170,7 @@ struct drm_output {
 	drmModeCrtcPtr original_crtc;
 	struct drm_edid edid;
 	drmModePropertyPtr dpms_prop;
+	drmModePropertyPtr pll_prop;
 	uint32_t format;
 
 	enum dpms_enum dpms;
@@ -1332,6 +1334,7 @@ drm_output_destroy(struct weston_output *output_base)
 		backlight_destroy(output->backlight);
 
 	drmModeFreeProperty(output->dpms_prop);
+	drmModeFreeProperty(output->pll_prop);
 
 	/* Turn off hardware cursor */
 	drmModeSetCursor(b->drm.fd, output->crtc_id, 0, 0, 0);
@@ -1765,6 +1768,28 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 	}
 
 	output->dpms = level;
+}
+
+static void
+drm_set_ppm(struct weston_output *output_base, int32_t ppm)
+{
+	struct drm_output *output = (struct drm_output *) output_base;
+	struct weston_compositor *ec = output_base->compositor;
+	struct drm_backend *b = (struct drm_backend *)ec->backend;
+	int ret;
+
+	if (!output->pll_prop) {
+		weston_log("DRM: PLL: invalid pll property\n");
+		return;
+	}
+
+	ret = drmModeConnectorSetProperty(b->drm.fd, output->connector_id,
+					output->pll_prop->prop_id, ppm);
+	if (ret) {
+		weston_log("DRM: PLL: failed property set for %s\n",
+			   output->base.name);
+		return;
+	}
 }
 
 static const char * const connector_type_names[] = {
@@ -2373,6 +2398,7 @@ create_output_for_connector(struct drm_backend *b,
 
 	output->original_crtc = drmModeGetCrtc(b->drm.fd, output->crtc_id);
 	output->dpms_prop = drm_get_prop(b->drm.fd, connector, "DPMS");
+	output->pll_prop = drm_get_prop(b->drm.fd, connector, "PLL_DELTA");
 
 	if (connector_get_current_mode(connector, b->drm.fd, &crtc_mode) < 0)
 		goto err_free;
@@ -2435,6 +2461,7 @@ create_output_for_connector(struct drm_backend *b,
 	output->base.assign_planes = drm_assign_planes;
 	output->base.set_dpms = drm_set_dpms;
 	output->base.switch_mode = drm_output_switch_mode;
+	output->base.set_ppm = drm_set_ppm;
 
 	output->base.gamma_size = output->original_crtc->gamma_size;
 	output->base.set_gamma = drm_output_set_gamma;

@@ -524,6 +524,7 @@ rdp_backend_create_output(struct rdp_backend *b, int width, int height)
 	output->base.set_backlight = NULL;
 	output->base.set_dpms = NULL;
 	output->base.switch_mode = rdp_switch_mode;
+	output->base.set_ppm = NULL;
 	b->output = output;
 
 	weston_compositor_add_output(b->compositor, &output->base);
