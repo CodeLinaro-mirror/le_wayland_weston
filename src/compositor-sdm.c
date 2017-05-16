@@ -246,7 +246,7 @@ drm_fb_get_from_bo(struct gbm_bo *bo,
     fb->handle = gbm_bo_get_handle(bo).u32;
     fb->size = fb->stride * height;
     fb->fd = backend->drm.fd;
-
+    fb->ion_fd = gbm_bo_get_fd(bo);
     ret = -1;
 
     if (format && !backend->no_addfb2) {
@@ -273,7 +273,6 @@ drm_fb_get_from_bo(struct gbm_bo *bo,
     }
 
     gbm_bo_set_user_data(bo, fb, drm_fb_destroy_callback);
-    weston_log("drm_fb_get_from_bo: fb_id is %d \n", fb->fb_id);
 
     return fb;
 
@@ -416,7 +415,6 @@ drm_output_repaint(struct weston_output *output_base,
         return -1;
 
     if (!output->next) {
-        weston_log("drm_output_repaint: inside loop invoking drm_output_render\n");
         drm_output_render(output, damage);
     }
     assert(wl_list_empty(&output->plane_flip_list));
@@ -607,6 +605,7 @@ create_sdm_layer(struct drm_output *output, struct weston_view *ev, pixman_regio
     layer->view = ev;
     layer->is_cursor = is_cursor;
     layer->is_skip = is_skip;
+
     pixman_region32_init(&layer->overlap);
     pixman_region32_copy(&layer->overlap, overlap);
 
@@ -675,14 +674,13 @@ drm_assign_planes(struct weston_output *output_base)
 
         if (!es->buffer_ref.buffer) {
             is_skip = true;
-        }
-        else if (es->buffer_ref.buffer && wl_shm_buffer_get(es->buffer_ref.buffer->resource)) {
+        } else if (linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource)) {
+            is_skip = false;
+        }  else if (wl_shm_buffer_get(es->buffer_ref.buffer->resource)) {
             is_skip = true;
         }
 
-
-            next_plane = primary;
-
+        next_plane = primary;
         weston_view_move_to_plane(ev, next_plane);
 
         if (next_plane == primary)
@@ -698,10 +696,10 @@ drm_assign_planes(struct weston_output *output_base)
              */
             ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
         }
+
         sdm_layer = create_sdm_layer(output, ev, &surface_overlap, is_cursor, is_skip);
         wl_list_insert(output->sdm_layer_list.prev, &sdm_layer->link);
 
-        //pixman_region32_fini(&surface_overlap);
         output->view_count++;
     }
     /*
@@ -2173,7 +2171,7 @@ drm_backend_create(struct weston_compositor *compositor,
 
     /* and create default display */
     rc = CreateDisplay(display_id);
-    weston_log("CreateDisplay: %d \n", rc);
+    weston_log("CreateDisplay: %d successful\n", rc);
 
     /* Now register vblank_handler (VSYNC handler) with SDM services */
     RegisterCb(display_id, pthread_self(), vblank_handler);

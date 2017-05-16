@@ -111,6 +111,7 @@ struct LayerGeometryFlags {
        uint32_t skip : 1;
        uint32_t is_cursor : 1;
        uint32_t has_ubwc_buf : 1;
+       uint32_t video_present: 1;
 };
 
 
@@ -122,6 +123,7 @@ struct LayerGeometry {
        uint32_t               height;
        uint32_t               format;
        uint32_t               fb_id;
+       uint32_t               ion_fd;
        /* Layer information */
        uint32_t               composition; /*GPU, Overlay, HWCursor*/
        struct Rect            src_rect; /* srouce rectangle */
@@ -181,8 +183,6 @@ struct DisplayConfigInfo {
 };
 
 typedef void (*vblank_cb_t)(int fd, unsigned int sequence, unsigned int tv_sec,
-                           unsigned int tv_usec, struct drm_output *data);
-typedef void (*pageflip_cb_t)(int fd, unsigned int sequence, unsigned int tv_sec,
                            unsigned int tv_usec, struct drm_output *data);
 #ifdef __cplusplus
 }

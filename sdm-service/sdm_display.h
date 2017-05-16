@@ -43,7 +43,6 @@
 #include <mutex>
 #include <condition_variable>
 
-#include <private/hw_info_types.h>
 #include "sdm_display_debugger.h"
 #include "sdm_display_interface.h"
 #include "sdm_display_buffer_allocator.h"
@@ -51,8 +50,6 @@
 #include "sdm_display_socket_handler.h"
 #include "compositor-sdm-output.h"
 #include "drm_master.h"
-#include <hw_interface.h>
-#include <hw_events_interface.h>
 #include <signal.h>
 #include <pthread.h>
 
@@ -150,6 +147,7 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     const char*  GetDisplayString();
     /* support functions */
     uint32_t GetMappedFormatFromGbm(uint32_t fmt);
+    bool GetVideoPresenceByFormatFromGbm(uint32_t fmt);
     uint32_t GetMappedFormatFromShm(uint32_t fmt);
     bool NeedConvertGbmFormat(struct weston_view *ev, uint32_t format);
     uint32_t ConvertToOpaqueGbmFormat(uint32_t format);
@@ -168,7 +166,6 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     DisplayEventHandler *client_event_handler_ = NULL;
     DisplayInterface *display_intf_ = NULL;
     DisplayType display_type_ = kDisplayMax;
-    DisplayEventHandler *display_event_handler_ = NULL;;
     DisplayConfigVariableInfo variable_info_;
     HWDisplayInterfaceInfo hw_disp_info_;
     bool shutdown_pending_ = false;
@@ -177,12 +174,6 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     pthread_t tid_ = -1;
     int  display_id_ = -1;
     uint32_t fps_ = 0;
-    pageflip_cb_t pageflip_cb_ = NULL;
-
-    HWEventHandler *event_handler = NULL;
-    HWEventsInterface *hw_events_intf_ = NULL;
-    std::vector<HWEvent> event_list_ = { HWEvent::VSYNC, HWEvent::IDLE_NOTIFY,
-                                         HWEvent::EXIT, HWEvent::CEC_READ_MESSAGE };
 };
 
 }  // namespace sdm
