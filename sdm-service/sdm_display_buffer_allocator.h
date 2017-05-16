@@ -26,6 +26,8 @@
 #define __SDM_DISPLAY_BUFFER_ALLOCATOR_H__
 
 #include <core/buffer_allocator.h>
+#include <gbm.h>
+#include <gbm_priv.h>
 
 namespace sdm {
 
@@ -40,6 +42,11 @@ class SdmDisplayBufferAllocator : public BufferAllocator {
                                       AllocatedBufferInfo *allocated_buffer_info);
 
   int SetBufferInfo(LayerBufferFormat format, int *target, int *flags);
+  DisplayError GetBufferLayout(const AllocatedBufferInfo &buf_info,
+                               uint32_t stride[4], uint32_t offset[4],
+                               uint32_t *num_planes);
+ private:
+  struct gbm_device *gbm_;
 };
 
 }  // namespace sdm
