@@ -156,6 +156,7 @@ headless_backend_create_output(struct headless_backend *b,
 	output->base.set_backlight = NULL;
 	output->base.set_dpms = NULL;
 	output->base.switch_mode = NULL;
+	output->base.set_ppm = NULL;
 
 	if (b->use_pixman) {
 		output->image_buf = malloc(param->width * param->height * 4);

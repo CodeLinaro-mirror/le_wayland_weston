@@ -55,6 +55,7 @@
 
 #include "compositor.h"
 #include "scaler-server-protocol.h"
+#include "pll-server-protocol.h"
 #include "presentation_timing-server-protocol.h"
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
@@ -4321,6 +4322,48 @@ bind_scaler(struct wl_client *client,
 }
 
 static void
+pll_destroy(struct wl_client *client,
+	       struct wl_resource *resource)
+{
+	wl_resource_destroy(resource);
+}
+
+static void
+pll_set_ppm(struct wl_client *client,
+		    struct wl_resource *pll,
+		    int32_t ppm)
+{
+	struct weston_compositor *compositor = wl_resource_get_user_data(pll);
+	struct weston_output *output, *next;
+
+	wl_list_for_each_safe(output, next, &compositor->output_list, link) {
+		if (output->set_ppm)
+			output->set_ppm(output, ppm);
+	}
+}
+
+static const struct wl_pll_interface pll_interface = {
+	pll_destroy,
+	pll_set_ppm
+};
+
+static void
+bind_pll(struct wl_client *client,
+	    void *data, uint32_t version, uint32_t id)
+{
+	struct wl_resource *resource;
+
+	resource = wl_resource_create(client, &wl_pll_interface, 1, id);
+	if (resource == NULL) {
+		wl_client_post_no_memory(client);
+		return;
+	}
+
+	wl_resource_set_implementation(resource, &pll_interface,
+				       data, NULL);
+}
+
+static void
 destroy_presentation_feedback(struct wl_resource *feedback_resource)
 {
 	struct weston_presentation_feedback *feedback;
@@ -4504,6 +4547,10 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 
 	if (!wl_global_create(ec->wl_display, &presentation_interface, 1,
 			      ec, bind_presentation))
+		goto fail;
+
+	if (!wl_global_create(ec->wl_display, &wl_pll_interface, 1,
+			      ec, bind_pll))
 		goto fail;
 
 	wl_list_init(&ec->view_list);
