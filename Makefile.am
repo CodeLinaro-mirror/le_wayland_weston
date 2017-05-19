@@ -49,6 +49,7 @@ AM_CPPFLAGS = 					\
 	-I$(top_builddir)/tests			\
 	-I$(top_srcdir)/shared			\
 	-I$(top_builddir)/protocol		\
+	-I$(top_srcdir)/sdm-service		\
 	-DDATADIR='"$(datadir)"'		\
 	-DMODULEDIR='"$(moduledir)"'		\
 	-DLIBEXECDIR='"$(libexecdir)"'		\
@@ -63,7 +64,8 @@ CLEANFILES = weston.ini				\
 bin_PROGRAMS += weston
 if ENABLE_DRM_COMPOSITOR
 COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
-COMPOSITOR_CFLAGS += -DENABLE_EGL
+COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
+COMPOSITOR_LIBS += -lsdmutils -lsdmcore -lsdedrm
 endif
 
 weston_LDFLAGS = -export-dynamic
@@ -138,6 +140,13 @@ libsession_helper_la_SOURCES =			\
 	src/launcher-util.c			\
 	src/launcher-util.h
 libsession_helper_la_CFLAGS = $(AM_CFLAGS) $(LIBDRM_CFLAGS) $(PIXMAN_CFLAGS) $(COMPOSITOR_CFLAGS)
+
+libsession_helper_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service --std=c++11 -std=c++11 \
+	$(COMPOSITOR_CFLAGS)			\
+	$(EGL_CFLAGS)				\
+	$(DRM_COMPOSITOR_CFLAGS)		\
+	$(AM_CFLAGS)
+
 libsession_helper_la_LIBADD = $(LIBDRM_LIBS)
 
 if ENABLE_DBUS
@@ -257,19 +266,32 @@ drm_backend_la_LIBADD =				\
 	$(DRM_COMPOSITOR_LIBS)			\
 	$(INPUT_BACKEND_LIBS)			\
 	libshared.la -lrt			\
-	libsession-helper.la
+	libsession-helper.la		
+
+drm_backend_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service --std=c++11 -std=c++11 \
+	$(COMPOSITOR_CFLAGS)			\
+	$(EGL_CFLAGS)				\
+	$(DRM_COMPOSITOR_CFLAGS)		\
+	$(AM_CFLAGS)
+
 drm_backend_la_CFLAGS =				\
 	$(COMPOSITOR_CFLAGS)			\
 	$(EGL_CFLAGS)				\
 	$(DRM_COMPOSITOR_CFLAGS)		\
 	$(AM_CFLAGS)
 drm_backend_la_SOURCES =			\
-	src/compositor-drm.c			\
+	src/compositor-sdm.c			\
 	$(INPUT_BACKEND_SOURCES)		\
 	shared/helpers.h			\
 	shared/timespec-util.h			\
 	src/libbacklight.c			\
-	src/libbacklight.h
+	src/libbacklight.h			\
+	sdm-service/sdm_display.cpp		\
+	sdm-service/sdm_display_debugger.cpp	\
+	sdm-service/sdm_display_buffer_allocator.cpp \
+	sdm-service/sdm_display_buffer_sync_handler.cpp \
+	sdm-service/sdm_display_socket_handler.cpp \
+	sdm-service/sdm_display_connect.cpp
 
 if ENABLE_VAAPI_RECORDER
 drm_backend_la_SOURCES += src/vaapi-recorder.c src/vaapi-recorder.h
