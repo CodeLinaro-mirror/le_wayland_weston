@@ -331,6 +331,7 @@ rpi_output_create(struct rpi_backend *backend, uint32_t transform)
 	output->base.set_backlight = NULL;
 	output->base.set_dpms = NULL;
 	output->base.switch_mode = NULL;
+	output->base.set_ppm = NULL;
 
 	/* XXX: use tvservice to get information from and control the
 	 * HDMI and SDTV outputs. See:

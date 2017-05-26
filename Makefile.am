@@ -117,6 +117,8 @@ nodist_weston_SOURCES =					\
 	protocol/presentation_timing-server-protocol.h	\
 	protocol/scaler-protocol.c			\
 	protocol/scaler-server-protocol.h		\
+	protocol/pll-protocol.c			\
+	protocol/pll-server-protocol.h		\
 	protocol/linux-dmabuf-protocol.c		\
 	protocol/linux-dmabuf-server-protocol.h
 
@@ -439,7 +441,8 @@ demo_clients =					\
 	weston-fullscreen			\
 	weston-stacking				\
 	weston-calibrator			\
-	weston-scaler
+	weston-scaler				\
+	weston-pll
 
 if INSTALL_DEMO_CLIENTS
 bin_PROGRAMS += $(demo_clients)
@@ -602,6 +605,13 @@ weston_scaler_SOURCES = clients/scaler.c
 weston_scaler_LDADD = libtoytoolkit.la
 weston_scaler_CFLAGS = $(AM_CFLAGS) $(CLIENT_CFLAGS)
 
+weston_pll_SOURCES = clients/pll.c
+nodist_weston_pll_SOURCES =			\
+	protocol/pll-protocol.c				\
+	protocol/pll-client-protocol.h
+weston_pll_LDADD = $(CLIENT_LIBS)
+weston_pll_CFLAGS = $(AM_CFLAGS) $(CLIENT_CFLAGS)
+
 if HAVE_CAIRO_GLESV2
 demo_clients += weston-nested weston-nested-client
 
@@ -755,7 +765,9 @@ BUILT_SOURCES +=					\
 	protocol/ivi-hmi-controller-protocol.c		\
 	protocol/ivi-hmi-controller-client-protocol.h	\
 	protocol/ivi-application-protocol.c		\
-	protocol/ivi-application-client-protocol.h
+	protocol/ivi-application-client-protocol.h	\
+	protocol/pll-client-protocol.h			\
+	protocol/pll-protocol.c
 
 westondatadir = $(datadir)/weston
 dist_westondata_DATA =				\
@@ -1338,7 +1350,8 @@ EXTRA_DIST +=					\
 	protocol/scaler.xml			\
 	protocol/ivi-application.xml		\
 	protocol/ivi-hmi-controller.xml		\
-	protocol/linux-dmabuf.xml
+	protocol/linux-dmabuf.xml		\
+	protocol/pll.xml
 
 #
 # manual test modules in tests subdirectory
