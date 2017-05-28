@@ -1,4 +1,26 @@
 /*
+ * Copyright (c) 2017, The Linux Foundation. All rights reserved.
+ *
+ *    -Redistribution and use in source and binary forms, with or without modification, are permitted
+ *     provided that the following conditions are met:
+ *    -Redistributions of source code must retain the above copyright notice, this list of
+ *     conditions and the following disclaimer.
+ *..  -Redistributions in binary form must reproduce the above copyright notice, this list of
+ *     conditions and the following disclaimer in the documentation and/or other materials provided
+ *     with the distribution.
+ *    -Neither the name of The Linux Foundation nor the names of its contributors may be used to
+ *     endorse or promote products derived from this software without specific prior written
+ *     permission.
+ *
+ * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NON-INFRINGEMENT ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  * Copyright © 2012 Intel Corporation
  * Copyright © 2015 Collabora, Ltd.
  *
@@ -21,7 +43,7 @@
  * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * SOFTWARE
  */
 
 #include "config.h"
@@ -40,8 +62,11 @@
 
 #include "gl-renderer.h"
 #include "vertex-clipping.h"
+#include "gbm-buffer-backend.h"
+#include "gbm-buffer-backend-server-protocol.h"
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-server-protocol.h"
+#include "gbm_priv.h"
 
 #include "shared/helpers.h"
 #include "weston-egl-ext.h"
@@ -102,6 +127,8 @@ struct egl_image {
 
 	/* Only used for dmabuf imported buffer */
 	struct linux_dmabuf_buffer *dmabuf;
+	/* Only used for gbmbuf imported buffer */
+	struct gbm_buffer *gbmbuf;
 	struct wl_list link;
 };
 
@@ -146,7 +173,7 @@ struct gl_renderer {
 	EGLDisplay egl_display;
 	EGLContext egl_context;
 	EGLConfig egl_config;
-
+	struct gbm_device *gbm_hdle;
 	struct wl_array vertices;
 	struct wl_array vtxcnt;
 
@@ -175,6 +202,7 @@ struct gl_renderer {
 
 	int has_dmabuf_import;
 	struct wl_list dmabuf_images;
+	struct wl_list gbmbuf_images;
 
 	struct gl_shader texture_shader_rgba;
 	struct gl_shader texture_shader_rgbx;
@@ -257,6 +285,9 @@ egl_image_unref(struct egl_image *image)
 
 	if (image->dmabuf)
 		linux_dmabuf_buffer_set_user_data(image->dmabuf, NULL, NULL);
+
+	if (image->gbmbuf)
+		gbm_buffer_backend_set_user_data(image->gbmbuf, NULL, NULL);
 
 	gr->destroy_image(gr->egl_display, image->image);
 	wl_list_remove(&image->link);
@@ -1527,6 +1558,163 @@ gl_renderer_import_dmabuf(struct weston_compositor *ec,
 	return true;
 }
 
+static void
+gl_renderer_destroy_gbm_buffer(struct gbm_buffer *gbm_buf)
+{
+	struct egl_image *image = gbm_buf->user_data;
+	egl_image_unref(image);
+}
+
+static struct egl_image *
+import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
+{
+	struct egl_image *image;
+	EGLint attribs[30];
+	int atti = 0;
+
+	memset(attribs,0,sizeof(EGLint));
+
+	image = gbm_buffer_backend_get_user_data(gbmbuf);
+	if (image)
+		return egl_image_ref(image);
+
+/* This requires the Mesa commit in
+ * Mesa 10.3 (08264e5dad4df448e7718e782ad9077902089a07) or
+ * Mesa 10.2.7 (55d28925e6109a4afd61f109e845a8a51bd17652).
+ * Otherwise Mesa closes the fd behind our back and re-importing
+ * will fail.
+ * https://bugs.freedesktop.org/show_bug.cgi?id=76188
+ */
+	attribs[atti++] = EGL_WIDTH;
+	attribs[atti++] = gbmbuf->width;
+	attribs[atti++] = EGL_HEIGHT;
+	attribs[atti++] = gbmbuf->height;
+	attribs[atti++] = EGL_LINUX_DRM_FOURCC_EXT;
+	attribs[atti++] = gbmbuf->format;
+/* XXX: Add modifier here when supported */
+	if (gbmbuf->num_planes > 0) {
+		attribs[atti++] = EGL_DMA_BUF_PLANE0_FD_EXT;
+		attribs[atti++] = gbmbuf->fd;
+		attribs[atti++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+		attribs[atti++] = gbmbuf->offset[0];
+		attribs[atti++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
+		attribs[atti++] = gbmbuf->stride[0];
+	}
+	if (gbmbuf->num_planes > 1) {
+		attribs[atti++] = EGL_DMA_BUF_PLANE1_FD_EXT;
+		attribs[atti++] = -1;
+		attribs[atti++] = EGL_DMA_BUF_PLANE1_OFFSET_EXT;
+		attribs[atti++] = gbmbuf->offset[1];
+		attribs[atti++] = EGL_DMA_BUF_PLANE1_PITCH_EXT;
+		attribs[atti++] = gbmbuf->stride[1];
+	}
+	if (gbmbuf->num_planes > 2) {
+		attribs[atti++] = EGL_DMA_BUF_PLANE2_FD_EXT;
+		attribs[atti++] = -1;
+		attribs[atti++] = EGL_DMA_BUF_PLANE2_OFFSET_EXT;
+		attribs[atti++] = gbmbuf->offset[2];
+		attribs[atti++] = EGL_DMA_BUF_PLANE2_PITCH_EXT;
+		attribs[atti++] = gbmbuf->stride[2];
+	}
+	attribs[atti++] = EGL_NONE;
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->width=%d", gbmbuf->width);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->height=%d", gbmbuf->height);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->format=%d", gbmbuf->format);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->num_planes=%d", gbmbuf->num_planes);
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->fd=%d\n", gbmbuf->fd);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[0]=%d", gbmbuf->offset[0]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[0]=%d", gbmbuf->stride[0]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[1]=%d", gbmbuf->offset[1]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[1]=%d", gbmbuf->stride[1]);
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[2]=%d", gbmbuf->offset[2]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[2]=%d", gbmbuf->stride[2]);
+
+	image = egl_image_create(gr, EGL_LINUX_DMA_BUF_EXT, NULL,
+					 attribs);
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"import_gbm_buffer::Image created =%p\n", image);
+
+	if (!image)
+		return NULL;
+
+	/* The cache owns one ref. The caller gets another. */
+	image->gbmbuf = gbmbuf;
+	wl_list_insert(&gr->gbmbuf_images, &image->link);
+	gbm_buffer_backend_set_user_data(gbmbuf, egl_image_ref(image),
+									gl_renderer_destroy_gbm_buffer);
+
+	return image;
+}
+
+static bool
+gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
+				        struct gbm_buffer *gbm_buf)
+{
+	struct gl_renderer *gr = get_renderer(ec);
+	struct egl_image *image;
+	struct gbm_device * gbm = gr->gbm_hdle;
+	struct gbm_buf_info  buf_info;
+	generic_buf_layout_t buf_lyt;
+	struct gbm_bo *bo;
+	uint32_t j;
+	int32_t tmp_fd;
+
+	buf_info.fd          = gbm_buf->fd;
+	buf_info.metadata_fd = gbm_buf->metadata_fd;
+	buf_info.height		 = gbm_buf->height;
+	buf_info.width       = gbm_buf->width;
+	buf_info.format      = gbm_buf->format;
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Invoked");
+
+	//We will import BO to create an entry into the hash map for
+	//this fd
+	bo = gbm_bo_import(gbm, GBM_BO_IMPORT_GBM_BUF_TYPE, &buf_info,
+											 GBM_BO_USE_RENDERING);
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:bo created= %p",bo);
+
+	int ret=gbm_perform(GBM_PERFORM_GET_YUV_PLANE_INFO,bo,&buf_lyt);
+	if(ret == GBM_ERROR_NONE){
+		printf("GET YUV Info success\n");
+		gbm_buf->num_planes = buf_lyt.num_planes;
+		for(j = 0;j < buf_lyt.num_planes; j++){
+			gbm_buf->offset[j] =
+			((uint32_t)(buf_lyt.planes[j].top_left) - (uint32_t)(buf_lyt.planes[0].top_left));
+			gbm_buf->stride[j] = buf_lyt.planes[j].v_increment;
+		}
+	}
+	else
+		weston_log("gl_renderer_import_gbm_buffer::GET YUV Info failed\n");
+
+//Fill up the remaining fields with default values
+	for(;j < MAX_NUM_PLANES; j++){
+		gbm_buf->offset[j] = 0;
+		gbm_buf->stride[j] = 0;
+	}
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Invoke import_gbm_buffer()");
+
+	image = import_gbm_buffer(gr, gbm_buf);
+	if (!image)
+		return false;
+
+//We are done with the import to populate the hash map entry
+//so we will destroy since the egl_image_create import would
+//hold the ref count
+	gbm_bo_destroy(bo);
+
+/* Cache retains a ref. */
+	egl_image_unref(image);
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Exited");
+	return true;
+}
+
+
 static GLenum
 choose_texture_target(struct linux_dmabuf_buffer *dmabuf)
 {
@@ -1542,6 +1730,24 @@ choose_texture_target(struct linux_dmabuf_buffer *dmabuf)
 		return GL_TEXTURE_EXTERNAL_OES;
 	default:
 		return GL_TEXTURE_2D;
+	}
+}
+
+static GLenum
+choose_texture_gbm_buf_target(struct gbm_buffer *gbmbuf)
+{
+	if (gbmbuf->num_planes > 1)
+		return GL_TEXTURE_EXTERNAL_OES;
+
+	switch (gbmbuf->format & ~DRM_FORMAT_BIG_ENDIAN) {
+	case DRM_FORMAT_YUYV:
+	case DRM_FORMAT_YVYU:
+	case DRM_FORMAT_UYVY:
+	case DRM_FORMAT_VYUY:
+	case DRM_FORMAT_AYUV:
+		 return GL_TEXTURE_EXTERNAL_OES;
+	default:
+		 return GL_TEXTURE_2D;
 	}
 }
 
@@ -1615,6 +1821,69 @@ gl_renderer_attach_dmabuf(struct weston_surface *surface,
 }
 
 static void
+gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
+			            struct weston_buffer *buffer,
+			            struct gbm_buffer *gbmbuf)
+{
+	struct gl_renderer *gr = get_renderer(surface->compositor);
+	struct gl_surface_state *gs = get_surface_state(surface);
+	int i;
+
+	buffer->width = gbmbuf->width;
+	buffer->height = gbmbuf->height;
+	buffer->y_inverted =
+		!!(gbmbuf->flags & ZLINUX_BUFFER_PARAMS_FLAGS_Y_INVERT);
+
+	for (i = 0; i < gs->num_images; i++)
+		egl_image_unref(gs->images[i]);
+	gs->num_images = 0;
+
+	gs->target = choose_texture_gbm_buf_target(gbmbuf);
+	switch (gs->target) {
+	case GL_TEXTURE_2D:
+		gs->shader = &gr->texture_shader_rgba;
+		break;
+	default:
+		gs->shader = &gr->texture_shader_egl_external;
+	}
+
+/*
+ * We try to always hold an imported EGLImage from the dmabuf
+ * to prevent the client from preventing re-imports. But, we also
+ * need to re-import every time the contents may change because
+ * GL driver's caching may need flushing.
+ *
+ * Here we release the cache reference which has to be final.
+ */
+	gs->images[0] = gbm_buffer_backend_get_user_data(gbmbuf);
+	if (gs->images[0]) {
+		int ret;
+
+		ret = egl_image_unref(gs->images[0]);
+		assert(ret == 0);
+	}
+
+	gs->images[0] = import_gbm_buffer(gr, gbmbuf);
+	if (!gs->images[0]) {
+		gbm_buffer_send_server_error(gbmbuf,
+				"EGL gbmbuf import failed");
+		return;
+	}
+	gs->num_images = 1;
+
+	ensure_textures(gs, 1);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(gs->target, gs->textures[0]);
+	gr->image_target_texture_2d(gs->target, gs->images[0]->image);
+
+	gs->pitch = buffer->width;
+	gs->height = buffer->height;
+	gs->buffer_type = BUFFER_TYPE_EGL;
+	gs->y_inverted = buffer->y_inverted;
+}
+
+static void
 gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 {
 	struct weston_compositor *ec = es->compositor;
@@ -1622,6 +1891,7 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	struct gl_surface_state *gs = get_surface_state(es);
 	struct wl_shm_buffer *shm_buffer;
 	struct linux_dmabuf_buffer *dmabuf;
+    struct gbm_buffer *gbmbuf;
 	EGLint format;
 	int i;
 
@@ -1647,8 +1917,12 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	else if (gr->query_buffer(gr->egl_display, (void *) buffer->resource,
 				  EGL_TEXTURE_FORMAT, &format))
 		gl_renderer_attach_egl(es, buffer, format);
-	else if ((dmabuf = linux_dmabuf_buffer_get(buffer->resource)))
+	else if ((dmabuf = linux_dmabuf_buffer_get(buffer->resource))){
 		gl_renderer_attach_dmabuf(es, buffer, dmabuf);
+	}
+	else if ((gbmbuf = gbm_buffer_get(buffer->resource))){
+		gl_renderer_attach_gbm_buffer(es, buffer, gbmbuf);
+	}
 	else {
 		weston_log("unhandled buffer type!\n");
 		weston_buffer_reference(&gs->buffer_ref, NULL);
@@ -2610,6 +2884,8 @@ gl_renderer_create(struct weston_compositor *ec, EGLenum platform,
 		gl_renderer_surface_get_content_size;
 	gr->base.surface_copy_content = gl_renderer_surface_copy_content;
 	gr->egl_display = NULL;
+	//gbm device handle
+	gr->gbm_hdle =(struct gbm_device *)native_window;
 
 	/* extension_suffix is supported */
 	if (supports) {
@@ -2661,8 +2937,14 @@ gl_renderer_create(struct weston_compositor *ec, EGLenum platform,
 		goto fail_with_error;
 
 	wl_list_init(&gr->dmabuf_images);
+	wl_list_init(&gr->gbmbuf_images);
+
 	if (gr->has_dmabuf_import)
-		gr->base.import_dmabuf = gl_renderer_import_dmabuf;
+	{
+		gr->base.import_dmabuf     = gl_renderer_import_dmabuf;
+		gr->base.import_gbm_buffer = gl_renderer_import_gbm_buffer;
+	}
+
 
 	wl_display_add_shm_format(ec->wl_display, WL_SHM_FORMAT_RGB565);
 
