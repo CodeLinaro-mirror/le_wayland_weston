@@ -76,7 +76,6 @@ class SdmDisplayDebugger : public DebugHandler {
   virtual void EndTrace() { }
   virtual DisplayError GetProperty(const char *property_name, int *value);
   virtual DisplayError GetProperty(const char *property_name, char *value);
-  virtual DisplayError SetProperty(const char *property_name, int value);
   virtual DisplayError SetProperty(const char *property_name, const char *value);
 
   int debug_level_ = INFO;
