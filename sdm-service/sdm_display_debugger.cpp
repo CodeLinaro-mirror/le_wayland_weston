@@ -36,38 +36,48 @@ static void Log(const char *prefix, const char *format, va_list list) {
 }
 
 void SdmDisplayDebugger::Error(DebugTag tag, const char *format, ...) {
-  va_list list;
-  va_start(list, format);
-  Log("SDM_E: ", format, list);
-  va_end(list);
+  if (debug_level_ > NONE) {
+      va_list list;
+      va_start(list, format);
+      Log("SDM_E: ", format, list);
+      va_end(list);
+  }
 }
 
 void SdmDisplayDebugger::Warning(DebugTag tag, const char *format, ...) {
-  va_list list;
-  va_start(list, format);
-  Log("SDM_W: ", format, list);
-  va_end(list);
+  if (debug_level_ > ERROR) {
+      va_list list;
+      va_start(list, format);
+      Log("SDM_W: ", format, list);
+      va_end(list);
+  }
 }
 
 void SdmDisplayDebugger::Info(DebugTag tag, const char *format, ...) {
-  va_list list;
-  va_start(list, format);
-  Log("SDM_I: ", format, list);
-  va_end(list);
+  if (debug_level_ > WARNING) {
+      va_list list;
+      va_start(list, format);
+      Log("SDM_I: ", format, list);
+      va_end(list);
+  }
 }
 
 void SdmDisplayDebugger::Debug(DebugTag tag, const char *format, ...) {
-  va_list list;
-  va_start(list, format);
-  Log("SDM_D: ", format, list);
-  va_end(list);
+  if (debug_level_ > INFO) {
+      va_list list;
+      va_start(list, format);
+      Log("SDM_D: ", format, list);
+      va_end(list);
+  }
 }
 
 void SdmDisplayDebugger::Verbose(DebugTag tag, const char *format, ...) {
-  va_list list;
-  va_start(list, format);
-  Log("SDM_V: ", format, list);
-  va_end(list);
+  if (debug_level_ > DEBUG) {
+      va_list list;
+      va_start(list, format);
+      Log("SDM_V: ", format, list);
+      va_end(list);
+  }
 }
 
 DisplayError SdmDisplayDebugger::GetProperty(const char *property_name, int *value) {

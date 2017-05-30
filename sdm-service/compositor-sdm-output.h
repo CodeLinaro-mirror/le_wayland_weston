@@ -129,7 +129,7 @@ struct drm_output;
 
 struct drm_fb {
        struct drm_output *output;
-       uint32_t fb_id, stride, handle, size;
+       uint32_t fb_id, stride, handle, size, ion_fd;
        int fd;
        int is_client_buffer;
        struct weston_buffer_reference buffer_ref;
