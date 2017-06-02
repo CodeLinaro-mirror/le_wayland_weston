@@ -53,6 +53,9 @@
 
 #ifndef WESTON_GBM_BUFFER_BACKEND_H
 #define WESTON_GBM_BUFFER_BACKEND_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define GBM_BUFFER_BACKEND_PROTOCOL
 
@@ -131,6 +134,10 @@ int gbm_buffer_backend_setup(struct weston_compositor *compositor);
  * \return The gbm_buffer if it exists, or NULL otherwise.
  */
 struct gbm_buffer *gbm_buffer_get(struct wl_resource *resource);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* WESTON_GBM_BUFFER_BACKEND_H */
 
