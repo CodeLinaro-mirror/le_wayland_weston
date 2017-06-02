@@ -24,7 +24,6 @@
 
 #ifndef __SDM_DISPLAY_BUFFER_SYNC_HANDLER_H__
 #define __SDM_DISPLAY_BUFFER_SYNC_HANDLER_H__
-
 #include <core/buffer_sync_handler.h>
 
 namespace sdm {

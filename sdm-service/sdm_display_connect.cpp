@@ -65,7 +65,7 @@ int CreateCore()
     }
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("successfully created.");
+    DLOGD("successfully created.");
     #endif
 
     return kErrorNone;
@@ -101,7 +101,7 @@ int DestroyCore()
     core_intf_ = NULL;
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("Core was destroyed successfully");
+    DLOGD("Core was destroyed successfully");
     #endif
 
     return kErrorNone;
@@ -126,7 +126,7 @@ int GetFirstDisplayType(int *display_id)
     *display_id = hw_disp_info_.type;
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("function successful: display id = %d", *display_id);
+    DLOGD("function successful: display id = %d", *display_id);
     #endif
 
     return kErrorNone;
@@ -171,7 +171,7 @@ int CreateDisplay(int display_id)
     }
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("Display(%d) created successfully.", display_id);
+    DLOGD("Display(%d) created successfully.", display_id);
     #endif
 
     return kErrorNone;
@@ -199,7 +199,7 @@ int Prepare(int display_id, struct drm_output *output)
     }
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("function successful.");
+    DLOGD("function successful.");
     #endif
 
     return kErrorNone;
@@ -227,7 +227,7 @@ int Commit(int display_id, struct drm_output *output)
     }
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("function successful.");
+    DLOGD("function successful.");
     #endif
 
     return kErrorNone;
@@ -258,7 +258,7 @@ int DestroyDisplay(int display_id)
     }
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("function successful.");
+    DLOGD("function successful.");
     #endif
 
     return kErrorNone;
@@ -286,7 +286,35 @@ bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_c
     }
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("function successful.");
+    DLOGD("function successful.");
+    #endif
+
+    return SUCCESS;
+}
+
+bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info)
+{
+    DisplayError error = kErrorNone;
+
+    if (display_id >= kDisplayMax || display_id < 0) {
+        DLOGE("Display id(%d) out of range.", display_id);
+        return FAIL;
+    }
+
+    if (!display_[display_id]) {
+        DLOGE("function failed. Display(%d) not created yet.", display_id);
+        return FAIL;
+    }
+
+    error = display_[display_id]->GetHdrInfo(display_hdr_info);
+
+    if (error != kErrorNone) {
+        DLOGE("function failed with error = %d", error);
+        return FAIL;
+    }
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGD("function successful.");
     #endif
 
     return SUCCESS;
@@ -316,7 +344,7 @@ int RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb)
     }
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("function successful.");
+    DLOGD("function successful.");
     #endif
 
     return kErrorNone;
@@ -327,7 +355,7 @@ int get_drm_master_fd() {
     int fd = display_[0]->GetDrmMasterFd();
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("fd is: %d \n", fd);
+    DLOGD("fd is: %d \n", fd);
     #endif
 
     return fd;
@@ -360,7 +388,7 @@ int SetDisplayState(int display_id, int power_mode) {
     }
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("function was successful.");
+    DLOGD("function successful.");
     #endif
 
     return kErrorNone;
@@ -388,7 +416,7 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
     }
 
     #if SDM_DISPLAY_DEBUG
-    DLOGI("function was successful.");
+    DLOGD("function successful.");
     #endif
 
     return kErrorNone;

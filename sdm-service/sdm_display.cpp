@@ -135,9 +135,10 @@ DisplayError SdmDisplay::CreateDisplay() {
         return error;
     }
 
-    #if SDM_DISPLAY_DEBUG
-    DLOGI("function successful.");
-    #endif
+    SdmDisplayDebugger::Get()->GetProperty("sys.sdm_display_disable_hdr", &disable_hdr_handling_);
+    if (disable_hdr_handling_) {
+        DLOGI("HDR Handling disabled");
+    }
 
     return kErrorNone;
 }
@@ -377,6 +378,12 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
     layer_buffer->format = GetSDMFormat(layer_geometry->format, layer_geometry->flags);
     layer_buffer->width = layer_geometry->width;
     layer_buffer->height = layer_geometry->height;
+    layer_buffer->unaligned_width = layer_geometry->unaligned_width;
+    layer_buffer->unaligned_height = layer_geometry->unaligned_height;
+    /* TODO (user): Obtain metadata and then */
+    // TODO: (user)  if (SetMetaData(metadatar layer) != kErrorNone) {
+    // TODO: (user)      return kErrorUndefined;
+    // TODO: (user)  }
 
     if (index != layer_stack_.layers.size()-1)
         layer_buffer->planes[0].fd = layer_geometry->ion_fd;
@@ -384,6 +391,8 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
     /* TODO: Below information should be set according to the real user scenario */
     layer_buffer->flags.secure = layer_geometry->flags.secure_present;
     layer_buffer->flags.video = layer_geometry->flags.video_present;
+    layer_buffer->flags.hdr = layer_geometry->flags.hdr_present;
+
     layer_buffer->flags.macro_tile = false;
     layer_buffer->flags.interlace = false;
     layer_buffer->flags.secure_display = false;
@@ -423,6 +432,8 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
        layer_stack_.flags.skip_present = is_skip;
     if (layer_buffer->flags.video)
        layer_stack_.flags.video_present = true;
+    if (layer_buffer->flags.hdr)
+       layer_stack_.flags.hdr_present = 1;
     if (layer_buffer->flags.secure)
         layer_stack_.flags.secure_present = true;
     layer->flags.updating = true;
@@ -483,6 +494,9 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
 
     fb_layer->width = output->base.width;
     fb_layer->height = output->base.height;
+    fb_layer->unaligned_width = output->base.width;
+    fb_layer->unaligned_height = output->base.height;
+
     fb_layer->format = GetMappedFormatFromGbm(output->format);
     fb_layer->composition = SDM_COMPOSITION_FB_TARGET;
 
@@ -564,7 +578,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->format = SDM_BUFFER_FORMAT_RGBX_8888;
 
     if (!sdm_layer->is_skip) {
-      struct gbm_bo *bo;
+        struct gbm_bo *bo;
         //check whether the buffer resource is created by linux dma buf
         if ((dmabuf = linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource))) {
             struct gbm_import_fd_data gbm_dmabuf = {
@@ -622,6 +636,8 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             // Override buffer width/height to reflect aligned width and aligned height.
             layer->width = alignedWidth;
             layer->height = alignedHeight;
+            layer->unaligned_width = width;
+            layer->unaligned_height = height;
             layer->ion_fd = gbm_bo_get_fd(bo);
             layer->flags.secure_present = secure_status;
         }
@@ -660,6 +676,13 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     /* TODO:Check if view has a ubwc buffer. Now set it to false */
     layer->flags.has_ubwc_buf = 0;
     layer->flags.video_present = GetVideoPresenceByFormatFromGbm(format);
+
+    if (layer->flags.video_present) {
+        struct gbm_bo *bo = NULL;
+        // TODO (user): Obtain bo from gbm buffer.
+        // TODO user: hardcode to tru below <- takeout layer->flags.hdr_present = GetHdrPresenceFromGbm(bo);
+    }
+
     /* Initialize all views with GPU composition first, SDM will update them after prepare */
     layer->composition = SDM_COMPOSITION_GPU;
 
@@ -797,7 +820,6 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
 DisplayError SdmDisplay::PreCommit()
 {
     DisplayError error = kErrorNone;
-    // TODO: Check for pre-commit stuff here
 
     return error;
 }
@@ -830,7 +852,6 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
 {
     DisplayError ret = kErrorNone;
 
-    PreCommit();
     uint32_t layer_count = layer_stack_.layers.size();
 
     uint32_t GPUTarget_index = layer_count-1;
@@ -840,6 +861,8 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     GpuTargetlayer = layer_stack_.layers.at(GPUTarget_index);
 
     GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
+
+    PreCommit();
 
     ret = display_intf_->Commit(&layer_stack_);
     PostCommit();
@@ -957,6 +980,15 @@ LayerBlending SdmDisplay::GetSDMBlending(uint32_t source)
     }
 
     return blending;
+}
+bool SdmDisplay::GetHdrPresenceFromGbm(struct gbm_bo *bo)
+{
+    bool is_hdr_content_present = false;
+
+    /* TODO (user): to obtain HDR metadata from gbm buffer object */
+    /* TODO (user): and set the metadata. */
+
+    return is_hdr_content_present;
 }
 
 bool SdmDisplay::GetVideoPresenceByFormatFromGbm(uint32_t fmt)
@@ -1354,6 +1386,38 @@ DisplayError SdmDisplay::UpdateDisplayPll(int32_t ppm)
   }
 
   return kErrorNone;
+}
+
+DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
+    DisplayError error;
+
+    DisplayConfigFixedInfo fixed_info = {};
+    error = display_intf_->GetConfig(&fixed_info);
+
+    if (error != kErrorNone) {
+        DLOGE("Failed to get fixed info. Error = %d", error);
+        return error;
+    }
+
+    if (!fixed_info.hdr_supported) {
+        DLOGI("HDR is not supported");
+        return error;
+    }
+
+    static const float kLuminanceFactor = 10000.0;
+    // luminance is expressed in the unit of 0.0001 cd/m2, convert it to 1cd/m2.
+    max_luminance_ = FLOAT(fixed_info.max_luminance)/kLuminanceFactor;
+    max_average_luminance_ = FLOAT(fixed_info.average_luminance)/kLuminanceFactor;
+    min_luminance_ = FLOAT(fixed_info.min_luminance)/kLuminanceFactor;
+
+    display_hdr_info->hdr_supported = fixed_info.hdr_supported;
+    display_hdr_info->hdr_eotf = fixed_info.hdr_eotf;
+    display_hdr_info->hdr_metadata_type_one = fixed_info.hdr_metadata_type_one;
+    display_hdr_info->max_luminance = fixed_info.max_luminance;
+    display_hdr_info->average_luminance = fixed_info.average_luminance;
+    display_hdr_info->min_luminance = fixed_info.min_luminance;
+
+    return error;
 }
 #ifdef __cplusplus
 }

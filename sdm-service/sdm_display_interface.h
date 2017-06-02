@@ -115,6 +115,7 @@ struct LayerGeometryFlags {
        uint32_t has_ubwc_buf : 1;
        uint32_t video_present: 1;
        uint32_t secure_present: 1;
+       uint32_t hdr_present: 1;
 };
 
 
@@ -124,6 +125,8 @@ struct LayerGeometry {
        /* Buffer information */
        uint32_t               width;
        uint32_t               height;
+       uint32_t               unaligned_width;
+       uint32_t               unaligned_height;
        uint32_t               format;
        uint32_t               fb_id;
        uint32_t               ion_fd;
@@ -173,6 +176,19 @@ enum wsdm_crtc_property {
 enum wsdm_connector_property {
      WSDM_CONNECTOR_CRTC_ID = 0,
      WSDM_CONNECTOR__COUNT
+};
+
+/**
+ * List of HDR capabilities of display
+ */
+
+struct DisplayHdrInfo{
+  bool hdr_supported; //!< if HDR is enabled
+  uint32_t hdr_eotf; //!< Electro optical transfer function
+  bool hdr_metadata_type_one; //!< Metadata type one obtained from HDR block of content
+  uint32_t max_luminance; //!< From Panel's peak luminance
+  uint32_t average_luminance; //!< From Panel's average luminance
+  uint32_t min_luminance; //!< From Panel's blackness level
 };
 
 struct DisplayConfigInfo {
