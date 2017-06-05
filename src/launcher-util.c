@@ -48,6 +48,8 @@
 #include "logind-util.h"
 #include "weston-launch.h"
 
+#include "sdm_display_connect.h"
+
 #define DRM_MAJOR 226
 
 #ifndef KDSKBMUTE
@@ -127,7 +129,8 @@ weston_launcher_open(struct weston_launcher *launcher,
 		return weston_logind_open(launcher->logind, path, flags);
 
 	if (launcher->fd == -1) {
-		fd = open(path, flags);
+		fd = get_drm_master_fd();
+
 		if (fd == -1)
 			return -1;
 
@@ -138,11 +141,6 @@ weston_launcher_open(struct weston_launcher *launcher,
 
 		if (major(s.st_rdev) == DRM_MAJOR) {
 			launcher->drm_fd = fd;
-			if (!is_drm_master(fd)) {
-				weston_log("drm fd not master\n");
-				close(fd);
-				return -1;
-			}
 		}
 
 		return fd;
@@ -201,7 +199,8 @@ weston_launcher_close(struct weston_launcher *launcher, int fd)
 	if (launcher->logind)
 		weston_logind_close(launcher->logind, fd);
 
-	close(fd);
+	//DRMMaster in SDM owns this fd and will take care of the fd closure
+	//close(fd);
 }
 
 void

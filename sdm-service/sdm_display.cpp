@@ -1,0 +1,1286 @@
+/*
+* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without modification, are permitted
+* provided that the following conditions are met:
+*    * Redistributions of source code must retain the above copyright notice, this list of
+*      conditions and the following disclaimer.
+*    * Redistributions in binary form must reproduce the above copyright notice, this list of
+*      conditions and the following disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*    * Neither the name of The Linux Foundation nor the names of its contributors may be used to
+*      endorse or promote products derived from this software without specific prior written
+*      permission.
+*
+* THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+* LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+* NON-INFRINGEMENT ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+* FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+* BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+* OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+* STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+/*
+ * Copyright © 2008-2011 Kristian Høgsberg
+ * Copyright © 2011 Intel Corporation
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the
+ * next paragraph) shall be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+#include <assert.h>
+#include <stdarg.h>
+#include <linux/limits.h>
+#include <string>
+#include <vector>
+#include <map>
+#include <ostream>
+#include <fstream>
+#include <utility>
+#include <bitset>
+#include <math.h>
+#include "sdm_display.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
+#include "../src/linux-dmabuf.h"
+
+#define __CLASS__ "SdmDisplay"
+
+struct drm_output *drm_output_;
+vblank_cb_t vblank_cb_;
+
+namespace sdm {
+#define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
+/* Cursor is fixed in (gpu_target_index-1) slot in SDM */
+#define GET_CURSOR_SLOT(max_layers) ((max_layers) - 2)
+#define SDM_DISPLAY_DEBUG 1
+
+SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
+    display_type_ = type;
+    core_intf_    = core_intf;
+    drm_output_   = NULL;
+    vblank_cb_    = NULL;
+    InstallVSyncSignalHandler(vblank_signal);
+}
+
+SdmDisplay::~SdmDisplay() {
+}
+
+DisplayError SdmDisplay::Init() {
+    DisplayError error = kErrorNone;
+
+    error = CoreInterface::CreateCore(SdmDisplayDebugger::Get(),
+                       &buffer_allocator_,
+                       &buffer_sync_handler_,
+                       &socket_handler_,
+                       &core_intf_);
+    if (error != kErrorNone) {
+        CoreInterface::DestroyCore();
+        DLOGE("display initialization failed, Error = %d", error);
+
+        return error;
+    }
+    #if SDM_DISPLAY_DEBUG
+    DLOGI("Initialization successful.");
+    #endif
+
+    return error;
+}
+
+DisplayError SdmDisplay::CreateDisplay() {
+    DisplayError error = kErrorNone;
+
+    error = core_intf_->GetFirstDisplayInterfaceType(&hw_disp_info_);
+    display_type_ = hw_disp_info_.type;
+
+    error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
+
+    if (error != kErrorNone) {
+        DLOGE("Display creation failed. Error = %d", error);
+        CoreInterface::DestroyCore();
+
+        return error;
+    }
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGI("function successful.");
+    #endif
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::DestroyDisplay() {
+    DisplayError error;
+
+    error = core_intf_->DestroyDisplay(display_intf_);
+    display_intf_ = NULL;
+
+    return error;
+}
+
+DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
+    DLOGW("Not implemented");
+
+    return kErrorNone;
+}
+
+void VSyncSignalHandler(int signum, siginfo_t *info, void *moredata) {
+    struct signal_data *sigdata = reinterpret_cast<struct signal_data *> (info->si_value.sival_ptr);
+
+    if (signum == vblank_signal && sigdata->magic == VSYNC_MAGIC) {
+        int fd          = sigdata->fd;
+        unsigned int sequence = sigdata->sequence;
+        unsigned int tv_sec   = sigdata->tv_sec;
+        unsigned int tv_usec  = sigdata->tv_usec;
+        void *data         = sigdata->data;
+        delete info->si_value.sival_ptr;
+        vblank_cb_(fd, sequence, tv_sec, tv_usec, drm_output_);
+    } else {
+        DLOGW("Spurious Vsync signal: SIGNAL = %d", signum);
+    }
+}
+
+void SdmDisplay::InstallVSyncSignalHandler(int siguser) {
+    struct sigaction act;
+
+    DLOGI("Installing handler for: SIGNAL = %d", siguser);
+    memset(&act, 0, sizeof(act));
+    act.sa_sigaction = &VSyncSignalHandler;
+    act.sa_flags = SA_SIGINFO;
+    if (sigaction(siguser, &act, NULL) == -1)
+        DLOGE("sigusr error: sigaction, SIGNAL = %d", siguser);
+}
+
+DisplayError SdmDisplay::VSync(int fd, unsigned int sequence, unsigned int tv_sec,
+                               unsigned int tv_usec, void *data) {
+    sigval value;
+    struct signal_data *sigdata = reinterpret_cast<struct signal_data *> (zalloc(sizeof *sigdata));
+
+    sigdata->magic    = VSYNC_MAGIC;
+    sigdata->fd       = fd;
+    sigdata->sequence = sequence;
+    sigdata->tv_sec   = tv_sec;
+    sigdata->tv_usec  = tv_usec;
+    sigdata->data     = data;
+    value.sival_ptr   = reinterpret_cast<void *> (sigdata);
+    if (vb_wait_) {
+        vb_wait_ = false;
+        pthread_sigqueue(tid_, vblank_signal, (const union sigval) value);
+        ReleaseWait();
+    } else {
+        delete value.sival_ptr;
+    }
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::PFlip(int fd, unsigned int sequence, unsigned int tv_sec,
+                               unsigned int tv_usec, void *data) {
+
+    DLOGW("Not implemented");
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::Refresh() {
+    if (client_event_handler_) {
+        client_event_handler_->Refresh();
+    }
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::CECMessage(char *message) {
+    DLOGW("Not implemented");
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::SetDisplayState(DisplayState state) {
+    DisplayError error;
+
+    error = display_intf_->SetDisplayState(state);
+    if (error != kErrorNone) {
+        DLOGE("function failed. Error = %d", error);
+     return error;
+    }
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::SetVSyncState(bool VSyncState, struct drm_output *output) {
+    DisplayError error;
+
+    drm_output_ = output;
+    error = display_intf_->SetVSyncState(VSyncState);
+    if (error != kErrorNone) {
+        DLOGE("VSync state setting failed. Error = %d", error);
+        return error;
+    }
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
+    DisplayError error = kErrorNone;
+    DisplayConfigVariableInfo disp_config;
+    uint32_t active_index = 0;
+
+    error = display_intf_->GetActiveConfig(&active_index);
+
+    if (error != kErrorNone) {
+        DLOGE("Active Index not found. Error = %d", error);
+        return error;
+    }
+
+    error = display_intf_->GetConfig(active_index, &disp_config);
+
+    if (error != kErrorNone) {
+        DLOGE("Display Configuration failed. Error = %d", error);
+        return error;
+    }
+
+    display_config->x_pixels     = disp_config.x_pixels;
+    display_config->y_pixels     = disp_config.y_pixels;
+    display_config->x_dpi        = disp_config.x_dpi;
+    display_config->y_dpi        = disp_config.y_dpi;
+    display_config->fps          = disp_config.fps;
+    display_config->vsync_period_ns = disp_config.vsync_period_ns;
+    display_config->is_yuv       = disp_config.is_yuv;
+    fps_                         = disp_config.fps;
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::RegisterCb(int display_id, pthread_t tid,
+                     vblank_cb_t vbcb) {
+    DisplayError error = kErrorNone;
+
+    vblank_cb_   = vbcb;
+    display_id_  = display_id;
+    tid_         = tid;
+
+    return error;
+}
+
+DisplayError SdmDisplay::FreeLayerStack() {
+    for (Layer *layer : layer_stack_.layers) {
+
+         delete layer;
+    }
+    layer_stack_ = {};
+
+    return kErrorNone;
+}
+
+/* TODO (user): FreeGeometryRegions to keep in case we need to use it. */
+DisplayError SdmDisplay::FreeGeometryRegions(struct LayerGeometry *glayer) {
+    if (glayer->dirty_regions.count)
+        delete[] glayer->dirty_regions.rects;
+    if (glayer->visible_regions.count)
+        delete[] glayer->visible_regions.rects;
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::AllocLayerStackMemory(struct drm_output *output) {
+    uint32_t num_layers = output->view_count;
+
+    for (size_t i = 0; i < output->view_count; i++) {
+         Layer *layer = new Layer();
+         layer_stack_.layers.push_back(layer);
+    }
+
+    return kErrorNone;
+}
+
+static void SetRect(sdm::LayerRect *dst, struct Rect *src)
+{
+    dst->left = src->left;
+    dst->top = src->top;
+    dst->right = src->right;
+    dst->bottom = src->bottom;
+}
+
+static void SetRectArray(sdm::LayerRectArray *dst, struct RectArray *src)
+{
+    for (uint32_t i = 0; i < src->count; i++)
+         SetRect(&dst->rect[i], &src->rects[i]);
+}
+
+static uint32_t GetComposition(sdm::LayerComposition composition)
+{
+    uint32_t ret;
+
+    switch (composition) {
+     case sdm::kCompositionGPUTarget:
+          ret = SDM_COMPOSITION_FB_TARGET;
+          break;
+     case sdm::kCompositionGPU:
+          ret = SDM_COMPOSITION_GPU;
+          break;
+     case sdm::kCompositionHWCursor:
+          ret = SDM_COMPOSITION_HW_CURSOR;
+          break;
+     default:
+          ret = SDM_COMPOSITION_OVERLAY;
+          break;
+    }
+
+    return ret;
+}
+
+DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *output,
+                                                             uint32_t index,
+                                                             struct LayerGeometry *glayer,
+                                                             bool is_skip) {
+    DisplayError error = kErrorNone;
+    sdm::Layer *layer = layer_stack_.layers.at(index);
+    struct LayerGeometry *layer_geometry = glayer;
+    LayerBuffer *layer_buffer, &layer_buffer_ = layer->input_buffer;
+    layer_buffer = &layer_buffer_;
+
+    /* 1. Fill buffer information */
+    *layer_buffer = sdm::LayerBuffer();
+    layer_buffer->format = GetSDMFormat(layer_geometry->format, layer_geometry->flags);
+    layer_buffer->width = layer_geometry->width;
+    layer_buffer->height = layer_geometry->height;
+
+    if (index != layer_stack_.layers.size()-1)
+        layer_buffer->planes[0].fd = layer_geometry->ion_fd;
+
+    /* TODO: Below information should be set according to the real user scenario */
+    layer_buffer->flags.secure = false;
+    layer_buffer->flags.video = layer_geometry->flags.video_present;
+    layer_buffer->flags.macro_tile = false;
+    layer_buffer->flags.interlace = false;
+    layer_buffer->flags.secure_display = false;
+    layer_buffer->flags.secure_camera = false;
+    /* 2. Fill layer information */
+    if (layer_geometry->composition == SDM_COMPOSITION_FB_TARGET)
+        layer->composition = sdm::kCompositionGPUTarget;
+    else
+        layer->composition = sdm::kCompositionGPU;
+
+    SetRect(&layer->src_rect, &layer_geometry->src_rect);
+    SetRect(&layer->dst_rect, &layer_geometry->dst_rect);
+
+    for (uint32_t i = 0; i < layer_geometry->visible_regions.count; i++) {
+         SetRect(&layer->visible_regions.at(i), &layer_geometry->visible_regions.rects[i]);
+    }
+
+    for (uint32_t i = 0; i < layer_geometry->dirty_regions.count; i++) {
+         SetRect(&layer->dirty_regions.at(i), &layer_geometry->dirty_regions.rects[i]);
+    }
+
+    layer->blending = GetSDMBlending(layer_geometry->blending);
+    layer->plane_alpha = layer_geometry->plane_alpha;
+
+    layer->transform.flip_horizontal =
+              ((layer_geometry->transform & SDM_TRANSFORM_FLIP_H) > 0);
+    layer->transform.flip_vertical =
+              ((layer_geometry->transform & SDM_TRANSFORM_FLIP_V) > 0);
+    layer->transform.rotation =
+              ((layer_geometry->transform & SDM_TRANSFORM_90) ? 90.0f : 0.0f);
+
+    layer->frame_rate = fps_;
+    layer->solid_fill_color = 0;
+
+    layer->flags.skip = is_skip;
+    if (is_skip)
+       layer_stack_.flags.skip_present = is_skip;
+    if (layer_buffer->flags.video)
+       layer_stack_.flags.video_present = true;
+    layer->flags.updating = true;
+    layer->flags.solid_fill = false;
+    layer->flags.cursor = false;
+    layer->flags.single_buffer = false;
+
+    return error;
+}
+
+DisplayError SdmDisplay::AllocateMemoryForLayerGeometry(struct \
+                                drm_output *output,
+                                uint32_t index,
+                                struct LayerGeometry \
+                                *glayer) {
+    /* Configure each layer */
+    uint32_t num_visible_rects = 0;
+    uint32_t num_dirty_rects = 0;
+
+    if (index < output->view_count) {
+     if (glayer == NULL) {
+          DLOGE("no layer geometry for the display!\n");
+          return kErrorParameters;
+     }
+     /* It's permissive the visible/dirty region can be NULL */
+     num_visible_rects = glayer->visible_regions.count;
+     for (uint32_t j = 0; j < num_visible_rects; j++) {
+          LayerRect *visible_rect = new LayerRect();
+          layer_stack_.layers.at(index)->visible_regions.push_back(*visible_rect);
+     }
+
+     num_dirty_rects = glayer->dirty_regions.count;
+     for (uint32_t j = 0; j < num_dirty_rects; j++) {
+          LayerRect *dirty_rect = new LayerRect();
+          layer_stack_.layers.at(index)->dirty_regions.push_back(*dirty_rect);
+     }
+    }
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::AddGeometryLayerToLayerStack(struct drm_output *output, uint32_t index,
+                                                      struct LayerGeometry *glayer, bool is_skip)
+{
+    DisplayError error = kErrorNone;
+
+    AllocateMemoryForLayerGeometry(output, index, glayer);
+    error = PopulateLayerGeometryOnToLayerStack(output, index, glayer, is_skip);
+
+    return error;
+}
+
+int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
+                        struct LayerGeometry **fb_glayer) {
+    struct LayerGeometry *fb_layer;
+    *fb_glayer = fb_layer = reinterpret_cast<struct LayerGeometry *> \
+                              (zalloc(sizeof *fb_layer));
+
+    fb_layer->width = output->base.width;
+    fb_layer->height = output->base.height;
+    fb_layer->format = GetMappedFormatFromGbm(output->format);
+    fb_layer->composition = SDM_COMPOSITION_FB_TARGET;
+
+    fb_layer->src_rect.left = (float)0.0;
+    fb_layer->src_rect.top = (float)0.0;
+    fb_layer->src_rect.right = (float)output->base.width;
+    fb_layer->src_rect.bottom = (float)output->base.height;
+    fb_layer->dst_rect.left = (float)0.0;
+    fb_layer->dst_rect.top = (float)0.0;
+    fb_layer->dst_rect.right = (float)output->base.width;
+    fb_layer->dst_rect.bottom = (float)output->base.height;
+
+    fb_layer->visible_regions.rects = reinterpret_cast<struct Rect *> \
+                              (zalloc(sizeof(struct Rect)));
+    if (fb_layer->visible_regions.rects == NULL) {
+        DLOGE("out of memory for allocating fb visible region\n");
+        return -1;
+    }
+    fb_layer->visible_regions.rects[0] = fb_layer->dst_rect;
+    fb_layer->visible_regions.count = 1;
+
+    fb_layer->dirty_regions.rects = reinterpret_cast<struct Rect *> \
+                              (zalloc(sizeof(struct Rect)));
+    if (fb_layer->dirty_regions.rects == NULL) {
+        DLOGE("out of memory for allocating fb dirty region\n");
+        return -1;
+    }
+    fb_layer->dirty_regions.rects[0] = fb_layer->dst_rect;
+    fb_layer->dirty_regions.count = 1;
+
+    fb_layer->blending = SDM_BLENDING_NONE;
+    /*
+     * output->base.width/height should be already transformed, so just
+     * keep no transform for output.
+     */
+    fb_layer->transform = SDM_TRANSFORM_NORMAL;
+    fb_layer->plane_alpha = 0xFF;
+
+    fb_layer->flags.skip = 0;
+    fb_layer->flags.is_cursor = 0;
+    fb_layer->flags.has_ubwc_buf = 0;
+
+    return 0;
+}
+
+int SdmDisplay::GetDrmMasterFd() {
+    DRMMaster *master = nullptr;
+    int ret = DRMMaster::GetInstance(&master);
+    int fd;
+
+    if (ret < 0) {
+        DLOGE("Failed to acquire DRMMaster instance");
+        return kErrorNotSupported;
+    }
+
+    master->GetHandle(&fd);
+
+    return fd;
+}
+
+int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
+                         struct LayerGeometry **glayer,
+                         struct sdm_layer *sdm_layer) {
+    struct drm_backend *b = (struct drm_backend *)output->base.compositor->backend;
+    struct LayerGeometry *layer;
+    struct weston_view *ev = sdm_layer->view;
+    struct weston_surface *es = ev->surface;
+    bool is_cursor = sdm_layer->is_cursor;
+    uint32_t format = GBM_FORMAT_XBGR8888;
+    struct linux_dmabuf_buffer *dmabuf;
+
+    *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
+                           (zalloc(sizeof *layer));
+    /* Prepare layer buffer information */
+    layer->width = es->width;
+    layer->height = es->height;
+    layer->fb_id = -1;
+    layer->format = SDM_BUFFER_FORMAT_RGBX_8888;
+
+    if (!sdm_layer->is_skip) {
+      struct gbm_bo *bo;
+        //check whether the buffer resource is created by linux dma buf
+        if ((dmabuf = linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource))) {
+            struct gbm_import_fd_data gbm_dmabuf = {
+                .fd     = dmabuf->dmabuf_fd[0],
+                .width  = dmabuf->width,
+                .height = dmabuf->height,
+                .stride = dmabuf->stride[0],
+                .format = dmabuf->format
+            };
+            bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
+        } else {
+            bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
+                               wl_resource_get_user_data(es->buffer_ref.buffer->resource),
+                               GBM_BO_USE_SCANOUT);
+        }
+
+         if (bo == NULL)
+            DLOGE("fail to import gbm bo!\n");
+         else {
+            uint32_t width, height;
+            uint32_t *fbid;
+            uint32_t fb_id, stride, handle, size;
+            uint32_t fb_id1;
+            width = gbm_bo_get_width(bo);
+            height = gbm_bo_get_height(bo);
+            stride = gbm_bo_get_stride(bo);
+            handle = gbm_bo_get_handle(bo).u32;
+            format = gbm_bo_get_format(bo);
+            int drm_fd = GetDrmMasterFd();
+
+            uint32_t handles[4], pitches[4], offsets[4];
+            handles[0] = handle;
+            pitches[0] = stride;
+            offsets[0] = 0;
+
+            uint32_t alignedWidth = 0;
+            uint32_t alignedHeight = 0;
+
+            gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_WIDTH, bo, &alignedWidth);
+            gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_HEIGHT, bo, &alignedHeight);
+
+            // Override buffer width/height to reflect aligned width and aligned height.
+            layer->width = alignedWidth;
+            layer->height = alignedHeight;
+            layer->ion_fd = gbm_bo_get_fd(bo);
+        }
+    }
+
+    if (NeedConvertGbmFormat(ev, format))
+        format = ConvertToOpaqueGbmFormat(format);
+    layer->format = GetMappedFormatFromGbm(format);
+
+    /* Get src/dst rect */
+    ComputeSrcDstRect(output, ev, &layer->src_rect, &layer->dst_rect);
+    /* Get visible rects */
+    if (GetVisibleRegion(output, ev, &sdm_layer->overlap, &layer->visible_regions))
+        return -1;
+    /*
+     * Get dirty rects. It's not surprised a view has null damage region, that means
+     * the buffer content of view is not changed since last frame, eg. cursor.
+     */
+    if (ComputeDirtyRegion(ev, &layer->dirty_regions))
+        return -1;
+
+    /* Get blending. Now Weston only support premultipled alpha */
+    /* TODO (user): update property alpha, blend_op */
+    if (ev->alpha == 1.0f)
+     layer->blending = SDM_BLENDING_NONE;
+    else
+     layer->blending = SDM_BLENDING_PREMULTIPLIED;
+
+    /* Set no transform for view since bounding box already been applied by transform */
+    layer->transform = SDM_TRANSFORM_NORMAL;
+    /* Get global alpha */
+    layer->plane_alpha = GetGlobalAlpha(ev);
+
+    /* TODO: update property src_config, csc, color_fill, scaler ... */
+    layer->flags.is_cursor = is_cursor;
+    /* TODO:Check if view has a ubwc buffer. Now set it to false */
+    layer->flags.has_ubwc_buf = 0;
+    layer->flags.video_present = GetVideoPresenceByFormatFromGbm(format);
+    /* Initialize all views with GPU composition first, SDM will update them after prepare */
+    layer->composition = SDM_COMPOSITION_GPU;
+
+    return 0;
+}
+
+DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
+    DisplayError error = kErrorNone;
+    struct sdm_layer *sdm_layer = NULL, *next_sdm_layer = NULL;
+    struct LayerGeometry *glayer = NULL;
+    uint32_t gpu_target_index = GET_GPU_TARGET_SLOT(output->view_count);
+    uint32_t index = 0;
+
+    if (shutdown_pending_) {
+    return kErrorShutDown;
+    }
+
+    FreeLayerStack();
+    AllocLayerStackMemory(output);
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGW("gpu_target_index = %d\n", gpu_target_index);
+    #endif
+
+    /* If no view can be handled by SDM, just skip below and prepare fb target directly. */
+    if (gpu_target_index > 0) {
+        wl_list_for_each_reverse(sdm_layer, &output->sdm_layer_list, link) {
+            if(PrepareNormalLayerGeometry(output, &glayer, sdm_layer)) {
+                DLOGE("fail to prepare normal layer geometry.");
+                return kErrorUndefined;
+            }
+
+            error = AddGeometryLayerToLayerStack(output, index++, glayer, sdm_layer->is_skip);
+            if (error) {
+                DLOGE("failed add Geometry Layer to LayerStack.");
+                /* TODO: Free glayer */
+                return kErrorUndefined;
+            }
+            /* TODO: Free glayer */
+
+            if (sdm_layer->is_skip)
+                layer_stack_.flags.skip_present = true;
+        }
+    }
+
+    int err = PrepareFbLayerGeometry(output, &glayer);
+    if (err) {
+        DLOGE("failed to prepare Layer Geometry Fb target\n");
+        return kErrorUndefined;
+    } else {
+        error = AddGeometryLayerToLayerStack(output, index, glayer, true);
+        if (error) {
+            DLOGE("fail to prepare Fb target: Add Geometry failure fb\n");
+            /* TODO: Free glayer */
+            return kErrorUndefined;
+        }
+        /* TODO: Free glayer */
+    }
+
+    return error;
+}
+
+DisplayError SdmDisplay::PrePrepare(struct drm_output *output)
+{
+    DisplayError error = kErrorNone;
+
+    error = PrePrepareLayerStack(output);
+    if (error ) {
+        DLOGE("function failed!\n", error);
+    }
+
+    return error;
+}
+
+DisplayError SdmDisplay::PostPrepare(struct drm_output *output)
+{
+    DisplayError error = kErrorNone;
+    // TODO: Check for Post-Prepare stuff here
+    return error;
+}
+
+static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
+  if (!buffer || !length) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  struct LayerStack *layer_stack;
+  layer_stack = reinterpret_cast<struct LayerStack *>(layerStack);
+  DLOGW("\n-------- Display Manager: \nLayer Stack Dump --------");
+  for (uint32_t i = 0; i < layer_stack->layers.size(); i++) {
+      #define LEN_LOCAL 2048
+      char buf[LEN_LOCAL] = {0};
+
+      struct Layer *layer;
+      layer = layer_stack->layers.at(i);
+      memset(buf, '\0', LEN_LOCAL);
+      sprintf(buf, "Layer: %d\n    width  = %d,     height = %d\n", i,
+        layer->input_buffer.width, layer->input_buffer.height);
+      sprintf(buf, "%s\n LayerComposition = %#x", buf, layer->composition);
+      sprintf(buf, "%s\n src_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f",
+        buf, layer->src_rect.left, layer->src_rect.top,
+        layer->src_rect.right, layer->src_rect.bottom);
+      sprintf(buf, "%s\n dst_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f", buf,
+        layer->dst_rect.left, layer->dst_rect.top, layer->dst_rect.right,
+        layer->dst_rect.bottom);
+      sprintf(buf, "%s\n LayerBlending = %#x", buf, layer->blending);
+      sprintf(buf,"%s\n LayerTransform:rotation= %f,flip_horizontal=%s,flip_vertical=%s",
+        buf, layer->transform.rotation, (layer->transform.flip_horizontal? \
+        "true":"false"), (layer->transform.flip_vertical? "true":"false"));
+      sprintf(buf, "%s\n Plane Alpha = %#x, frame_rate = %d,  solid_fill_color = %d",
+        buf, layer->plane_alpha, layer->frame_rate, layer->solid_fill_color);
+      sprintf(buf, "%s\n LayerFlags = %#x", buf, layer->flags);
+      DLOGI("Dumping Layer stack:\n%s\n", buf);
+  }
+
+  return;
+}
+
+DisplayError SdmDisplay::Prepare(struct drm_output *output)
+{
+    DisplayError error = kErrorNone;
+    char dump_buffer[8192] = {0};
+
+    error = PrePrepare(output);
+    error = display_intf_->Prepare(&layer_stack_);
+    DumpInterface::GetDump(dump_buffer, sizeof(dump_buffer));
+    error = PostPrepare(output);
+    if (error != kErrorNone)
+     DLOGE("function failed Error= %d\n", error);
+
+    return error;
+}
+
+DisplayError SdmDisplay::PreCommit()
+{
+    DisplayError error = kErrorNone;
+    // TODO: Check for pre-commit stuff here
+
+    return error;
+}
+
+DisplayError SdmDisplay::PostCommit()
+{
+    DisplayError error = kErrorNone;
+
+    //Iterate through the layer buffer and close release fences
+    for (uint32_t i = 0; i < layer_stack_.layers.size(); i++) {
+        Layer *layer = layer_stack_.layers.at(i);
+        LayerBuffer *layer_buffer = &layer->input_buffer;
+
+        if (layer_buffer->release_fence_fd > 0) {
+          close(layer_buffer->release_fence_fd);
+          layer_buffer->release_fence_fd = -1;
+        }
+    }
+
+    //close release fence fds
+    if (layer_stack_.retire_fence_fd > 0) {
+      close(layer_stack_.retire_fence_fd);
+      layer_stack_.retire_fence_fd = -1;
+    }
+
+    return error;
+}
+
+DisplayError SdmDisplay::Commit(struct drm_output *output)
+{
+    DisplayError ret = kErrorNone;
+
+    PreCommit();
+    uint32_t layer_count = layer_stack_.layers.size();
+
+    uint32_t GPUTarget_index = layer_count-1;
+    Layer *GpuTargetlayer;
+    uint32_t fb_id = output->next->fb_id;
+
+    GpuTargetlayer = layer_stack_.layers.at(GPUTarget_index);
+
+    GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
+
+    ret = display_intf_->Commit(&layer_stack_);
+    PostCommit();
+
+    return ret;
+}
+
+/* Adding following  support functions */
+LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometryFlags flags)
+{
+    LayerBufferFormat format = kFormatInvalid;
+
+    if (flags.has_ubwc_buf) {
+        switch (src_fmt) {
+            case SDM_BUFFER_FORMAT_RGBA_8888:
+                format = sdm::kFormatRGBA8888Ubwc;
+                break;
+            case SDM_BUFFER_FORMAT_RGBX_8888:
+                format = sdm::kFormatRGBX8888Ubwc;
+                break;
+            case SDM_BUFFER_FORMAT_BGR_565:
+                format = sdm::kFormatBGR565Ubwc;
+                break;
+            case SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS:
+            case SDM_BUFFER_FORMAT_NV12_ENCODEABLE:
+                format = sdm::kFormatYCbCr420SPVenusUbwc;
+                break;
+            default:
+                DLOGE("Unsupported UBWC format %d\n", src_fmt);
+                return sdm::kFormatInvalid;
+        }
+
+        return format;
+    }
+
+    switch (src_fmt) {
+        case SDM_BUFFER_FORMAT_RGBA_8888:
+            format = sdm::kFormatRGBA8888;
+            break;
+        case SDM_BUFFER_FORMAT_RGBA_5551:
+            format = sdm::kFormatRGBA5551;
+            break;
+        case SDM_BUFFER_FORMAT_RGBA_4444:
+            format = sdm::kFormatRGBA4444;
+            break;
+        case SDM_BUFFER_FORMAT_BGRA_8888:
+            format = sdm::kFormatBGRA8888;
+            break;
+        case SDM_BUFFER_FORMAT_RGBX_8888:
+            format = sdm::kFormatRGBX8888;
+            break;
+        case SDM_BUFFER_FORMAT_BGRX_8888:
+            format = sdm::kFormatBGRX8888;
+            break;
+        case SDM_BUFFER_FORMAT_RGB_888:
+            format = sdm::kFormatRGB888;
+            break;
+        case SDM_BUFFER_FORMAT_RGB_565:
+            format = sdm::kFormatRGB565;
+            break;
+        case SDM_BUFFER_FORMAT_BGR_565:
+            format = sdm::kFormatBGR565;
+            break;
+        case SDM_BUFFER_FORMAT_NV12_ENCODEABLE:
+        case SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS:
+            format = sdm::kFormatYCbCr420SemiPlanarVenus;
+            break;
+        case SDM_BUFFER_FORMAT_YV12:
+            format = sdm::kFormatYCrCb420PlanarStride16;
+            break;
+        case SDM_BUFFER_FORMAT_YCrCb_420_SP:
+            format = sdm::kFormatYCrCb420SemiPlanar;
+            break;
+        case SDM_BUFFER_FORMAT_YCbCr_420_SP:
+            format = sdm::kFormatYCbCr420SemiPlanar;
+            break;
+        case SDM_BUFFER_FORMAT_YCbCr_422_SP:
+            format = sdm::kFormatYCbCr422H2V1SemiPlanar;
+            break;
+        case SDM_BUFFER_FORMAT_YCbCr_422_I:
+            format = sdm::kFormatYCbCr422H2V1Packed;
+            break;
+        default:
+            DLOGE("Unsupported format %d\n", src_fmt);
+            return sdm::kFormatInvalid;
+    }
+
+    return format;
+}
+
+LayerBlending SdmDisplay::GetSDMBlending(uint32_t source)
+{
+    sdm::LayerBlending blending = sdm::kBlendingPremultiplied;
+
+    switch (source) {
+    case SDM_BLENDING_PREMULTIPLIED:
+         blending = sdm::kBlendingPremultiplied;
+         break;
+    case SDM_BLENDING_NONE:
+    default:
+         blending = sdm::kBlendingOpaque;
+         break;
+    }
+
+    return blending;
+}
+
+bool SdmDisplay::GetVideoPresenceByFormatFromGbm(uint32_t fmt)
+{
+    bool is_video_present = false;
+
+    switch (fmt) {
+       case GBM_FORMAT_NV12:
+            is_video_present = true;
+            break;
+       default:
+            is_video_present = false;
+            break;
+    }
+
+    return is_video_present;
+}
+
+uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
+{
+    uint32_t ret = SDM_BUFFER_FORMAT_INVALID;
+
+    switch (fmt) {
+    case GBM_FORMAT_ARGB8888:
+         ret = SDM_BUFFER_FORMAT_BGRA_8888;
+         break;
+    case GBM_FORMAT_XRGB8888:
+         ret = SDM_BUFFER_FORMAT_BGRX_8888;
+         break;
+    case GBM_FORMAT_ABGR8888:
+         ret = SDM_BUFFER_FORMAT_RGBA_8888;
+         break;
+    case GBM_FORMAT_XBGR8888:
+         ret = SDM_BUFFER_FORMAT_RGBX_8888;
+         break;
+    case GBM_FORMAT_BGRA8888:
+    case GBM_FORMAT_RGBA8888:
+         ret = SDM_BUFFER_FORMAT_ARGB_8888;
+         break;
+    case GBM_FORMAT_ARGB4444:
+    case GBM_FORMAT_ABGR4444:
+         ret = SDM_BUFFER_FORMAT_RGBA_4444;
+         break;
+    case GBM_FORMAT_ARGB1555:
+    case GBM_FORMAT_ABGR1555:
+         ret = SDM_BUFFER_FORMAT_RGBA_5551;
+         break;
+    case GBM_FORMAT_RGB565:
+         ret = SDM_BUFFER_FORMAT_BGR_565;
+         break;
+    case GBM_FORMAT_BGR565:
+         ret = SDM_BUFFER_FORMAT_RGB_565;
+         break;
+    case GBM_FORMAT_RGB888:
+         ret = SDM_BUFFER_FORMAT_BGR_888;
+         break;
+    case GBM_FORMAT_BGR888:
+         ret = SDM_BUFFER_FORMAT_RGB_888;
+         break;
+    case GBM_FORMAT_NV12:
+         ret = SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS;
+         break;
+    default:
+         break;
+    }
+
+    return ret;
+}
+
+uint32_t SdmDisplay::GetMappedFormatFromShm(uint32_t fmt)
+{
+    uint32_t ret = SDM_BUFFER_FORMAT_INVALID;
+
+    switch (fmt) {
+    case WL_SHM_FORMAT_ARGB8888:
+     ret = SDM_BUFFER_FORMAT_BGRA_8888;
+     break;
+    case WL_SHM_FORMAT_XRGB8888:
+     ret = SDM_BUFFER_FORMAT_BGRX_8888;
+     break;
+    case WL_SHM_FORMAT_ABGR8888:
+     ret = SDM_BUFFER_FORMAT_RGBA_8888;
+     break;
+    case WL_SHM_FORMAT_XBGR8888:
+     ret = SDM_BUFFER_FORMAT_RGBX_8888;
+     break;
+    case WL_SHM_FORMAT_BGRA8888:
+    case WL_SHM_FORMAT_RGBA8888:
+     ret = SDM_BUFFER_FORMAT_ARGB_8888;
+     break;
+    case WL_SHM_FORMAT_ARGB4444:
+    case WL_SHM_FORMAT_ABGR4444:
+     ret = SDM_BUFFER_FORMAT_RGBA_4444;
+     break;
+    case WL_SHM_FORMAT_ARGB1555:
+    case WL_SHM_FORMAT_ABGR1555:
+     ret = SDM_BUFFER_FORMAT_RGBA_5551;
+     break;
+    case WL_SHM_FORMAT_RGB565:
+     ret = SDM_BUFFER_FORMAT_BGR_565;
+     break;
+    case WL_SHM_FORMAT_BGR565:
+     ret = SDM_BUFFER_FORMAT_RGB_565;
+     break;
+    case WL_SHM_FORMAT_RGB888:
+     ret = SDM_BUFFER_FORMAT_BGR_888;
+     break;
+    case WL_SHM_FORMAT_BGR888:
+     ret = SDM_BUFFER_FORMAT_RGB_888;
+     break;
+    default:
+     break;
+    }
+
+    return ret;
+}
+
+bool SdmDisplay::NeedConvertGbmFormat(struct weston_view *ev, uint32_t format)
+{
+    pixman_region32_t r;
+    bool need_convert = false;
+
+    if (IsTransparentGbmFormat(format)) {
+     pixman_region32_init_rect(&r, 0, 0,
+             ev->surface->width,
+             ev->surface->height);
+     pixman_region32_subtract(&r, &r, &ev->surface->opaque);
+
+     if (!pixman_region32_not_empty(&r))
+         need_convert = true;
+
+     pixman_region32_fini(&r);
+    }
+
+    return need_convert;
+}
+
+uint32_t SdmDisplay::ConvertToOpaqueGbmFormat(uint32_t format)
+{
+    uint32_t ret = GBM_FORMAT_XRGB8888;
+
+    switch (format) {
+    case GBM_FORMAT_ARGB8888:
+     ret = GBM_FORMAT_XRGB8888;
+     break;
+    case GBM_FORMAT_BGRA8888:
+     ret = GBM_FORMAT_BGRX8888;
+     break;
+    case GBM_FORMAT_RGBA8888:
+     ret = GBM_FORMAT_RGBX8888;
+     break;
+    case GBM_FORMAT_ABGR8888:
+     ret = GBM_FORMAT_XBGR8888;
+     break;
+    default:
+     break;
+    }
+
+    return ret;
+}
+
+void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view *ev,
+                    struct Rect *src_ret, struct Rect *dst_ret)
+{
+    struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
+    pixman_region32_t src_rect, dest_rect;
+    pixman_box32_t *box, tbox;
+    wl_fixed_t sx1, sy1, sx2, sy2;
+
+    /* dst rect */
+    pixman_region32_init(&dest_rect);
+    pixman_region32_intersect(&dest_rect, &ev->transform.boundingbox, &output->base.region);
+
+    pixman_region32_translate(&dest_rect, -output->base.x, -output->base.y);
+    box = pixman_region32_extents(&dest_rect);
+
+    {
+     enum wl_output_transform buffer_transform1 = WL_OUTPUT_TRANSFORM_NORMAL;
+
+     switch(output->base.transform) {
+         case 0: buffer_transform1 = WL_OUTPUT_TRANSFORM_NORMAL; break;
+         case 1: buffer_transform1 = WL_OUTPUT_TRANSFORM_90; break;
+         case 2: buffer_transform1 = WL_OUTPUT_TRANSFORM_180; break;
+         case 3: buffer_transform1 = WL_OUTPUT_TRANSFORM_270; break;
+         case 4: buffer_transform1 = WL_OUTPUT_TRANSFORM_FLIPPED; break;
+         case 5: buffer_transform1 = WL_OUTPUT_TRANSFORM_FLIPPED_90; break;
+         case 6: buffer_transform1 = WL_OUTPUT_TRANSFORM_FLIPPED_180; break;
+         case 7: buffer_transform1 = WL_OUTPUT_TRANSFORM_FLIPPED_270; break;
+         default: DLOGE("Invalid buffer transform not supported: %d", output->base.transform);
+            return;
+     }
+
+     tbox = weston_transformed_rect(output->base.width,
+                        output->base.height,
+                        buffer_transform1,
+                        output->base.current_scale,
+                        *box);
+    }
+
+    dst_ret->left = (float)tbox.x1;
+    dst_ret->top = (float)tbox.y1;
+    dst_ret->right = (float)tbox.x2;
+    dst_ret->bottom = (float)tbox.y2;
+    pixman_region32_fini(&dest_rect);
+
+    /* src rect */
+    pixman_region32_init(&src_rect);
+    pixman_region32_intersect(&src_rect, &ev->transform.boundingbox,
+                  &output->base.region);
+    box = pixman_region32_extents(&src_rect);
+
+    weston_view_from_global_fixed(ev,
+             wl_fixed_from_int(box->x1),
+             wl_fixed_from_int(box->y1),
+             &sx1, &sy1);
+    weston_view_from_global_fixed(ev,
+             wl_fixed_from_int(box->x2),
+             wl_fixed_from_int(box->y2),
+             &sx2, &sy2);
+
+    if (sx1 < 0)
+     sx1 = 0;
+    if (sy1 < 0)
+     sy1 = 0;
+    if (sx2 > wl_fixed_from_int(ev->surface->width))
+     sx2 = wl_fixed_from_int(ev->surface->width);
+    if (sy2 > wl_fixed_from_int(ev->surface->height))
+     sy2 = wl_fixed_from_int(ev->surface->height);
+
+    tbox.x1 = sx1;
+    tbox.y1 = sy1;
+    tbox.x2 = sx2;
+    tbox.y2 = sy2;
+
+    {
+     enum wl_output_transform buffer_transform2 = WL_OUTPUT_TRANSFORM_NORMAL;
+
+     switch(viewport->buffer.transform) {
+         case 0: buffer_transform2 = WL_OUTPUT_TRANSFORM_NORMAL; break;
+         case 1: buffer_transform2 = WL_OUTPUT_TRANSFORM_90; break;
+         case 2: buffer_transform2 = WL_OUTPUT_TRANSFORM_180; break;
+         case 3: buffer_transform2 = WL_OUTPUT_TRANSFORM_270; break;
+         case 4: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED; break;
+         case 5: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_90; break;
+         case 6: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_180; break;
+         case 7: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_270; break;
+         default: DLOGE("Invalid buffer transform not supported: %d", viewport->buffer.transform);
+            return;
+     }
+
+     tbox = weston_transformed_rect(wl_fixed_from_int(ev->surface->width),
+              wl_fixed_from_int(ev->surface->height),
+              buffer_transform2,
+              viewport->buffer.scale,
+              tbox);
+    }
+
+    src_ret->left = (float)(tbox.x1 >> 8);
+    src_ret->top = (float)(tbox.y1 >> 8);
+    src_ret->right = (float)(tbox.x2 >> 8);
+    src_ret->bottom = (float)(tbox.y2 >> 8);
+    pixman_region32_fini(&src_rect);
+}
+
+int SdmDisplay::ComputeDirtyRegion(struct weston_view *ev,
+                    struct RectArray *dirty) {
+    pixman_region32_t temp;
+    struct weston_surface *es = ev->surface;
+    pixman_box32_t *rectangles = NULL;
+    int n, i;
+
+    pixman_region32_init(&temp);
+    pixman_region32_intersect_rect(&temp, &es->damage, 0,
+                    0, es->width, es->height);
+    rectangles = pixman_region32_rectangles(&temp, &n);
+    if (!n) {
+     pixman_region32_fini(&temp);
+     return 0;
+    }
+
+    dirty->rects = reinterpret_cast<struct Rect *> \
+                    (zalloc(n * sizeof(struct Rect)));
+    if (dirty->rects == NULL) {
+     DLOGE("out of memory for allocating dirty region\n");
+     return -1;
+    }
+    for (i = 0; i < n; i++) {
+     dirty->rects[i].left = (float)rectangles[i].x1;
+     dirty->rects[i].top = (float)rectangles[i].y1;
+     dirty->rects[i].right = (float)rectangles[i].x2;
+     dirty->rects[i].bottom = (float)rectangles[i].y2;
+    }
+    dirty->count = n;
+    pixman_region32_fini(&temp);
+
+    return 0;
+}
+
+uint8_t SdmDisplay::GetGlobalAlpha(struct weston_view *ev)
+{
+    if (ev->alpha > 1.0f)
+     return 0xFF;
+    else if (ev->alpha < 0.0f)
+     return 0;
+    else
+     return (uint8_t)(0xFF * ev->alpha);
+}
+
+int SdmDisplay::GetVisibleRegion(struct drm_output *output, struct weston_view *ev,
+                                         pixman_region32_t *aboved_opaque,
+                                         struct RectArray *visible)
+{
+    pixman_region32_t temp;
+    pixman_box32_t *rectangles = NULL;
+    int n, i;
+
+    pixman_region32_init(&temp);
+    pixman_region32_copy(&temp, &ev->transform.boundingbox);
+    pixman_region32_subtract(&temp, &temp, aboved_opaque);
+    pixman_region32_intersect(&temp, &output->base.region, &temp);
+    pixman_region32_translate(&temp, -output->base.x, -output->base.y);
+
+    rectangles = pixman_region32_rectangles(&temp, &n);
+    if (!n) {
+     pixman_region32_fini(&temp);
+     return 0;
+    }
+
+    visible->rects = reinterpret_cast<struct Rect *> (zalloc(n * sizeof(struct Rect)));
+    if (visible->rects == NULL) {
+     DLOGE("out of memory for allocating visible region\n");
+     return -1;
+    }
+    for (i = 0; i < n; i++) {
+     visible->rects[i].left = (float)rectangles[i].x1;
+     visible->rects[i].top = (float)rectangles[i].y1;
+     visible->rects[i].right = (float)rectangles[i].x2;
+     visible->rects[i].bottom = (float)rectangles[i].y2;
+    }
+    visible->count = n;
+    pixman_region32_fini(&temp);
+
+    return 0;
+}
+
+bool SdmDisplay::IsTransparentGbmFormat(uint32_t format)
+{
+    return false;
+}
+
+const char *SdmDisplay::GetDisplayString() {
+    switch (display_type_) {
+    case kPrimary:
+      return "primary";
+    case kHDMI:
+      return "hdmi";
+    case kVirtual:
+      return "virtual";
+    default:
+      return "invalid";
+  }
+}
+#ifdef __cplusplus
+}
+#endif
+
+}  // namespace sdm
