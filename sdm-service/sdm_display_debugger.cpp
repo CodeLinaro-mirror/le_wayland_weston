@@ -23,6 +23,7 @@
 */
 
 #include "sdm_display_debugger.h"
+#include <cutils/properties.h>
 
 #define __CLASS__ "SdmDisplayDebugger"
 
@@ -81,18 +82,29 @@ void SdmDisplayDebugger::Verbose(DebugTag tag, const char *format, ...) {
 }
 
 DisplayError SdmDisplayDebugger::GetProperty(const char *property_name, int *value) {
+  char property[PROPERTY_VALUE_MAX];
+
+  if (property_get(property_name, property, NULL) > 0) {
+    *value = atoi(property);
+    return kErrorNone;
+  }
+
   return kErrorNotSupported;
 }
 
 DisplayError SdmDisplayDebugger::GetProperty(const char *property_name, char *value) {
-  return kErrorNotSupported;
-}
+  if (property_get(property_name, value, NULL) > 0) {
+    return kErrorNone;
+  }
 
-DisplayError SdmDisplayDebugger::SetProperty(const char *property_name, int value) {
   return kErrorNotSupported;
 }
 
 DisplayError SdmDisplayDebugger::SetProperty(const char *property_name, const char *value) {
+  if (property_set(property_name, value) == 0) {
+    return kErrorNone;
+  }
+
   return kErrorNotSupported;
 }
 
