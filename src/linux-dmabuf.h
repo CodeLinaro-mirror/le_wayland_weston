@@ -22,6 +22,9 @@
 
 #ifndef WESTON_LINUX_DMABUF_H
 #define WESTON_LINUX_DMABUF_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 
@@ -80,5 +83,9 @@ linux_dmabuf_buffer_get_user_data(struct linux_dmabuf_buffer *buffer);
 void
 linux_dmabuf_buffer_send_server_error(struct linux_dmabuf_buffer *buffer,
 				      const char *msg);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* WESTON_LINUX_DMABUF_H */

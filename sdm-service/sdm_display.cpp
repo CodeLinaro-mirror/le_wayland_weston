@@ -59,6 +59,13 @@
 #include <math.h>
 #include "sdm_display.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
+#include "../src/linux-dmabuf.h"
+
 #define __CLASS__ "SdmDisplay"
 
 struct drm_output *drm_output_;
@@ -68,7 +75,7 @@ namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
 #define GET_CURSOR_SLOT(max_layers) ((max_layers) - 2)
-#define SDM_DISPLAY_DEBUG 0
+#define SDM_DISPLAY_DEBUG 1
 
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
     display_type_ = type;
@@ -226,8 +233,6 @@ DisplayError SdmDisplay::SetVSyncState(bool VSyncState, struct drm_output *outpu
     DisplayError error;
 
     drm_output_ = output;
-    error = HWEventsInterface::Create(INT(display_type_), event_handler, event_list_,
-                                      &hw_events_intf_);
     error = display_intf_->SetVSyncState(VSyncState);
     if (error != kErrorNone) {
         DLOGE("VSync state setting failed. Error = %d", error);
@@ -361,13 +366,17 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
     layer_buffer->format = GetSDMFormat(layer_geometry->format, layer_geometry->flags);
     layer_buffer->width = layer_geometry->width;
     layer_buffer->height = layer_geometry->height;
-    layer_buffer->fb_id = layer_geometry->fb_id;
+
+    if (index != layer_stack_.layers.size()-1)
+        layer_buffer->planes[0].fd = layer_geometry->ion_fd;
+
     /* TODO: Below information should be set according to the real user scenario */
     layer_buffer->flags.secure = false;
-    layer_buffer->flags.video = false;
+    layer_buffer->flags.video = layer_geometry->flags.video_present;
     layer_buffer->flags.macro_tile = false;
     layer_buffer->flags.interlace = false;
     layer_buffer->flags.secure_display = false;
+    layer_buffer->flags.secure_camera = false;
     /* 2. Fill layer information */
     if (layer_geometry->composition == SDM_COMPOSITION_FB_TARGET)
         layer->composition = sdm::kCompositionGPUTarget;
@@ -397,6 +406,16 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
 
     layer->frame_rate = fps_;
     layer->solid_fill_color = 0;
+
+    layer->flags.skip = is_skip;
+    if (is_skip)
+       layer_stack_.flags.skip_present = is_skip;
+    if (layer_buffer->flags.video)
+       layer_stack_.flags.video_present = true;
+    layer->flags.updating = true;
+    layer->flags.solid_fill = false;
+    layer->flags.cursor = false;
+    layer->flags.single_buffer = false;
 
     return error;
 }
@@ -514,13 +533,13 @@ int SdmDisplay::GetDrmMasterFd() {
 int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                          struct LayerGeometry **glayer,
                          struct sdm_layer *sdm_layer) {
-    struct drm_backend *b =
-     (struct drm_backend *)output->base.compositor->backend;
+    struct drm_backend *b = (struct drm_backend *)output->base.compositor->backend;
     struct LayerGeometry *layer;
     struct weston_view *ev = sdm_layer->view;
     struct weston_surface *es = ev->surface;
     bool is_cursor = sdm_layer->is_cursor;
-    uint32_t format;
+    uint32_t format = GBM_FORMAT_XBGR8888;
+    struct linux_dmabuf_buffer *dmabuf;
 
     *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
                            (zalloc(sizeof *layer));
@@ -528,58 +547,81 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->width = es->width;
     layer->height = es->height;
     layer->fb_id = -1;
+    layer->format = SDM_BUFFER_FORMAT_RGBX_8888;
+
     if (!sdm_layer->is_skip) {
-     struct gbm_bo *bo;
-     DLOGE("Should not be here");
-     bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_WL_BUFFER,
-                  wl_resource_get_user_data(es->buffer_ref.buffer->resource),
-                  GBM_BO_USE_SCANOUT);
-     if (bo == NULL)
-         DLOGE("fail to import gbm bo!\n");
-     else {
-          uint32_t width, height;
-          uint32_t *fbid;
-          uint32_t fb_id, stride, handle, size, format;
-          uint32_t fb_id1;
-          width = gbm_bo_get_width(bo);
-          height = gbm_bo_get_height(bo);
-          stride = gbm_bo_get_stride(bo);
-          handle = gbm_bo_get_handle(bo).u32;
-          format = gbm_bo_get_format(bo);
-          int drm_fd = GetDrmMasterFd();
+      struct gbm_bo *bo;
+        //check whether the buffer resource is created by linux dma buf
+        if ((dmabuf = linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource))) {
+            struct gbm_import_fd_data gbm_dmabuf = {
+                .fd     = dmabuf->dmabuf_fd[0],
+                .width  = dmabuf->width,
+                .height = dmabuf->height,
+                .stride = dmabuf->stride[0],
+                .format = dmabuf->format
+            };
+            bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
+        } else {
+            bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
+                               wl_resource_get_user_data(es->buffer_ref.buffer->resource),
+                               GBM_BO_USE_SCANOUT);
+        }
 
-          uint32_t handles[4], pitches[4], offsets[4];
-          handles[0] = handle;
-          pitches[0] = stride;
-          offsets[0] = 0;
+         if (bo == NULL)
+            DLOGE("fail to import gbm bo!\n");
+         else {
+            uint32_t width, height;
+            uint32_t *fbid;
+            uint32_t fb_id, stride, handle, size;
+            uint32_t fb_id1;
+            width = gbm_bo_get_width(bo);
+            height = gbm_bo_get_height(bo);
+            stride = gbm_bo_get_stride(bo);
+            handle = gbm_bo_get_handle(bo).u32;
+            format = gbm_bo_get_format(bo);
+            int drm_fd = GetDrmMasterFd();
 
-          drmModeAddFB2(drm_fd, width, height, format, handles, pitches, offsets, &fb_id, 0);
+            uint32_t handles[4], pitches[4], offsets[4];
+            handles[0] = handle;
+            pitches[0] = stride;
+            offsets[0] = 0;
 
-          layer->fb_id = fb_id;
-     }
+            uint32_t alignedWidth = 0;
+            uint32_t alignedHeight = 0;
+
+            gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_WIDTH, bo, &alignedWidth);
+            gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_HEIGHT, bo, &alignedHeight);
+
+            // Override buffer width/height to reflect aligned width and aligned height.
+            layer->width = alignedWidth;
+            layer->height = alignedHeight;
+            layer->ion_fd = gbm_bo_get_fd(bo);
+        }
     }
 
     if (NeedConvertGbmFormat(ev, format))
-     format = ConvertToOpaqueGbmFormat(format);
+        format = ConvertToOpaqueGbmFormat(format);
     layer->format = GetMappedFormatFromGbm(format);
 
     /* Get src/dst rect */
     ComputeSrcDstRect(output, ev, &layer->src_rect, &layer->dst_rect);
     /* Get visible rects */
     if (GetVisibleRegion(output, ev, &sdm_layer->overlap, &layer->visible_regions))
-     return -1;
+        return -1;
     /*
      * Get dirty rects. It's not surprised a view has null damage region, that means
      * the buffer content of view is not changed since last frame, eg. cursor.
      */
     if (ComputeDirtyRegion(ev, &layer->dirty_regions))
-     return -1;
+        return -1;
+
     /* Get blending. Now Weston only support premultipled alpha */
     /* TODO (user): update property alpha, blend_op */
     if (ev->alpha == 1.0f)
      layer->blending = SDM_BLENDING_NONE;
     else
      layer->blending = SDM_BLENDING_PREMULTIPLIED;
+
     /* Set no transform for view since bounding box already been applied by transform */
     layer->transform = SDM_TRANSFORM_NORMAL;
     /* Get global alpha */
@@ -589,10 +631,9 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->flags.is_cursor = is_cursor;
     /* TODO:Check if view has a ubwc buffer. Now set it to false */
     layer->flags.has_ubwc_buf = 0;
+    layer->flags.video_present = GetVideoPresenceByFormatFromGbm(format);
     /* Initialize all views with GPU composition first, SDM will update them after prepare */
     layer->composition = SDM_COMPOSITION_GPU;
-    /* Hook ev to plugin, then we can assign these ev to different plane later. */
-    layer->usr_data = (void *)sdm_layer;
 
     return 0;
 }
@@ -603,7 +644,6 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     struct LayerGeometry *glayer = NULL;
     uint32_t gpu_target_index = GET_GPU_TARGET_SLOT(output->view_count);
     uint32_t index = 0;
-    bool has_skip_layer = false;
 
     if (shutdown_pending_) {
     return kErrorShutDown;
@@ -618,25 +658,23 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
 
     /* If no view can be handled by SDM, just skip below and prepare fb target directly. */
     if (gpu_target_index > 0) {
-        wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
-         if(PrepareNormalLayerGeometry(output, &glayer, sdm_layer)) {
-             DLOGE("fail to prepare normal layer geometry.");
-             return kErrorUndefined;
-         }
+        wl_list_for_each_reverse(sdm_layer, &output->sdm_layer_list, link) {
+            if(PrepareNormalLayerGeometry(output, &glayer, sdm_layer)) {
+                DLOGE("fail to prepare normal layer geometry.");
+                return kErrorUndefined;
+            }
 
-         if (!has_skip_layer) {
-             if (sdm_layer->is_skip)
-                has_skip_layer = sdm_layer->is_skip;
-         }
+            error = AddGeometryLayerToLayerStack(output, index++, glayer, sdm_layer->is_skip);
+            if (error) {
+                DLOGE("failed add Geometry Layer to LayerStack.");
+                /* TODO: Free glayer */
+                return kErrorUndefined;
+            }
+            /* TODO: Free glayer */
 
-         error = AddGeometryLayerToLayerStack(output, index++, glayer, sdm_layer->is_skip);
-         if (error) {
-             DLOGE("failed add Geometry Layer to LayerStack.");
-             /* TODO: Free glayer */
-             return kErrorUndefined;
-         }
-         /* TODO: Free glayer */
-     }
+            if (sdm_layer->is_skip)
+                layer_stack_.flags.skip_present = true;
+        }
     }
 
     int err = PrepareFbLayerGeometry(output, &glayer);
@@ -644,19 +682,14 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
         DLOGE("failed to prepare Layer Geometry Fb target\n");
         return kErrorUndefined;
     } else {
-        error = AddGeometryLayerToLayerStack(output, index, glayer, true); // is_skip = true
-     if (error) {
-        DLOGE("fail to prepare Fb target: Add Geometry failure fb\n");
+        error = AddGeometryLayerToLayerStack(output, index, glayer, true);
+        if (error) {
+            DLOGE("fail to prepare Fb target: Add Geometry failure fb\n");
+            /* TODO: Free glayer */
+            return kErrorUndefined;
+        }
         /* TODO: Free glayer */
-        return kErrorUndefined;
-     }
-     /* TODO: Free glayer */
     }
-
-    /* Update layerstack flags */
-    if (has_skip_layer)
-        layer_stack_.flags.skip_present = true;
-    layer_stack_.flags.cursor_present = false;
 
     return error;
 }
@@ -677,17 +710,6 @@ DisplayError SdmDisplay::PostPrepare(struct drm_output *output)
 {
     DisplayError error = kErrorNone;
     // TODO: Check for Post-Prepare stuff here
-
-    LayerStack *stack = &layer_stack_;
-    for (uint32_t i = 0; i < output->view_count; i++) {
-     // TODO: Fix following, check
-     // TODO: use struct output in plave of configs =>
-     // TODO: configs->layers[i].composition =
-     // TODO:    GetComposition(stack->layers.at(i)->composition);
-     // TODO:    GetSDMLayerConfig(&config->sdm_layer_configs[i],
-     // TODO:    &hw_layers->config[i]);
-    }
-
     return error;
 }
 
@@ -723,7 +745,6 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
       sprintf(buf, "%s\n Plane Alpha = %#x, frame_rate = %d,  solid_fill_color = %d",
         buf, layer->plane_alpha, layer->frame_rate, layer->solid_fill_color);
       sprintf(buf, "%s\n LayerFlags = %#x", buf, layer->flags);
-      sprintf(buf, "%s\n fb_id = %d", buf, layer->input_buffer.fb_id);
       DLOGI("Dumping Layer stack:\n%s\n", buf);
   }
 
@@ -756,7 +777,23 @@ DisplayError SdmDisplay::PreCommit()
 DisplayError SdmDisplay::PostCommit()
 {
     DisplayError error = kErrorNone;
-    // TODO: Check for post-commit stuff here
+
+    //Iterate through the layer buffer and close release fences
+    for (uint32_t i = 0; i < layer_stack_.layers.size(); i++) {
+        Layer *layer = layer_stack_.layers.at(i);
+        LayerBuffer *layer_buffer = &layer->input_buffer;
+
+        if (layer_buffer->release_fence_fd > 0) {
+          close(layer_buffer->release_fence_fd);
+          layer_buffer->release_fence_fd = -1;
+        }
+    }
+
+    //close release fence fds
+    if (layer_stack_.retire_fence_fd > 0) {
+      close(layer_stack_.retire_fence_fd);
+      layer_stack_.retire_fence_fd = -1;
+    }
 
     return error;
 }
@@ -774,11 +811,7 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
 
     GpuTargetlayer = layer_stack_.layers.at(GPUTarget_index);
 
-    GpuTargetlayer->input_buffer.fb_id = fb_id;
-
-    #if SDM_DISPLAY_DEBUG
-    DLOGI("fetching fb_id for now and is %d \n", GpuTargetlayer->input_buffer.fb_id);
-    #endif
+    GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
 
     ret = display_intf_->Commit(&layer_stack_);
     PostCommit();
@@ -884,6 +917,22 @@ LayerBlending SdmDisplay::GetSDMBlending(uint32_t source)
     }
 
     return blending;
+}
+
+bool SdmDisplay::GetVideoPresenceByFormatFromGbm(uint32_t fmt)
+{
+    bool is_video_present = false;
+
+    switch (fmt) {
+       case GBM_FORMAT_NV12:
+            is_video_present = true;
+            break;
+       default:
+            is_video_present = false;
+            break;
+    }
+
+    return is_video_present;
 }
 
 uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
@@ -1215,10 +1264,7 @@ int SdmDisplay::GetVisibleRegion(struct drm_output *output, struct weston_view *
 
 bool SdmDisplay::IsTransparentGbmFormat(uint32_t format)
 {
-    return (format == GBM_FORMAT_ARGB8888 ||
-         format == GBM_FORMAT_BGRA8888 ||
-         format == GBM_FORMAT_RGBA8888 ||
-         format == GBM_FORMAT_ABGR8888);
+    return false;
 }
 
 const char *SdmDisplay::GetDisplayString() {
@@ -1233,5 +1279,8 @@ const char *SdmDisplay::GetDisplayString() {
       return "invalid";
   }
 }
+#ifdef __cplusplus
+}
+#endif
 
 }  // namespace sdm

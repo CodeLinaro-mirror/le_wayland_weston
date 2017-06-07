@@ -33,6 +33,16 @@
 #include <cstdlib>
 #include <cassert>
 #include <stdint.h>
+
+enum {
+       NONE,
+       ERROR,
+       WARNING,
+       INFO,
+       DEBUG,
+       VERBOSE
+};
+
 #define WLOG(tag, method, format, ...) SdmDisplayDebugger::Get()->method(tag, \
                                                             __CLASS__ "::%s: " format, \
                                                             __FUNCTION__, ##__VA_ARGS__)
@@ -68,6 +78,8 @@ class SdmDisplayDebugger : public DebugHandler {
   virtual DisplayError GetProperty(const char *property_name, char *value);
   virtual DisplayError SetProperty(const char *property_name, int value);
   virtual DisplayError SetProperty(const char *property_name, const char *value);
+
+  int debug_level_ = INFO;
 
  private:
   static SdmDisplayDebugger debug_handler_;
