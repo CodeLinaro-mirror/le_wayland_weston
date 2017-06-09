@@ -74,6 +74,7 @@
 #include "vaapi-recorder.h"
 #include "presentation_timing-server-protocol.h"
 #include "linux-dmabuf.h"
+#include "gbm-buffer-backend.h"
 #include "../sdm-service/sdm_display_connect.h"
 #include "../sdm-service/compositor-sdm-output.h"
 #include <pthread.h>
@@ -2223,6 +2224,16 @@ drm_backend_create(struct weston_compositor *compositor,
             weston_log("Error: initializing dmabuf "
                    "support failed.\n");
     }
+
+    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buf import=%p",
+                           compositor->renderer->import_gbm_buffer);
+
+    if (compositor->renderer->import_gbm_buffer) {
+        if (gbm_buffer_backend_setup(compositor) < 0)
+            weston_log("Error: initializing gbm_buffer_backend_setup "
+                   "support failed.\n");
+    }
+
 
     compositor->backend = &b->base;
 

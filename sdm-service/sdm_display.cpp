@@ -371,7 +371,7 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
         layer_buffer->planes[0].fd = layer_geometry->ion_fd;
 
     /* TODO: Below information should be set according to the real user scenario */
-    layer_buffer->flags.secure = false;
+    layer_buffer->flags.secure = layer_geometry->flags.secure_present;
     layer_buffer->flags.video = layer_geometry->flags.video_present;
     layer_buffer->flags.macro_tile = false;
     layer_buffer->flags.interlace = false;
@@ -412,6 +412,8 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
        layer_stack_.flags.skip_present = is_skip;
     if (layer_buffer->flags.video)
        layer_stack_.flags.video_present = true;
+    if (layer_buffer->flags.secure)
+        layer_stack_.flags.secure_present = true;
     layer->flags.updating = true;
     layer->flags.solid_fill = false;
     layer->flags.cursor = false;
@@ -540,6 +542,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     bool is_cursor = sdm_layer->is_cursor;
     uint32_t format = GBM_FORMAT_XBGR8888;
     struct linux_dmabuf_buffer *dmabuf;
+    struct gbm_buffer *gbm_buf;
 
     *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
                            (zalloc(sizeof *layer));
@@ -561,6 +564,17 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                 .format = dmabuf->format
             };
             bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
+        } else if ((gbm_buf = gbm_buffer_get(es->buffer_ref.buffer->resource))) {
+          struct gbm_buf_info gbm_bufinfo = {
+              .fd           = gbm_buf->fd,
+              .metadata_fd  = gbm_buf->metadata_fd,
+              .width        = gbm_buf->width,
+              .height       = gbm_buf->height,
+              .format       = gbm_buf->format
+          };
+          bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
+                             &gbm_bufinfo,
+                             GBM_BO_USE_SCANOUT);
         } else {
             bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
                                wl_resource_get_user_data(es->buffer_ref.buffer->resource),
@@ -588,14 +602,17 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
 
             uint32_t alignedWidth = 0;
             uint32_t alignedHeight = 0;
+            uint32_t secure_status = 0;
 
             gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_WIDTH, bo, &alignedWidth);
             gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_HEIGHT, bo, &alignedHeight);
+            gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, bo, &secure_status);
 
             // Override buffer width/height to reflect aligned width and aligned height.
             layer->width = alignedWidth;
             layer->height = alignedHeight;
             layer->ion_fd = gbm_bo_get_fd(bo);
+            layer->flags.secure_present = secure_status;
         }
     }
 
