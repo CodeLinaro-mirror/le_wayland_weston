@@ -102,6 +102,7 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
         uevent_locker_.Signal();
         uevent_locker_.Unlock();
     }
+    const char * FourccToString(uint32_t fourcc);
 
  protected:
     virtual DisplayError VSync(const DisplayEventVSync &vsync);
