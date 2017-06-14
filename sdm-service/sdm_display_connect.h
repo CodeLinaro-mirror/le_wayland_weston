@@ -249,6 +249,34 @@ int ReleaseWait(int display_id);
 */
 int get_drm_master_fd();
 
+/*! @brief Method for enable PLL update function.
+
+    @details enable or disable PLL update function.
+
+    @param[in] display_id \link int \endlink
+
+    @param[in] enable \link int \endlink
+
+    @return \link int \endlink
+
+    @sa
+*/
+int EnablePllUpdate(int display_id, int enable);
+
+/*! @brief Method for update display PLL.
+
+    @details update display PLL by ppm.
+
+    @param[in] display_id \link int \endlink
+
+    @param[in] ppm \link int \endlink
+
+    @return \link int \endlink
+
+    @sa
+*/
+int UpdateDisplayPll(int display_id, int ppm);
+
 #ifdef __cplusplus
 }
 #endif

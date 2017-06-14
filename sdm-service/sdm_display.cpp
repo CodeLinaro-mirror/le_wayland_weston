@@ -1328,6 +1328,33 @@ const char *SdmDisplay::GetDisplayString() {
       return "invalid";
   }
 }
+
+DisplayError SdmDisplay::EnablePllUpdate(int32_t enable)
+{
+  DisplayError error;
+
+  error = display_intf_->EnablePllUpdate(enable);
+  if (error != kErrorNone) {
+    DLOGE("%s pll update failed. Error = %d",
+      enable ? "enable" : "disable", error);
+    return error;
+  }
+
+  return kErrorNone;
+}
+
+DisplayError SdmDisplay::UpdateDisplayPll(int32_t ppm)
+{
+  DisplayError error;
+
+  error = display_intf_->UpdateDisplayPll(ppm);
+  if (error != kErrorNone) {
+    DLOGE("Update display pll failed. Error = %d", error);
+    return error;
+  }
+
+  return kErrorNone;
+}
 #ifdef __cplusplus
 }
 #endif

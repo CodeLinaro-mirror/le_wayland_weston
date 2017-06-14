@@ -404,6 +404,16 @@ int ReleaseWait(int display_id)
     display_[display_id]->ReleaseWait();
 }
 
+int EnablePllUpdate(int display_id, int enable)
+{
+    return display_[display_id]->EnablePllUpdate(enable);
+}
+
+int UpdateDisplayPll(int display_id, int enable)
+{
+    return display_[display_id]->UpdateDisplayPll(enable);
+}
+
 }// namespace sdm
 #ifdef __cplusplus
 }

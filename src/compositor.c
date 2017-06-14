@@ -4329,6 +4329,20 @@ pll_destroy(struct wl_client *client,
 }
 
 static void
+pll_enable_ppm(struct wl_client *client,
+		    struct wl_resource *pll,
+		    int32_t enable)
+{
+	struct weston_compositor *compositor = wl_resource_get_user_data(pll);
+	struct weston_output *output, *next;
+
+	wl_list_for_each_safe(output, next, &compositor->output_list, link) {
+		if (output->enable_ppm)
+			output->enable_ppm(output, enable);
+	}
+}
+
+static void
 pll_set_ppm(struct wl_client *client,
 		    struct wl_resource *pll,
 		    int32_t ppm)
@@ -4344,6 +4358,7 @@ pll_set_ppm(struct wl_client *client,
 
 static const struct wl_pll_interface pll_interface = {
 	pll_destroy,
+	pll_enable_ppm,
 	pll_set_ppm
 };
 
