@@ -681,20 +681,15 @@ drm_assign_planes(struct weston_output *output_base)
             is_skip = true;
         }
 
-        next_plane = primary;
-        weston_view_move_to_plane(ev, next_plane);
-
-        if (next_plane == primary)
-            pixman_region32_union(&overlap, &overlap,
-                          &ev->transform.boundingbox);
-
-        if (next_plane == primary ) {
-            /* cursor plane involves a copy */
-            ev->psf_flags = 0;
+        if (is_skip) {
+          /* Composed by GPU */
+          next_plane = primary;
+          weston_view_move_to_plane(ev, next_plane);
+          pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
+          ev->psf_flags = 0;
         } else {
-            /* All other planes are a direct scanout of a
-             * single client buffer.
-             */
+            /* Composed by Display Hardware directly */
+            /* ToDo(User): handle scenarios if SDE composition is not possible */
             ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
         }
 
