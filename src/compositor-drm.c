@@ -3112,6 +3112,7 @@ switch_to_gl_renderer(struct drm_backend *b)
 			weston_log("Error: initializing dmabuf "
 				   "support failed.\n");
 	}
+
 }
 
 static void
@@ -3278,9 +3279,8 @@ drm_backend_create(struct weston_compositor *compositor,
 				   "support failed.\n");
 	}
 
-	compositor->backend = &b->base;
-
-	return b;
+    compositor->backend = &b->base;
+    return b;
 
 err_udev_monitor:
 	wl_event_source_remove(b->udev_drm_source);

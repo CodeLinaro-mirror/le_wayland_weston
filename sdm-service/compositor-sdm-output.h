@@ -79,6 +79,7 @@
 #include "vaapi-recorder.h"
 #include "presentation_timing-server-protocol.h"
 #include "linux-dmabuf.h"
+#include "gbm-buffer-backend.h"
 
 struct drm_backend {
        struct weston_backend base;

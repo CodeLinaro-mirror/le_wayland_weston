@@ -112,6 +112,7 @@ struct LayerGeometryFlags {
        uint32_t is_cursor : 1;
        uint32_t has_ubwc_buf : 1;
        uint32_t video_present: 1;
+       uint32_t secure_present: 1;
 };
 
 

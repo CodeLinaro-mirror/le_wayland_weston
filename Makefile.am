@@ -96,6 +96,8 @@ weston_SOURCES =					\
 	src/main.c					\
 	src/linux-dmabuf.c				\
 	src/linux-dmabuf.h				\
+	src/gbm-buffer-backend.c			\
+	src/gbm-buffer-backend.h			\
 	shared/helpers.h				\
 	shared/matrix.c					\
 	shared/matrix.h					\
@@ -119,8 +121,10 @@ nodist_weston_SOURCES =					\
 	protocol/presentation_timing-server-protocol.h	\
 	protocol/scaler-protocol.c			\
 	protocol/scaler-server-protocol.h		\
-	protocol/pll-protocol.c			\
-	protocol/pll-server-protocol.h		\
+	protocol/pll-protocol.c				\
+	protocol/pll-server-protocol.h			\
+	protocol/gbm-buffer-backend-protocol.c		\
+	protocol/gbm-buffer-backend-server-protocol.h	\
 	protocol/linux-dmabuf-protocol.c		\
 	protocol/linux-dmabuf-server-protocol.h
 
@@ -1373,7 +1377,8 @@ EXTRA_DIST +=					\
 	protocol/ivi-application.xml		\
 	protocol/ivi-hmi-controller.xml		\
 	protocol/linux-dmabuf.xml		\
-	protocol/pll.xml
+	protocol/pll.xml			\
+	protocol/gbm-buffer-backend.xml
 
 #
 # manual test modules in tests subdirectory
