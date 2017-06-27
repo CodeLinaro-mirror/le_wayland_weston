@@ -2756,13 +2756,14 @@ gl_renderer_setup_egl_extensions(struct weston_compositor *ec)
 
 	return 0;
 }
-
+// Enable alpha component in opaque_attribs for successful
+// GBM_FORMAT_ARGB8888 configuration.
 static const EGLint gl_renderer_opaque_attribs[] = {
 	EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
 	EGL_RED_SIZE, 1,
 	EGL_GREEN_SIZE, 1,
 	EGL_BLUE_SIZE, 1,
-	EGL_ALPHA_SIZE, 0,
+	EGL_ALPHA_SIZE, 1,
 	EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
 	EGL_NONE
 };
