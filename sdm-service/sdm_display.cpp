@@ -88,6 +88,17 @@ SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
 SdmDisplay::~SdmDisplay() {
 }
 
+
+const char * SdmDisplay::FourccToString(uint32_t fourcc)
+{
+    static __thread char s[4];
+    uint32_t fmt = htole32(fourcc);
+
+    memcpy(s, &fmt, 4);
+
+    return s;
+}
+
 DisplayError SdmDisplay::Init() {
     DisplayError error = kErrorNone;
 
@@ -856,6 +867,12 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
             case SDM_BUFFER_FORMAT_NV12_ENCODEABLE:
                 format = sdm::kFormatYCbCr420SPVenusUbwc;
                 break;
+            case SDM_BUFFER_FORMAT_YCbCr_420_TP10_UBWC:
+                format = sdm::kFormatYCbCr420TP10Ubwc;
+                break;
+            case SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC:
+                format = sdm::kFormatYCbCr420P010Ubwc;
+                break;
             default:
                 DLOGE("Unsupported UBWC format %d\n", src_fmt);
                 return sdm::kFormatInvalid;
@@ -895,6 +912,12 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
         case SDM_BUFFER_FORMAT_NV12_ENCODEABLE:
         case SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS:
             format = sdm::kFormatYCbCr420SemiPlanarVenus;
+            break;
+        case SDM_BUFFER_FORMAT_YCbCr_420_TP10_UBWC:
+            format = sdm::kFormatYCbCr420TP10Ubwc;
+            break;
+        case SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC:
+            format = sdm::kFormatYCbCr420P010Ubwc;
             break;
         case SDM_BUFFER_FORMAT_YV12:
             format = sdm::kFormatYCrCb420PlanarStride16;
@@ -942,6 +965,8 @@ bool SdmDisplay::GetVideoPresenceByFormatFromGbm(uint32_t fmt)
 
     switch (fmt) {
        case GBM_FORMAT_NV12:
+       case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+       case GBM_FORMAT_YCbCr_420_P010_UBWC:
             is_video_present = true;
             break;
        default:
@@ -996,7 +1021,14 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
     case GBM_FORMAT_NV12:
          ret = SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS;
          break;
+    case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+         ret = SDM_BUFFER_FORMAT_YCbCr_420_TP10_UBWC;
+         break;
+    case GBM_FORMAT_YCbCr_420_P010_UBWC:
+        ret = SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC;
+        break;
     default:
+         DLOGE("Unsupported GBM format %s\n", FourccToString(fmt));
          break;
     }
 
@@ -1295,6 +1327,33 @@ const char *SdmDisplay::GetDisplayString() {
     default:
       return "invalid";
   }
+}
+
+DisplayError SdmDisplay::EnablePllUpdate(int32_t enable)
+{
+  DisplayError error;
+
+  error = display_intf_->EnablePllUpdate(enable);
+  if (error != kErrorNone) {
+    DLOGE("%s pll update failed. Error = %d",
+      enable ? "enable" : "disable", error);
+    return error;
+  }
+
+  return kErrorNone;
+}
+
+DisplayError SdmDisplay::UpdateDisplayPll(int32_t ppm)
+{
+  DisplayError error;
+
+  error = display_intf_->UpdateDisplayPll(ppm);
+  if (error != kErrorNone) {
+    DLOGE("Update display pll failed. Error = %d", error);
+    return error;
+  }
+
+  return kErrorNone;
 }
 #ifdef __cplusplus
 }

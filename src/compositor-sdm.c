@@ -1109,6 +1109,44 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
         output->dpms = level;
 }
 
+static void
+drm_enable_ppm(struct weston_output *output_base, int32_t enable)
+{
+	int ret = 0;
+
+	if (display_id < 0) {
+		weston_log("invalid display id\n");
+		return;
+	}
+
+	ret = EnablePllUpdate(display_id, enable);
+	if (ret) {
+		weston_log("DRM: PLL: enable pll update failed for %d\n",
+			display_id);
+	}
+
+	return;
+}
+
+static void
+drm_set_ppm(struct weston_output *output_base, int32_t ppm)
+{
+	int ret = 0;
+
+	if (display_id < 0) {
+		weston_log("invalid display id\n");
+		return;
+	}
+
+	ret = UpdateDisplayPll(display_id, ppm);
+	if (ret) {
+		weston_log("DRM: PLL: update display pll failed for %d\n",
+			display_id);
+	}
+
+	return;
+}
+
 /* Init output state that depends on gl or gbm */
 static int
 drm_output_init_egl(struct drm_output *output, struct drm_backend *b)
@@ -1645,6 +1683,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.assign_planes = drm_assign_planes;
     output->base.set_dpms = drm_set_dpms;
     output->base.switch_mode = drm_output_switch_mode;
+    output->base.enable_ppm = drm_enable_ppm;
+    output->base.set_ppm = drm_set_ppm;
 
     output->base.gamma_size = 0;
     output->base.set_gamma = NULL;
