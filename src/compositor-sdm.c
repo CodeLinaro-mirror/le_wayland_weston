@@ -2140,9 +2140,12 @@ drm_backend_create(struct weston_compositor *compositor,
 
     b->compositor = compositor;
 
+    // Framebuffer should be in ARGB format to support mixed mode composition
+	// e.g., if framebuffer is sandwiched between application views where in
+	// these application views are composed by overlays/SDE.
     section = weston_config_get_section(config, "core", NULL, NULL);
     if (get_gbm_format_from_section(section,
-                    GBM_FORMAT_XRGB8888,
+                    GBM_FORMAT_ARGB8888,
                     &b->format) == -1)
         goto err_base;
 
