@@ -40,7 +40,7 @@ tests/weston-ivi.ini : $(srcdir)/ivi-shell/weston.ini.in
 all-local : weston.ini ivi-shell/weston.ini
 
 AM_CFLAGS = $(GCC_CFLAGS) -DENABLE_EGL
-SIMPLE_EGL_CLIENT_LIBS +=  -lgbm -lEGL_adreno -lGLESv2_adreno -lwaylandegl
+SIMPLE_EGL_CLIENT_LIBS +=  -lgbm -lEGL -lGLESv2 -lwayland-egl
 
 AM_CPPFLAGS = 					\
 	-I$(top_srcdir)/src			\
@@ -63,7 +63,7 @@ CLEANFILES = weston.ini				\
 
 bin_PROGRAMS += weston
 if ENABLE_DRM_COMPOSITOR
-COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
+COMPOSITOR_LIBS += -lgbm -lEGL -lGLESv2
 COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
 COMPOSITOR_LIBS += -lsdmutils -lhdr_tm -lsdmcore -lsdedrm
 endif
@@ -72,7 +72,7 @@ weston_LDFLAGS = -export-dynamic
 weston_CPPFLAGS = $(AM_CPPFLAGS) -DIN_WESTON
 weston_CFLAGS = $(AM_CFLAGS) $(COMPOSITOR_CFLAGS) $(LIBUNWIND_CFLAGS)
 weston_LDADD = $(COMPOSITOR_LIBS) $(LIBUNWIND_LIBS) \
-	$(DLOPEN_LIBS) -lm libshared.la  -lgbm -lEGL_adreno -lGLESv2_adreno
+	$(DLOPEN_LIBS) -lm libshared.la  -lgbm -lEGL -lGLESv2
 
 weston_SOURCES =					\
 	src/git-version.h				\
