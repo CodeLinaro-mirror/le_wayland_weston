@@ -527,7 +527,7 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
     fb_layer->dirty_regions.rects[0] = fb_layer->dst_rect;
     fb_layer->dirty_regions.count = 1;
 
-    fb_layer->blending = SDM_BLENDING_NONE;
+    fb_layer->blending = SDM_BLENDING_PREMULTIPLIED;
     /*
      * output->base.width/height should be already transformed, so just
      * keep no transform for output.
@@ -661,10 +661,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
 
     /* Get blending. Now Weston only support premultipled alpha */
     /* TODO (user): update property alpha, blend_op */
-    if (ev->alpha == 1.0f)
-     layer->blending = SDM_BLENDING_NONE;
-    else
-     layer->blending = SDM_BLENDING_PREMULTIPLIED;
+    layer->blending = SDM_BLENDING_PREMULTIPLIED;
 
     /* Set no transform for view since bounding box already been applied by transform */
     layer->transform = SDM_TRANSFORM_NORMAL;
@@ -678,6 +675,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->flags.video_present = GetVideoPresenceByFormatFromGbm(format);
 
     if (layer->flags.video_present) {
+        layer->blending = SDM_BLENDING_NONE;
         struct gbm_bo *bo = NULL;
         // TODO (user): Obtain bo from gbm buffer.
         // TODO user: hardcode to tru below <- takeout layer->flags.hdr_present = GetHdrPresenceFromGbm(bo);

@@ -272,6 +272,24 @@ egl_image_ref(struct egl_image *image)
 	return image;
 }
 
+static void
+gl_renderer_surface_set_color(struct weston_surface *surface,
+                 float red, float green, float blue, float alpha)
+{
+        struct gl_surface_state *gs = get_surface_state(surface);
+        struct gl_renderer *gr = get_renderer(surface->compositor);
+
+        gs->color[0] = red;
+        gs->color[1] = green;
+        gs->color[2] = blue;
+        gs->color[3] = alpha;
+        gs->buffer_type = BUFFER_TYPE_SOLID;
+        gs->pitch = 1;
+        gs->height = 1;
+
+        gs->shader = &gr->solid_shader;
+}
+
 static int
 egl_image_unref(struct egl_image *image)
 {
@@ -693,6 +711,58 @@ shader_uniforms(struct gl_shader *shader,
 		glUniform1i(shader->tex_uniforms[i], i);
 }
 
+/* clear_view: It composes onto GPU composed layer a clear transparent
+               bounding box of the size same as that of overlay layer
+               to allow overlay plane to be visible through the GPU
+               composed layer.
+   Inputs:
+               struct weston_view   *ev       : weston overlay view
+               struct weston_output *output
+               pixman_region32_t    *damage
+   Output:
+               GPU composed layer ev->surface will have a clear
+               transparent bounding box with alpha = 0 and all
+               3 color channels also equal to 0.
+*/
+static void
+clear_view(struct weston_view *ev, struct weston_output *output,
+           pixman_region32_t *damage) /* in global coordinates */
+{
+        struct weston_compositor *ec = ev->surface->compositor;
+        struct gl_renderer *gr = get_renderer(ec);
+        struct gl_surface_state *gs = get_surface_state(ev->surface);
+        /* repaint bounding region in global coordinates: */
+        pixman_region32_t repaint;
+        /* non-opaque region in surface coordinates: */
+        pixman_region32_t surface_blend;
+
+        if (!gs->shader) {
+            return;
+        }
+
+        pixman_region32_init(&repaint);
+        pixman_region32_intersect(&repaint, &ev->transform.boundingbox, damage);
+        pixman_region32_subtract(&repaint, &repaint, &ev->clip);
+
+        if (!pixman_region32_not_empty(&repaint))
+            goto out_clear_view;
+
+        glDisable(GL_BLEND);
+        gl_renderer_surface_set_color(ev->surface, 0.0f, 0.0f, 0.0f, 0.0f);
+
+        use_shader(gr, &gr->solid_shader);
+        shader_uniforms(&gr->solid_shader, ev, output);
+
+        pixman_region32_init_rect(&surface_blend, 0, 0,
+                                  ev->surface->width, ev->surface->height);
+        repaint_region(ev, &repaint, &surface_blend);
+
+        pixman_region32_fini(&surface_blend);
+
+out_clear_view:
+        pixman_region32_fini(&repaint);
+}
+
 static void
 draw_view(struct weston_view *ev, struct weston_output *output,
 	  pixman_region32_t *damage) /* in global coordinates */
@@ -799,12 +869,27 @@ out:
 static void
 repaint_views(struct weston_output *output, pixman_region32_t *damage)
 {
-	struct weston_compositor *compositor = output->compositor;
-	struct weston_view *view;
+  struct weston_compositor *compositor = output->compositor;
+  struct weston_view *view;
+  pixman_region32_t r;
 
-	wl_list_for_each_reverse(view, &compositor->view_list, link)
-		if (view->plane == &compositor->primary_plane)
-			draw_view(view, output, damage);
+  wl_list_for_each_reverse(view, &compositor->view_list, link) {
+    if (view->plane == &compositor->primary_plane) {
+       draw_view(view, output, damage);
+    }
+    else {
+      /* this view is composed directly by overlay */
+      /* compute whether this view has no blending */
+      pixman_region32_init_rect(&r, 0, 0, view->surface->width,
+                               view->surface->height);
+      pixman_region32_subtract(&r, &r, &view->surface->opaque);
+
+      if (!pixman_region32_not_empty(&r) && (view->alpha == 1)) {
+        /* clear framebuffer with transparent pixels where this layer would be*/
+         clear_view(view, output, damage);
+      }
+    }
+  }
 }
 
 static void
@@ -1929,24 +2014,6 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 		gs->buffer_type = BUFFER_TYPE_NULL;
 		gs->y_inverted = 1;
 	}
-}
-
-static void
-gl_renderer_surface_set_color(struct weston_surface *surface,
-		 float red, float green, float blue, float alpha)
-{
-	struct gl_surface_state *gs = get_surface_state(surface);
-	struct gl_renderer *gr = get_renderer(surface->compositor);
-
-	gs->color[0] = red;
-	gs->color[1] = green;
-	gs->color[2] = blue;
-	gs->color[3] = alpha;
-	gs->buffer_type = BUFFER_TYPE_SOLID;
-	gs->pitch = 1;
-	gs->height = 1;
-
-	gs->shader = &gr->solid_shader;
 }
 
 static void
