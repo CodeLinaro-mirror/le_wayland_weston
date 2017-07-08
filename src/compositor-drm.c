@@ -170,7 +170,8 @@ struct drm_output {
 	drmModeCrtcPtr original_crtc;
 	struct drm_edid edid;
 	drmModePropertyPtr dpms_prop;
-	drmModePropertyPtr pll_prop;
+	drmModePropertyPtr pll_delta_prop;
+	drmModePropertyPtr pll_enable_prop;
 	uint32_t format;
 
 	enum dpms_enum dpms;
@@ -1334,7 +1335,8 @@ drm_output_destroy(struct weston_output *output_base)
 		backlight_destroy(output->backlight);
 
 	drmModeFreeProperty(output->dpms_prop);
-	drmModeFreeProperty(output->pll_prop);
+	drmModeFreeProperty(output->pll_enable_prop);
+	drmModeFreeProperty(output->pll_delta_prop);
 
 	/* Turn off hardware cursor */
 	drmModeSetCursor(b->drm.fd, output->crtc_id, 0, 0, 0);
@@ -1771,6 +1773,28 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 }
 
 static void
+drm_enable_ppm(struct weston_output *output_base, int32_t enable)
+{
+	struct drm_output *output = (struct drm_output *) output_base;
+	struct weston_compositor *ec = output_base->compositor;
+	struct drm_backend *b = (struct drm_backend *)ec->backend;
+	int ret;
+
+	if (!output->pll_enable_prop) {
+		weston_log("DRM: PLL: invalid pll_enable property\n");
+		return;
+	}
+
+	ret = drmModeConnectorSetProperty(b->drm.fd, output->connector_id,
+					output->pll_enable_prop->prop_id, enable);
+	if (ret) {
+		weston_log("DRM: PLL: failed property set for %s\n",
+			   output->base.name);
+		return;
+	}
+}
+
+static void
 drm_set_ppm(struct weston_output *output_base, int32_t ppm)
 {
 	struct drm_output *output = (struct drm_output *) output_base;
@@ -1778,18 +1802,22 @@ drm_set_ppm(struct weston_output *output_base, int32_t ppm)
 	struct drm_backend *b = (struct drm_backend *)ec->backend;
 	int ret;
 
-	if (!output->pll_prop) {
-		weston_log("DRM: PLL: invalid pll property\n");
+	weston_log("update ppm %d for drm backend\n", ppm);
+
+	if (!output->pll_delta_prop) {
+		weston_log("DRM: PLL: invalid pll_delta property\n");
 		return;
 	}
 
 	ret = drmModeConnectorSetProperty(b->drm.fd, output->connector_id,
-					output->pll_prop->prop_id, ppm);
+					output->pll_delta_prop->prop_id, ppm);
 	if (ret) {
 		weston_log("DRM: PLL: failed property set for %s\n",
 			   output->base.name);
 		return;
 	}
+
+	weston_log("update ppm %d for drm backend done\n", ppm);
 }
 
 static const char * const connector_type_names[] = {
@@ -2398,7 +2426,8 @@ create_output_for_connector(struct drm_backend *b,
 
 	output->original_crtc = drmModeGetCrtc(b->drm.fd, output->crtc_id);
 	output->dpms_prop = drm_get_prop(b->drm.fd, connector, "DPMS");
-	output->pll_prop = drm_get_prop(b->drm.fd, connector, "PLL_DELTA");
+	output->pll_enable_prop = drm_get_prop(b->drm.fd, connector, "PLL_ENABLE");
+	output->pll_delta_prop = drm_get_prop(b->drm.fd, connector, "PLL_DELTA");
 
 	if (connector_get_current_mode(connector, b->drm.fd, &crtc_mode) < 0)
 		goto err_free;
@@ -2461,6 +2490,7 @@ create_output_for_connector(struct drm_backend *b,
 	output->base.assign_planes = drm_assign_planes;
 	output->base.set_dpms = drm_set_dpms;
 	output->base.switch_mode = drm_output_switch_mode;
+	output->base.enable_ppm = drm_enable_ppm;
 	output->base.set_ppm = drm_set_ppm;
 
 	output->base.gamma_size = output->original_crtc->gamma_size;
@@ -3112,6 +3142,7 @@ switch_to_gl_renderer(struct drm_backend *b)
 			weston_log("Error: initializing dmabuf "
 				   "support failed.\n");
 	}
+
 }
 
 static void
@@ -3278,9 +3309,8 @@ drm_backend_create(struct weston_compositor *compositor,
 				   "support failed.\n");
 	}
 
-	compositor->backend = &b->base;
-
-	return b;
+    compositor->backend = &b->base;
+    return b;
 
 err_udev_monitor:
 	wl_event_source_remove(b->udev_drm_source);

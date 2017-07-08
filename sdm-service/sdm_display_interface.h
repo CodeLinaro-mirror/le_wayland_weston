@@ -56,6 +56,8 @@ enum {
        SDM_BUFFER_FORMAT_YCbCr_420_SP,
        SDM_BUFFER_FORMAT_YCrCb_420_SP,
        SDM_BUFFER_FORMAT_NV12_ENCODEABLE,
+       SDM_BUFFER_FORMAT_YCbCr_420_TP10_UBWC,
+       SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC,
        SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS,
        SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS_UBWC,
        SDM_BUFFER_FORMAT_YCbCr_422_SP,
@@ -112,6 +114,7 @@ struct LayerGeometryFlags {
        uint32_t is_cursor : 1;
        uint32_t has_ubwc_buf : 1;
        uint32_t video_present: 1;
+       uint32_t secure_present: 1;
 };
 
 

@@ -89,6 +89,9 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb);
+    DisplayError EnablePllUpdate(int32_t enable);
+    DisplayError UpdateDisplayPll(int32_t ppm);
+
     void InstallVSyncSignalHandler(int siguser);
     int GetDrmMasterFd();
     int SetWait() {
@@ -102,6 +105,7 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
         uevent_locker_.Signal();
         uevent_locker_.Unlock();
     }
+    const char * FourccToString(uint32_t fourcc);
 
  protected:
     virtual DisplayError VSync(const DisplayEventVSync &vsync);

@@ -4329,6 +4329,20 @@ pll_destroy(struct wl_client *client,
 }
 
 static void
+pll_enable_ppm(struct wl_client *client,
+		    struct wl_resource *pll,
+		    int32_t enable)
+{
+	struct weston_compositor *compositor = wl_resource_get_user_data(pll);
+	struct weston_output *output, *next;
+
+	wl_list_for_each_safe(output, next, &compositor->output_list, link) {
+		if (output->enable_ppm)
+			output->enable_ppm(output, enable);
+	}
+}
+
+static void
 pll_set_ppm(struct wl_client *client,
 		    struct wl_resource *pll,
 		    int32_t ppm)
@@ -4344,6 +4358,7 @@ pll_set_ppm(struct wl_client *client,
 
 static const struct wl_pll_interface pll_interface = {
 	pll_destroy,
+	pll_enable_ppm,
 	pll_set_ppm
 };
 
@@ -4745,6 +4760,31 @@ weston_compositor_import_dmabuf(struct weston_compositor *compositor,
 		return false;
 
 	return renderer->import_dmabuf(compositor, buffer);
+}
+
+/** Import gbmbuf buffer into current renderer
+ *
+ * \param compositor
+ * \param buffer the gbmbuf buffer to import
+ * \return true on usable buffers, false otherwise
+ *
+ * This function tests that the gbm_buffer is usable
+ * for the current renderer. Returns false on unusable buffers. Usually
+ * usability is tested by importing the gbmbuf for composition.
+ *
+ * This hook is also used for detecting if the renderer supports
+ * gbmbuf at all. If the renderer hook is NULL, dmabufs are not
+ * supported.
+ * */
+WL_EXPORT bool
+weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
+					                struct gbm_buffer *buffer)
+{
+	struct weston_renderer *renderer;
+	renderer = compositor->renderer;
+	if (renderer->import_gbm_buffer == NULL)
+		return false;
+	return renderer->import_gbm_buffer(compositor, buffer);
 }
 
 WL_EXPORT void

@@ -65,7 +65,7 @@ static const struct wl_registry_listener registry_listener = {
 
 int main(int argc, char **argv)
 {
-	int ppms[] = {4000, 10000, 20000, -10000, -5000, -2000};
+	int ppms[] = {50000, 50000, -50000};
 	int i;
 	int rc = 0;
 
@@ -87,6 +87,12 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
+	printf("enable display pll update\n");
+	wl_pll_enable_ppm(pll, 1);
+	rc = wl_display_flush(display);
+	if (rc < 0)
+		fprintf(stderr, "failed to flush display\n");
+
 	for (i = 0; i < sizeof(ppms)/sizeof(int); i++) {
 		printf("update display pll by %d\n", ppms[i]);
 		wl_pll_set_ppm(pll, ppms[i]);
@@ -96,8 +102,14 @@ int main(int argc, char **argv)
 		if (rc < 0)
 			fprintf(stderr, "failed to flush display\n");
 
-		sleep(1);
+		sleep(3);
 	}
+
+	printf("disable display pll update\n");
+	wl_pll_enable_ppm(pll, 0);
+	rc = wl_display_flush(display);
+	if (rc < 0)
+		fprintf(stderr, "failed to flush display\n");
 
 
 	wl_display_disconnect(display);

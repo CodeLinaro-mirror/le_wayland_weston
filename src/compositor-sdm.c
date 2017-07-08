@@ -74,6 +74,7 @@
 #include "vaapi-recorder.h"
 #include "presentation_timing-server-protocol.h"
 #include "linux-dmabuf.h"
+#include "gbm-buffer-backend.h"
 #include "../sdm-service/sdm_display_connect.h"
 #include "../sdm-service/compositor-sdm-output.h"
 #include <pthread.h>
@@ -680,20 +681,15 @@ drm_assign_planes(struct weston_output *output_base)
             is_skip = true;
         }
 
-        next_plane = primary;
-        weston_view_move_to_plane(ev, next_plane);
-
-        if (next_plane == primary)
-            pixman_region32_union(&overlap, &overlap,
-                          &ev->transform.boundingbox);
-
-        if (next_plane == primary ) {
-            /* cursor plane involves a copy */
-            ev->psf_flags = 0;
+        if (is_skip) {
+          /* Composed by GPU */
+          next_plane = primary;
+          weston_view_move_to_plane(ev, next_plane);
+          pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
+          ev->psf_flags = 0;
         } else {
-            /* All other planes are a direct scanout of a
-             * single client buffer.
-             */
+            /* Composed by Display Hardware directly */
+            /* ToDo(User): handle scenarios if SDE composition is not possible */
             ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
         }
 
@@ -1111,6 +1107,44 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 
         if (ret)
         output->dpms = level;
+}
+
+static void
+drm_enable_ppm(struct weston_output *output_base, int32_t enable)
+{
+	int ret = 0;
+
+	if (display_id < 0) {
+		weston_log("invalid display id\n");
+		return;
+	}
+
+	ret = EnablePllUpdate(display_id, enable);
+	if (ret) {
+		weston_log("DRM: PLL: enable pll update failed for %d\n",
+			display_id);
+	}
+
+	return;
+}
+
+static void
+drm_set_ppm(struct weston_output *output_base, int32_t ppm)
+{
+	int ret = 0;
+
+	if (display_id < 0) {
+		weston_log("invalid display id\n");
+		return;
+	}
+
+	ret = UpdateDisplayPll(display_id, ppm);
+	if (ret) {
+		weston_log("DRM: PLL: update display pll failed for %d\n",
+			display_id);
+	}
+
+	return;
 }
 
 /* Init output state that depends on gl or gbm */
@@ -1649,6 +1683,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.assign_planes = drm_assign_planes;
     output->base.set_dpms = drm_set_dpms;
     output->base.switch_mode = drm_output_switch_mode;
+    output->base.enable_ppm = drm_enable_ppm;
+    output->base.set_ppm = drm_set_ppm;
 
     output->base.gamma_size = 0;
     output->base.set_gamma = NULL;
@@ -2223,6 +2259,16 @@ drm_backend_create(struct weston_compositor *compositor,
             weston_log("Error: initializing dmabuf "
                    "support failed.\n");
     }
+
+    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buf import=%p",
+                           compositor->renderer->import_gbm_buffer);
+
+    if (compositor->renderer->import_gbm_buffer) {
+        if (gbm_buffer_backend_setup(compositor) < 0)
+            weston_log("Error: initializing gbm_buffer_backend_setup "
+                   "support failed.\n");
+    }
+
 
     compositor->backend = &b->base;
 

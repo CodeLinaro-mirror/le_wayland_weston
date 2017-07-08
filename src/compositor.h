@@ -238,6 +238,7 @@ struct weston_output {
 			  uint16_t *r,
 			  uint16_t *g,
 			  uint16_t *b);
+	void (*enable_ppm)(struct weston_output *output, int32_t enable);
 	void (*set_ppm)(struct weston_output *output, int32_t ppm);
 
 	struct weston_timeline_object timeline;
@@ -594,6 +595,10 @@ struct weston_renderer {
 	/** See weston_compositor_import_dmabuf() */
 	bool (*import_dmabuf)(struct weston_compositor *ec,
 			      struct linux_dmabuf_buffer *buffer);
+
+    /** See weston_compositor_import_gbm_buffer() */
+    bool (*import_gbm_buffer)(struct weston_compositor *ec,
+                  struct gbm_buffer *buffer);
 };
 
 enum weston_capability {

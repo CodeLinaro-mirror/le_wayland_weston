@@ -1062,6 +1062,7 @@ wayland_output_create(struct wayland_backend *b, int x, int y,
 	output->base.set_backlight = NULL;
 	output->base.set_dpms = NULL;
 	output->base.switch_mode = wayland_output_switch_mode;
+	output->base.enable_ppm = NULL;
 	output->base.set_ppm = NULL;
 
 	weston_compositor_add_output(b->compositor, &output->base);

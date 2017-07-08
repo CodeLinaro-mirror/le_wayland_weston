@@ -887,6 +887,7 @@ x11_backend_create_output(struct x11_backend *b, int x, int y,
 	output->base.set_backlight = NULL;
 	output->base.set_dpms = NULL;
 	output->base.switch_mode = NULL;
+	output->base.enable_ppm = NULL;
 	output->base.set_ppm = NULL;
 	output->base.current_mode = &output->mode;
 	output->base.make = "weston-X11";
