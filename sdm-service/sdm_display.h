@@ -153,7 +153,6 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     /* support functions */
     uint32_t GetMappedFormatFromGbm(uint32_t fmt);
     bool GetVideoPresenceByFormatFromGbm(uint32_t fmt);
-    bool GetHdrPresenceFromGbm(struct gbm_bo *bo);
     uint32_t GetMappedFormatFromShm(uint32_t fmt);
     bool NeedConvertGbmFormat(struct weston_view *ev, uint32_t format);
     uint32_t ConvertToOpaqueGbmFormat(uint32_t format);

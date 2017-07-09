@@ -28,6 +28,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include <color_metadata.h>
 
 #define MAX_SDE_Layers          16
 #define MAX_PIPE_WIDTH          2560
@@ -140,6 +141,7 @@ struct LayerGeometry {
        uint32_t               transform;
        uint8_t                plane_alpha; /* global alpha */
        struct LayerGeometryFlags        flags;
+       ColorMetaData color_metadata;
 
        /*Hook for storing information relative to compositor. DO NOT MODIFY IT!!!*/
        const void *usr_data;

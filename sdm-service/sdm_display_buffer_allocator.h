@@ -56,6 +56,7 @@ class SdmDisplayBufferAllocator : public BufferAllocator {
                                uint32_t stride[4], uint32_t offset[4],
                                uint32_t *num_planes);
  private:
+  bool IsFormatVideo(uint32_t fmt);
   struct gbm_device *gbm_ = NULL;
 };
 

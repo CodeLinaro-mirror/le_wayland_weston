@@ -75,7 +75,7 @@ namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
 #define GET_CURSOR_SLOT(max_layers) ((max_layers) - 2)
-#define SDM_DISPLAY_DEBUG 1
+#define SDM_DISPLAY_DEBUG 0
 
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
     display_type_ = type;
@@ -393,6 +393,13 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
     layer_buffer->flags.video = layer_geometry->flags.video_present;
     layer_buffer->flags.hdr = layer_geometry->flags.hdr_present;
 
+    if (layer_buffer->flags.hdr) {
+      layer_buffer->color_metadata = layer_geometry->color_metadata;
+
+       DLOGI("color_metadata: ColorPrimaries: %d", layer_buffer->color_metadata.colorPrimaries);
+       DLOGI("color_metadata: Transfer: %d", layer_buffer->color_metadata.transfer);
+    }
+
     layer_buffer->flags.macro_tile = false;
     layer_buffer->flags.interlace = false;
     layer_buffer->flags.secure_display = false;
@@ -613,6 +620,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             uint32_t *fbid;
             uint32_t fb_id, stride, handle, size;
             uint32_t fb_id1;
+
             width = gbm_bo_get_width(bo);
             height = gbm_bo_get_height(bo);
             stride = gbm_bo_get_stride(bo);
@@ -628,10 +636,12 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             uint32_t alignedWidth = 0;
             uint32_t alignedHeight = 0;
             uint32_t secure_status = 0;
+            void *prm = reinterpret_cast<void *> (&layer->color_metadata);
 
             gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_WIDTH, bo, &alignedWidth);
             gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_HEIGHT, bo, &alignedHeight);
             gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, bo, &secure_status);
+            gbm_perform(GBM_PERFORM_GET_METADATA, bo, GBM_METADATA_GET_COLOR_METADATA, prm);
 
             // Override buffer width/height to reflect aligned width and aligned height.
             layer->width = alignedWidth;
@@ -640,6 +650,12 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             layer->unaligned_height = height;
             layer->ion_fd = gbm_bo_get_fd(bo);
             layer->flags.secure_present = secure_status;
+
+            bool hdr_layer = layer->color_metadata.colorPrimaries == ColorPrimaries_BT2020 &&
+                             (layer->color_metadata.transfer == Transfer_SMPTE_ST2084 ||
+                             layer->color_metadata.transfer == Transfer_HLG);
+
+            layer->flags.hdr_present = hdr_layer;
         }
     }
 
@@ -659,10 +675,6 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     if (ComputeDirtyRegion(ev, &layer->dirty_regions))
         return -1;
 
-    /* Get blending. Now Weston only support premultipled alpha */
-    /* TODO (user): update property alpha, blend_op */
-    layer->blending = SDM_BLENDING_PREMULTIPLIED;
-
     /* Set no transform for view since bounding box already been applied by transform */
     layer->transform = SDM_TRANSFORM_NORMAL;
     /* Get global alpha */
@@ -674,11 +686,13 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->flags.has_ubwc_buf = 0;
     layer->flags.video_present = GetVideoPresenceByFormatFromGbm(format);
 
+    /* Get blending. Now Weston only support premultipled alpha */
+    /* TODO (user): update property alpha, blend_op */
+    layer->blending = SDM_BLENDING_PREMULTIPLIED;
+
+    // Video layers are always opaque
     if (layer->flags.video_present) {
         layer->blending = SDM_BLENDING_NONE;
-        struct gbm_bo *bo = NULL;
-        // TODO (user): Obtain bo from gbm buffer.
-        // TODO user: hardcode to tru below <- takeout layer->flags.hdr_present = GetHdrPresenceFromGbm(bo);
     }
 
     /* Initialize all views with GPU composition first, SDM will update them after prepare */
@@ -978,15 +992,6 @@ LayerBlending SdmDisplay::GetSDMBlending(uint32_t source)
     }
 
     return blending;
-}
-bool SdmDisplay::GetHdrPresenceFromGbm(struct gbm_bo *bo)
-{
-    bool is_hdr_content_present = false;
-
-    /* TODO (user): to obtain HDR metadata from gbm buffer object */
-    /* TODO (user): and set the metadata. */
-
-    return is_hdr_content_present;
 }
 
 bool SdmDisplay::GetVideoPresenceByFormatFromGbm(uint32_t fmt)

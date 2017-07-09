@@ -196,11 +196,28 @@ DisplayError SdmDisplayBufferAllocator::GetAllocatedBufferInfo(const BufferConfi
   DLOGI("perform_aligned_width = %d, perform_aligned_height = %d, size = %d, perform_gformat = %d, kformat = %d",
          alignedWidth, alignedHeight, size, gformat, buffer_config.height);
 
-  allocated_buffer_info->aligned_height = alignedWidth;
-  allocated_buffer_info->aligned_width = alignedHeight;
+  allocated_buffer_info->aligned_width = alignedWidth;
+  allocated_buffer_info->aligned_height = alignedHeight;
   allocated_buffer_info->size = size;
   allocated_buffer_info->format = buffer_config.format;
   return kErrorNone;
+}
+
+bool SdmDisplayBufferAllocator::IsFormatVideo(uint32_t fmt)
+{
+   bool is_video_present = false;
+
+   switch (fmt) {
+      case GBM_FORMAT_NV12:
+      case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+           is_video_present = true;
+           break;
+      default:
+           is_video_present = false;
+           break;
+   }
+
+   return is_video_present;
 }
 
 DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInfo &buf_info,
@@ -236,9 +253,7 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     handle = gbm_bo_get_handle(bo).u32;
     format = gbm_bo_get_format(bo);
 
-
-    //check for RGB format
-    if (format != GBM_FORMAT_NV12) {
+    if (IsFormatVideo(format) == false) {
       stride[0] = gbm_bo_get_stride(bo);
       offset[0] = 0;
       *num_planes++;
@@ -249,11 +264,20 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     *num_planes = 2;
     gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
 
-    stride[0] = gbm_bo_get_stride(bo);
-    offset[0] = 0;
+    if (format == GBM_FORMAT_NV12) {
+      stride[0] = gbm_bo_get_stride(bo);
+      offset[0] = 0;
 
-    stride[1] = stride[0];//buf_layout.planes[1].v_increment;
-    offset[1] = stride[0]*height;
+      stride[1] = stride[0];//buf_layout.planes[1].v_increment;
+      offset[1] = stride[0]*height;
+      DLOGE("MKAVM: stride: %d NV12", stride[0]);
+    }
+    if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+      stride[0] = buf_layout.planes[0].v_increment;
+      stride[1] = buf_layout.planes[1].v_increment;
+      offset[0] = 0;
+      offset[1] = 0;
+    }
 
   return kErrorNone;
 }
