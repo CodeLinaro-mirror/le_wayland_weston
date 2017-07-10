@@ -59,6 +59,7 @@
 #include "compositor.h"
 #include "gbm-buffer-backend.h"
 #include "gbm-buffer-backend-server-protocol.h"
+#include "gbm_priv.h"
 
 static void
 gbm_buffer_destroy_params(struct wl_resource *params_resource);
@@ -92,11 +93,11 @@ static void
 gbm_wl_buffer_destroy(struct wl_client *client,
     struct wl_resource *resource)
 {
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_get::Invoked\n");
+    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_wl_buffer_destroy::Invoked\n");
 
     wl_resource_destroy(resource);
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_get::Exited\n");
+    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_wl_buffer_destroy::Exited\n");
 }
 
 static void
@@ -221,6 +222,7 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
     struct gbm_buffer *buffer;
     uint32_t version;
     int i;
+    bool ret = true;
 
 
     GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Invoked\n");
@@ -242,8 +244,16 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
     buffer->format = format;
     buffer->flags  = flags;
 
-    if (!weston_compositor_import_gbm_buffer(buffer->compositor, buffer))
-        goto err_failed;
+    ret = weston_compositor_import_gbm_buffer(buffer->compositor, buffer);
+
+    // Override return value if format is part of skip list.
+    if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+      ret = true;
+    }
+
+    if (ret == false) {
+      goto err_failed;
+    }
 
     buffer->buffer_resource = wl_resource_create(client,
                     &wl_buffer_interface,
