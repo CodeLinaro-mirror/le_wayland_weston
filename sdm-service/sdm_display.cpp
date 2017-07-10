@@ -122,6 +122,7 @@ DisplayError SdmDisplay::Init() {
 
 DisplayError SdmDisplay::CreateDisplay() {
     DisplayError error = kErrorNone;
+    struct DisplayHdrInfo display_hdr_info;
 
     error = core_intf_->GetFirstDisplayInterfaceType(&hw_disp_info_);
     display_type_ = hw_disp_info_.type;
@@ -138,6 +139,14 @@ DisplayError SdmDisplay::CreateDisplay() {
     SdmDisplayDebugger::Get()->GetProperty("sys.sdm_display_disable_hdr", &disable_hdr_handling_);
     if (disable_hdr_handling_) {
         DLOGI("HDR Handling disabled");
+    }
+
+    GetHdrInfo(&display_hdr_info);
+
+    if (hdr_supported_) {
+        DLOGI("Display Device supports HDR functionality");
+    } else {
+        DLOGI("Display Device doesn't support HDR functionality");
     }
 
     return kErrorNone;
@@ -655,7 +664,8 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                              (layer->color_metadata.transfer == Transfer_SMPTE_ST2084 ||
                              layer->color_metadata.transfer == Transfer_HLG);
 
-            layer->flags.hdr_present = hdr_layer;
+            // Set to true if incoming layer has HDR support and Display supports HDR functionality
+            layer->flags.hdr_present = hdr_layer && hdr_supported_;
         }
     }
 
@@ -1401,6 +1411,8 @@ DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
         DLOGE("Failed to get fixed info. Error = %d", error);
         return error;
     }
+
+    hdr_supported_ = fixed_info.hdr_supported;
 
     if (!fixed_info.hdr_supported) {
         DLOGI("HDR is not supported");

@@ -183,6 +183,7 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     float max_average_luminance_ = 0.0;
     float min_luminance_ = 0.0;
     int disable_hdr_handling_ = 0;
+    bool hdr_supported_ = false;
 };
 
 }  // namespace sdm
