@@ -79,7 +79,8 @@ extern "C" {
 
 struct drm_output *drm_output_;
 vblank_cb_t vblank_cb_;
-
+bool tone_mapper_enable = false; /* TODO (user): enable this flag once  */
+                                 /* inverse tone mapping is functional. */
 namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
@@ -89,18 +90,11 @@ namespace sdm {
 #define SDM_DISPLAY_DEBUG 0
 #define SDM_DISPLAY_DUMP_LAYER_STACK 0
 
-int SdmDisplayInterface::GetDrmMasterFd() {
-  DRMMaster *master = nullptr;
-  int ret = DRMMaster::GetInstance(&master);
-  int fd;
-
-  master->GetHandle(&fd);
-  return fd;
-}
-
-SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
+SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf,
+                                         SdmDisplayBufferAllocator *buffer_allocator) {
     display_type_ = type;
     core_intf_    = core_intf;
+    buffer_allocator_ = buffer_allocator;
     drm_output_   = NULL;
     vblank_cb_    = NULL;
 }
@@ -137,6 +131,12 @@ DisplayError SdmDisplay::CreateDisplay() {
         DLOGI("HDR Handling disabled");
     }
 
+    if (tone_mapper_enable)
+        tone_mapper_ = new SdmDisplayToneMapper(buffer_allocator_);
+
+    if (!tone_mapper_)
+        DLOGI("Failed to create tone_mapper instance");
+
     GetHdrInfo(&display_hdr_info);
 
     if (hdr_supported_) {
@@ -161,6 +161,9 @@ DisplayError SdmDisplay::DestroyDisplay() {
 
     error = core_intf_->DestroyDisplay(display_intf_);
     display_intf_ = NULL;
+
+    delete tone_mapper_;
+    tone_mapper_ = nullptr;
 
     return error;
 }
@@ -524,6 +527,19 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
     return 0;
 }
 
+int SdmDisplayInterface::GetDrmMasterFd() {
+    DRMMaster *master = nullptr;
+    int ret = DRMMaster::GetInstance(&master);
+    int fd;
+
+    if (ret < 0) {
+        DLOGE("Failed to acquire DRMMaster instance");
+        return kErrorNotSupported;
+        }
+    master->GetHandle(&fd);
+    return fd;
+}
+
 int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                          struct LayerGeometry **glayer,
                          struct sdm_layer *sdm_layer) {
@@ -828,12 +844,33 @@ DisplayError SdmDisplay::PreCommit()
 {
     DisplayError error = kErrorNone;
 
+    if (layer_stack_.flags.hdr_present) {
+        int status = -1;
+        if (tone_mapper_) {
+            status = tone_mapper_->HandleToneMap(&layer_stack_);
+            if (status != 0) {
+                DLOGE("Error handling HDR in ToneMapper, status code = %d", status);
+            }
+        } else {
+            DLOGD("HandleToneMap failed due to invalid tone_mapper_ instance");
+        }
+    } else {
+        if (tone_mapper_)
+            tone_mapper_->Terminate();
+        else
+            DLOGD("ToneMap Terminate failed due to invalid tone_mapper_ instance");
+    }
+
     return error;
 }
 
 DisplayError SdmDisplay::PostCommit()
 {
     DisplayError error = kErrorNone;
+
+    if (tone_mapper_ && tone_mapper_->IsActive()) {
+        tone_mapper_->PostCommit(&layer_stack_);
+     }
 
     //Iterate through the layer buffer and close release fences
     for (uint32_t i = 0; i < layer_stack_.layers.size(); i++) {
@@ -1450,11 +1487,13 @@ DisplayError SdmNullDisplay::GetHdcpProtocol(struct DisplayHdcpProtocol *display
 }
 
 
-SdmDisplayProxy::SdmDisplayProxy(DisplayType type, CoreInterface *core_intf)
+SdmDisplayProxy::SdmDisplayProxy(DisplayType type, CoreInterface *core_intf,
+                                 SdmDisplayBufferAllocator *buffer_allocator)
   : disp_type_(type), core_intf_(core_intf),
-    sdm_disp_(type, core_intf), null_disp_(type, core_intf) {
-    display_intf_ = &sdm_disp_;
+    sdm_disp_(type, core_intf, buffer_allocator), null_disp_(type, core_intf) {
 
+    display_intf_ = &sdm_disp_;
+    buffer_allocator_ = buffer_allocator;
     std::thread uevent_thread(UeventThread, this);
     uevent_thread_.swap(uevent_thread);
 }

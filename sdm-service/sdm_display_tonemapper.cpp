@@ -55,6 +55,7 @@ ToneMapSession::~ToneMapSession() {
   gpu_tone_mapper_ = nullptr;
   FreeIntermediateBuffers();
   buffer_info_.clear();
+  buffer_allocator_ = nullptr;
 }
 
 DisplayError ToneMapSession::AllocateIntermediateBuffers(const Layer *layer) {

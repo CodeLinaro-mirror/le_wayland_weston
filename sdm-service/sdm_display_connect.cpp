@@ -41,7 +41,7 @@ enum {
 };
 
 CoreInterface *core_intf_ = NULL;
-SdmDisplayBufferAllocator buffer_allocator_;
+SdmDisplayBufferAllocator *buffer_allocator_;
 SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
@@ -54,9 +54,10 @@ int CreateCore()
         DLOGW("Core was already created.");
         return kErrorNone;
     }
+    buffer_allocator_ = new SdmDisplayBufferAllocator;
 
     error = CoreInterface::CreateCore(SdmDisplayDebugger::Get(),
-                                      &buffer_allocator_,
+                                      buffer_allocator_,
                                       &buffer_sync_handler_,
                                       &socket_handler_,
                                       &core_intf_);
@@ -100,6 +101,7 @@ int DestroyCore()
         return error;
     }
     core_intf_ = NULL;
+    delete buffer_allocator_;
 
     #if SDM_DISPLAY_DEBUG
     DLOGD("Core was destroyed successfully");
@@ -160,7 +162,8 @@ int CreateDisplay(int display_id)
        default: display_type  = kDisplayMax; break;
     }
 
-    SdmDisplayProxy *sdm_display = new SdmDisplayProxy(display_type, core_intf_);
+    SdmDisplayProxy *sdm_display = new SdmDisplayProxy(display_type, core_intf_, buffer_allocator_);
+
     display_[display_id] = sdm_display;
     error = display_[display_id]->CreateDisplay() ;
     if (error != kErrorNone) {
