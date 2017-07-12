@@ -460,6 +460,11 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
         goto finish_frame;
     }
 
+    // SDM backend cannot inovke page-flip as it needs to construct
+    // layer stack from drm_assign_planes. Since we cannot push the frame
+    // handle this funciton gracefully
+    goto finish_frame;
+
         /* TODO (user): To get time stamp information from SDM interface */
     /* Try to get current msc and timestamp via instant query */
     vbl.request.type |= drm_waitvblank_pipe(output);
