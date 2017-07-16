@@ -265,12 +265,11 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
 
     if (format == GBM_FORMAT_NV12) {
-      stride[0] = gbm_bo_get_stride(bo);
+      stride[0] = buf_layout.planes[0].v_increment;
       offset[0] = 0;
 
       stride[1] = stride[0];//buf_layout.planes[1].v_increment;
       offset[1] = stride[0]*height;
-      DLOGE("MKAVM: stride: %d NV12", stride[0]);
     }
     if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
       stride[0] = buf_layout.planes[0].v_increment;

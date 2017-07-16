@@ -66,7 +66,7 @@ extern "C" {
 #define LOG_WARN     (2)
 #define LOG_INFO     (3)
 #define LOG_DBG      (4)
-#define MAX_DBG_LEVEL  LOG_DBG
+#define MAX_DBG_LEVEL  LOG_INFO
 
 extern int g_prtcl_debug_level;
 
