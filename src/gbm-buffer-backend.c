@@ -247,7 +247,8 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
     ret = weston_compositor_import_gbm_buffer(buffer->compositor, buffer);
 
     // Override return value if format is part of skip list.
-    if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+    if ((format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
+        (format == GBM_FORMAT_NV12)) {
       ret = true;
     }
 
