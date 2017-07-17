@@ -94,7 +94,7 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
 
     void InstallVSyncSignalHandler(int siguser);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
-    int GetDrmMasterFd();
+    static int GetDrmMasterFd();
     int SetWait() {
         vb_wait_ = true;
         SCOPE_LOCK(uevent_locker_);

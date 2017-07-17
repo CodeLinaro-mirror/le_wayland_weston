@@ -637,7 +637,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             stride = gbm_bo_get_stride(bo);
             handle = gbm_bo_get_handle(bo).u32;
             format = gbm_bo_get_format(bo);
-            int drm_fd = GetDrmMasterFd();
+            int drm_fd = SdmDisplay::GetDrmMasterFd();
 
             uint32_t handles[4], pitches[4], offsets[4];
             handles[0] = handle;
