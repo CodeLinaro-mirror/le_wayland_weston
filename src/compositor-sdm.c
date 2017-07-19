@@ -153,6 +153,7 @@ drm_fb_create_dumb(struct drm_backend *b, unsigned width, unsigned height)
     struct drm_mode_create_dumb create_arg;
     struct drm_mode_destroy_dumb destroy_arg;
     struct drm_mode_map_dumb map_arg;
+    struct drm_prime_handle prime_arg;
 
     fb = zalloc(sizeof *fb);
     if (!fb)
@@ -171,6 +172,15 @@ drm_fb_create_dumb(struct drm_backend *b, unsigned width, unsigned height)
     fb->stride = create_arg.pitch;
     fb->size = create_arg.size;
     fb->fd = b->drm.fd;
+
+    memset(&prime_arg, 0, sizeof prime_arg);
+    prime_arg.handle = fb->handle;
+
+    ret = drmIoctl(b->drm.fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime_arg);
+    if (ret)
+      goto err_bo;
+
+    fb->ion_fd = prime_arg.fd;
 
     ret = drmModeAddFB(b->drm.fd, width, height, 24, 32,
                fb->stride, fb->handle, &fb->fb_id);
