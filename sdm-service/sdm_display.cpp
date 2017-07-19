@@ -782,7 +782,20 @@ DisplayError SdmDisplay::PrePrepare(struct drm_output *output)
 DisplayError SdmDisplay::PostPrepare(struct drm_output *output)
 {
     DisplayError error = kErrorNone;
-    // TODO: Check for Post-Prepare stuff here
+    int index = 0;
+    struct sdm_layer *sdm_layer = NULL;
+
+    wl_list_for_each_reverse(sdm_layer, &output->sdm_layer_list, link) {
+      Layer *layer = layer_stack_.layers.at(index);
+
+      if (layer->composition == kCompositionGPU) {
+        sdm_layer->composition_type = SDM_COMPOSITION_GPU;
+      } else {
+        sdm_layer->composition_type = SDM_COMPOSITION_OVERLAY;
+      }
+      index++;
+    }
+
     return error;
 }
 

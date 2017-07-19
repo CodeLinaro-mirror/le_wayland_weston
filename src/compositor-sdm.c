@@ -686,18 +686,6 @@ drm_assign_planes(struct weston_output *output_base)
             is_skip = true;
         }
 
-        if (is_skip) {
-          /* Composed by GPU */
-          next_plane = primary;
-          weston_view_move_to_plane(ev, next_plane);
-          pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
-          ev->psf_flags = 0;
-        } else {
-            /* Composed by Display Hardware directly */
-            /* ToDo(User): handle scenarios if SDE composition is not possible */
-            ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
-        }
-
         sdm_layer = create_sdm_layer(output, ev, &surface_overlap, is_cursor, is_skip);
         wl_list_insert(output->sdm_layer_list.prev, &sdm_layer->link);
 
@@ -712,6 +700,19 @@ drm_assign_planes(struct weston_output *output_base)
     int error = Prepare(display_id, output);
     pixman_region32_fini(&overlap);
     wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
+        next_plane = primary;
+        ev = sdm_layer->view;
+        /* Move to primary plane if Strategy set it to GPU composition */
+        if (sdm_layer->composition_type == SDM_COMPOSITION_GPU) {
+            weston_view_move_to_plane(ev, next_plane);
+            pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
+            ev->psf_flags = 0;
+        } else {
+            /* Composed by Display Hardware directly */
+            /* ToDo(User): handle scenarios if SDE composition is not possible */
+            ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
+        }
+
         destroy_sdm_layer(sdm_layer);
     }
 
