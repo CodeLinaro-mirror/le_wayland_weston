@@ -75,7 +75,10 @@ namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
 #define GET_CURSOR_SLOT(max_layers) ((max_layers) - 2)
+#define LEN_LOCAL 2048
+
 #define SDM_DISPLAY_DEBUG 0
+#define SDM_DISPLAY_DUMP_LAYER_STACK 0
 
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
     display_type_ = type;
@@ -87,7 +90,6 @@ SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
 
 SdmDisplay::~SdmDisplay() {
 }
-
 
 const char * SdmDisplay::FourccToString(uint32_t fourcc)
 {
@@ -113,9 +115,9 @@ DisplayError SdmDisplay::Init() {
 
         return error;
     }
-    #if SDM_DISPLAY_DEBUG
+#if SDM_DISPLAY_DEBUG
     DLOGI("Initialization successful.");
-    #endif
+#endif
 
     return error;
 }
@@ -725,9 +727,9 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     FreeLayerStack();
     AllocLayerStackMemory(output);
 
-    #if SDM_DISPLAY_DEBUG
+#if SDM_DISPLAY_DEBUG
     DLOGW("gpu_target_index = %d\n", gpu_target_index);
-    #endif
+#endif
 
     /* If no view can be handled by SDM, just skip below and prepare fb target directly. */
     if (gpu_target_index > 0) {
@@ -755,7 +757,7 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
         DLOGE("failed to prepare Layer Geometry Fb target\n");
         return kErrorUndefined;
     } else {
-        error = AddGeometryLayerToLayerStack(output, index, glayer, true);
+        error = AddGeometryLayerToLayerStack(output, index, glayer, false);
         if (error) {
             DLOGE("fail to prepare Fb target: Add Geometry failure fb\n");
             /* TODO: Free glayer */
@@ -803,19 +805,24 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
   if (!buffer || !length) {
     return;
   }
-
+  static int frame_count=0;
   buffer[0] = '\0';
   struct LayerStack *layer_stack;
   layer_stack = reinterpret_cast<struct LayerStack *>(layerStack);
-  DLOGW("\n-------- Display Manager: \nLayer Stack Dump --------");
+  DLOGI("\n-------- Display Manager: Layer Stack Dump --------");
+  fprintf(stderr,"Frame:%d LayerStack: NumLayers:%d flags:0x%x\n",
+                frame_count, layer_stack->layers.size(), layer_stack->flags);
+
   for (uint32_t i = 0; i < layer_stack->layers.size(); i++) {
-      #define LEN_LOCAL 2048
       char buf[LEN_LOCAL] = {0};
 
       struct Layer *layer;
+      struct LayerBuffer buffer;
       layer = layer_stack->layers.at(i);
+      buffer = layer->input_buffer;
+
       memset(buf, '\0', LEN_LOCAL);
-      sprintf(buf, "Layer: %d\n    width  = %d,     height = %d\n", i,
+      sprintf(buf, "Layer: %d\n    width  = %d,     height = %d", i,
         layer->input_buffer.width, layer->input_buffer.height);
       sprintf(buf, "%s\n LayerComposition = %#x", buf, layer->composition);
       sprintf(buf, "%s\n src_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f",
@@ -831,8 +838,13 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
       sprintf(buf, "%s\n Plane Alpha = %#x, frame_rate = %d,  solid_fill_color = %d",
         buf, layer->plane_alpha, layer->frame_rate, layer->solid_fill_color);
       sprintf(buf, "%s\n LayerFlags = %#x", buf, layer->flags);
-      DLOGI("Dumping Layer stack:\n%s\n", buf);
+      sprintf(buf, "%s\t LayerFlags.skip = %d", buf, layer->flags.skip);
+      sprintf(buf, "%s\n LayerBuffer Flags: hdr:%d secure:%d video:%d", buf,
+                    buffer.flags.hdr, buffer.flags.secure, buffer.flags.video);
+
+      fprintf(stderr,"\n%s\n", buf);
   }
+  frame_count++;
 
   return;
 }
@@ -843,6 +855,12 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
     char dump_buffer[8192] = {0};
 
     error = PrePrepare(output);
+
+#if SDM_DISPLAY_DUMP_LAYER_STACK
+    // Dump all input layers of the layer stack:
+    GetLayerStackDump(&layer_stack_, dump_buffer, sizeof(dump_buffer));
+#endif
+
     error = display_intf_->Prepare(&layer_stack_);
     DumpInterface::GetDump(dump_buffer, sizeof(dump_buffer));
     error = PostPrepare(output);
