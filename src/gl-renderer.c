@@ -272,6 +272,24 @@ egl_image_ref(struct egl_image *image)
 	return image;
 }
 
+static void
+gl_renderer_surface_set_color(struct weston_surface *surface,
+                 float red, float green, float blue, float alpha)
+{
+        struct gl_surface_state *gs = get_surface_state(surface);
+        struct gl_renderer *gr = get_renderer(surface->compositor);
+
+        gs->color[0] = red;
+        gs->color[1] = green;
+        gs->color[2] = blue;
+        gs->color[3] = alpha;
+        gs->buffer_type = BUFFER_TYPE_SOLID;
+        gs->pitch = 1;
+        gs->height = 1;
+
+        gs->shader = &gr->solid_shader;
+}
+
 static int
 egl_image_unref(struct egl_image *image)
 {
@@ -693,6 +711,58 @@ shader_uniforms(struct gl_shader *shader,
 		glUniform1i(shader->tex_uniforms[i], i);
 }
 
+/* clear_view: It composes onto GPU composed layer a clear transparent
+               bounding box of the size same as that of overlay layer
+               to allow overlay plane to be visible through the GPU
+               composed layer.
+   Inputs:
+               struct weston_view   *ev       : weston overlay view
+               struct weston_output *output
+               pixman_region32_t    *damage
+   Output:
+               GPU composed layer ev->surface will have a clear
+               transparent bounding box with alpha = 0 and all
+               3 color channels also equal to 0.
+*/
+static void
+clear_view(struct weston_view *ev, struct weston_output *output,
+           pixman_region32_t *damage) /* in global coordinates */
+{
+        struct weston_compositor *ec = ev->surface->compositor;
+        struct gl_renderer *gr = get_renderer(ec);
+        struct gl_surface_state *gs = get_surface_state(ev->surface);
+        /* repaint bounding region in global coordinates: */
+        pixman_region32_t repaint;
+        /* non-opaque region in surface coordinates: */
+        pixman_region32_t surface_blend;
+
+        if (!gs->shader) {
+            return;
+        }
+
+        pixman_region32_init(&repaint);
+        pixman_region32_intersect(&repaint, &ev->transform.boundingbox, damage);
+        pixman_region32_subtract(&repaint, &repaint, &ev->clip);
+
+        if (!pixman_region32_not_empty(&repaint))
+            goto out_clear_view;
+
+        glDisable(GL_BLEND);
+        gl_renderer_surface_set_color(ev->surface, 0.0f, 0.0f, 0.0f, 0.0f);
+
+        use_shader(gr, &gr->solid_shader);
+        shader_uniforms(&gr->solid_shader, ev, output);
+
+        pixman_region32_init_rect(&surface_blend, 0, 0,
+                                  ev->surface->width, ev->surface->height);
+        repaint_region(ev, &repaint, &surface_blend);
+
+        pixman_region32_fini(&surface_blend);
+
+out_clear_view:
+        pixman_region32_fini(&repaint);
+}
+
 static void
 draw_view(struct weston_view *ev, struct weston_output *output,
 	  pixman_region32_t *damage) /* in global coordinates */
@@ -799,12 +869,27 @@ out:
 static void
 repaint_views(struct weston_output *output, pixman_region32_t *damage)
 {
-	struct weston_compositor *compositor = output->compositor;
-	struct weston_view *view;
+  struct weston_compositor *compositor = output->compositor;
+  struct weston_view *view;
+  pixman_region32_t r;
 
-	wl_list_for_each_reverse(view, &compositor->view_list, link)
-		if (view->plane == &compositor->primary_plane)
-			draw_view(view, output, damage);
+  wl_list_for_each_reverse(view, &compositor->view_list, link) {
+    if (view->plane == &compositor->primary_plane) {
+       draw_view(view, output, damage);
+    }
+    else {
+      /* this view is composed directly by overlay */
+      /* compute whether this view has no blending */
+      pixman_region32_init_rect(&r, 0, 0, view->surface->width,
+                               view->surface->height);
+      pixman_region32_subtract(&r, &r, &view->surface->opaque);
+
+      if (!pixman_region32_not_empty(&r) && (view->alpha == 1)) {
+        /* clear framebuffer with transparent pixels where this layer would be*/
+         clear_view(view, output, damage);
+      }
+    }
+  }
 }
 
 static void
@@ -1572,6 +1657,11 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	EGLint attribs[30];
 	int atti = 0;
 
+    //If format is in skip list, return with out creating egl image.
+    if ((gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
+        (gbmbuf->format == GBM_FORMAT_NV12)) {
+      return image;
+    }
 	memset(attribs,0,sizeof(EGLint));
 
 	image = gbm_buffer_backend_get_user_data(gbmbuf);
@@ -1667,6 +1757,12 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
 	buf_info.height		 = gbm_buf->height;
 	buf_info.width       = gbm_buf->width;
 	buf_info.format      = gbm_buf->format;
+
+    if ((gbm_buf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
+        (gbm_buf->format == GBM_FORMAT_NV12)) {
+        return true;
+    }
+
 
 	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Invoked");
 
@@ -1834,8 +1930,12 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 	buffer->y_inverted =
 		!!(gbmbuf->flags & ZLINUX_BUFFER_PARAMS_FLAGS_Y_INVERT);
 
-	for (i = 0; i < gs->num_images; i++)
-		egl_image_unref(gs->images[i]);
+    if ((gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) &&
+        (gbmbuf->format != GBM_FORMAT_NV12)) {
+    	for (i = 0; i < gs->num_images; i++)
+  	    	egl_image_unref(gs->images[i]);
+    }
+
 	gs->num_images = 0;
 
 	gs->target = choose_texture_gbm_buf_target(gbmbuf);
@@ -1856,31 +1956,35 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
  * Here we release the cache reference which has to be final.
  */
 	gs->images[0] = gbm_buffer_backend_get_user_data(gbmbuf);
-	if (gs->images[0]) {
-		int ret;
 
-		ret = egl_image_unref(gs->images[0]);
-		assert(ret == 0);
+    if ((gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) &&
+        (gbmbuf->format != GBM_FORMAT_NV12)) {
+  	    if (gs->images[0]) {
+  		    int ret;
+
+			ret = egl_image_unref(gs->images[0]);
+			assert(ret == 0);
+		}
+
+		gs->images[0] = import_gbm_buffer(gr, gbmbuf);
+		if (!gs->images[0]) {
+			gbm_buffer_send_server_error(gbmbuf,
+					"EGL gbmbuf import failed");
+			return;
+		}
+		gs->num_images = 1;
+
+		ensure_textures(gs, 1);
+
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(gs->target, gs->textures[0]);
+		gr->image_target_texture_2d(gs->target, gs->images[0]->image);
+
+		gs->pitch = buffer->width;
+		gs->height = buffer->height;
+		gs->buffer_type = BUFFER_TYPE_EGL;
+		gs->y_inverted = buffer->y_inverted;
 	}
-
-	gs->images[0] = import_gbm_buffer(gr, gbmbuf);
-	if (!gs->images[0]) {
-		gbm_buffer_send_server_error(gbmbuf,
-				"EGL gbmbuf import failed");
-		return;
-	}
-	gs->num_images = 1;
-
-	ensure_textures(gs, 1);
-
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(gs->target, gs->textures[0]);
-	gr->image_target_texture_2d(gs->target, gs->images[0]->image);
-
-	gs->pitch = buffer->width;
-	gs->height = buffer->height;
-	gs->buffer_type = BUFFER_TYPE_EGL;
-	gs->y_inverted = buffer->y_inverted;
 }
 
 static void
@@ -1921,7 +2025,7 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 		gl_renderer_attach_dmabuf(es, buffer, dmabuf);
 	}
 	else if ((gbmbuf = gbm_buffer_get(buffer->resource))){
-		gl_renderer_attach_gbm_buffer(es, buffer, gbmbuf);
+  		gl_renderer_attach_gbm_buffer(es, buffer, gbmbuf);
 	}
 	else {
 		weston_log("unhandled buffer type!\n");
@@ -1929,24 +2033,6 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 		gs->buffer_type = BUFFER_TYPE_NULL;
 		gs->y_inverted = 1;
 	}
-}
-
-static void
-gl_renderer_surface_set_color(struct weston_surface *surface,
-		 float red, float green, float blue, float alpha)
-{
-	struct gl_surface_state *gs = get_surface_state(surface);
-	struct gl_renderer *gr = get_renderer(surface->compositor);
-
-	gs->color[0] = red;
-	gs->color[1] = green;
-	gs->color[2] = blue;
-	gs->color[3] = alpha;
-	gs->buffer_type = BUFFER_TYPE_SOLID;
-	gs->pitch = 1;
-	gs->height = 1;
-
-	gs->shader = &gr->solid_shader;
 }
 
 static void
@@ -2756,13 +2842,14 @@ gl_renderer_setup_egl_extensions(struct weston_compositor *ec)
 
 	return 0;
 }
-
+// Enable alpha component in opaque_attribs for successful
+// GBM_FORMAT_ARGB8888 configuration.
 static const EGLint gl_renderer_opaque_attribs[] = {
 	EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
 	EGL_RED_SIZE, 1,
 	EGL_GREEN_SIZE, 1,
 	EGL_BLUE_SIZE, 1,
-	EGL_ALPHA_SIZE, 0,
+	EGL_ALPHA_SIZE, 1,
 	EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
 	EGL_NONE
 };

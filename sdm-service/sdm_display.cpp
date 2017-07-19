@@ -75,7 +75,7 @@ namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
 #define GET_CURSOR_SLOT(max_layers) ((max_layers) - 2)
-#define SDM_DISPLAY_DEBUG 1
+#define SDM_DISPLAY_DEBUG 0
 
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
     display_type_ = type;
@@ -122,6 +122,7 @@ DisplayError SdmDisplay::Init() {
 
 DisplayError SdmDisplay::CreateDisplay() {
     DisplayError error = kErrorNone;
+    struct DisplayHdrInfo display_hdr_info;
 
     error = core_intf_->GetFirstDisplayInterfaceType(&hw_disp_info_);
     display_type_ = hw_disp_info_.type;
@@ -135,9 +136,18 @@ DisplayError SdmDisplay::CreateDisplay() {
         return error;
     }
 
-    #if SDM_DISPLAY_DEBUG
-    DLOGI("function successful.");
-    #endif
+    SdmDisplayDebugger::Get()->GetProperty("sys.sdm_display_disable_hdr", &disable_hdr_handling_);
+    if (disable_hdr_handling_) {
+        DLOGI("HDR Handling disabled");
+    }
+
+    GetHdrInfo(&display_hdr_info);
+
+    if (hdr_supported_) {
+        DLOGI("Display Device supports HDR functionality");
+    } else {
+        DLOGI("Display Device doesn't support HDR functionality");
+    }
 
     return kErrorNone;
 }
@@ -377,6 +387,12 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
     layer_buffer->format = GetSDMFormat(layer_geometry->format, layer_geometry->flags);
     layer_buffer->width = layer_geometry->width;
     layer_buffer->height = layer_geometry->height;
+    layer_buffer->unaligned_width = layer_geometry->unaligned_width;
+    layer_buffer->unaligned_height = layer_geometry->unaligned_height;
+    /* TODO (user): Obtain metadata and then */
+    // TODO: (user)  if (SetMetaData(metadatar layer) != kErrorNone) {
+    // TODO: (user)      return kErrorUndefined;
+    // TODO: (user)  }
 
     if (index != layer_stack_.layers.size()-1)
         layer_buffer->planes[0].fd = layer_geometry->ion_fd;
@@ -384,6 +400,15 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
     /* TODO: Below information should be set according to the real user scenario */
     layer_buffer->flags.secure = layer_geometry->flags.secure_present;
     layer_buffer->flags.video = layer_geometry->flags.video_present;
+    layer_buffer->flags.hdr = layer_geometry->flags.hdr_present;
+
+    if (layer_buffer->flags.hdr) {
+      layer_buffer->color_metadata = layer_geometry->color_metadata;
+
+       DLOGI("color_metadata: ColorPrimaries: %d", layer_buffer->color_metadata.colorPrimaries);
+       DLOGI("color_metadata: Transfer: %d", layer_buffer->color_metadata.transfer);
+    }
+
     layer_buffer->flags.macro_tile = false;
     layer_buffer->flags.interlace = false;
     layer_buffer->flags.secure_display = false;
@@ -423,6 +448,8 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
        layer_stack_.flags.skip_present = is_skip;
     if (layer_buffer->flags.video)
        layer_stack_.flags.video_present = true;
+    if (layer_buffer->flags.hdr)
+       layer_stack_.flags.hdr_present = 1;
     if (layer_buffer->flags.secure)
         layer_stack_.flags.secure_present = true;
     layer->flags.updating = true;
@@ -483,6 +510,9 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
 
     fb_layer->width = output->base.width;
     fb_layer->height = output->base.height;
+    fb_layer->unaligned_width = output->base.width;
+    fb_layer->unaligned_height = output->base.height;
+
     fb_layer->format = GetMappedFormatFromGbm(output->format);
     fb_layer->composition = SDM_COMPOSITION_FB_TARGET;
 
@@ -513,7 +543,7 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
     fb_layer->dirty_regions.rects[0] = fb_layer->dst_rect;
     fb_layer->dirty_regions.count = 1;
 
-    fb_layer->blending = SDM_BLENDING_NONE;
+    fb_layer->blending = SDM_BLENDING_PREMULTIPLIED;
     /*
      * output->base.width/height should be already transformed, so just
      * keep no transform for output.
@@ -564,7 +594,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->format = SDM_BUFFER_FORMAT_RGBX_8888;
 
     if (!sdm_layer->is_skip) {
-      struct gbm_bo *bo;
+        struct gbm_bo *bo;
         //check whether the buffer resource is created by linux dma buf
         if ((dmabuf = linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource))) {
             struct gbm_import_fd_data gbm_dmabuf = {
@@ -599,6 +629,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             uint32_t *fbid;
             uint32_t fb_id, stride, handle, size;
             uint32_t fb_id1;
+
             width = gbm_bo_get_width(bo);
             height = gbm_bo_get_height(bo);
             stride = gbm_bo_get_stride(bo);
@@ -614,16 +645,27 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             uint32_t alignedWidth = 0;
             uint32_t alignedHeight = 0;
             uint32_t secure_status = 0;
+            void *prm = reinterpret_cast<void *> (&layer->color_metadata);
 
             gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_WIDTH, bo, &alignedWidth);
             gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_HEIGHT, bo, &alignedHeight);
             gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, bo, &secure_status);
+            gbm_perform(GBM_PERFORM_GET_METADATA, bo, GBM_METADATA_GET_COLOR_METADATA, prm);
 
             // Override buffer width/height to reflect aligned width and aligned height.
             layer->width = alignedWidth;
             layer->height = alignedHeight;
+            layer->unaligned_width = width;
+            layer->unaligned_height = height;
             layer->ion_fd = gbm_bo_get_fd(bo);
             layer->flags.secure_present = secure_status;
+
+            bool hdr_layer = layer->color_metadata.colorPrimaries == ColorPrimaries_BT2020 &&
+                             (layer->color_metadata.transfer == Transfer_SMPTE_ST2084 ||
+                             layer->color_metadata.transfer == Transfer_HLG);
+
+            // Set to true if incoming layer has HDR support and Display supports HDR functionality
+            layer->flags.hdr_present = hdr_layer && hdr_supported_;
         }
     }
 
@@ -643,13 +685,6 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     if (ComputeDirtyRegion(ev, &layer->dirty_regions))
         return -1;
 
-    /* Get blending. Now Weston only support premultipled alpha */
-    /* TODO (user): update property alpha, blend_op */
-    if (ev->alpha == 1.0f)
-     layer->blending = SDM_BLENDING_NONE;
-    else
-     layer->blending = SDM_BLENDING_PREMULTIPLIED;
-
     /* Set no transform for view since bounding box already been applied by transform */
     layer->transform = SDM_TRANSFORM_NORMAL;
     /* Get global alpha */
@@ -660,6 +695,16 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     /* TODO:Check if view has a ubwc buffer. Now set it to false */
     layer->flags.has_ubwc_buf = 0;
     layer->flags.video_present = GetVideoPresenceByFormatFromGbm(format);
+
+    /* Get blending. Now Weston only support premultipled alpha */
+    /* TODO (user): update property alpha, blend_op */
+    layer->blending = SDM_BLENDING_PREMULTIPLIED;
+
+    // Video layers are always opaque
+    if (layer->flags.video_present) {
+        layer->blending = SDM_BLENDING_NONE;
+    }
+
     /* Initialize all views with GPU composition first, SDM will update them after prepare */
     layer->composition = SDM_COMPOSITION_GPU;
 
@@ -797,7 +842,6 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
 DisplayError SdmDisplay::PreCommit()
 {
     DisplayError error = kErrorNone;
-    // TODO: Check for pre-commit stuff here
 
     return error;
 }
@@ -830,7 +874,6 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
 {
     DisplayError ret = kErrorNone;
 
-    PreCommit();
     uint32_t layer_count = layer_stack_.layers.size();
 
     uint32_t GPUTarget_index = layer_count-1;
@@ -840,6 +883,8 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     GpuTargetlayer = layer_stack_.layers.at(GPUTarget_index);
 
     GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
+
+    PreCommit();
 
     ret = display_intf_->Commit(&layer_stack_);
     PostCommit();
@@ -1354,6 +1399,40 @@ DisplayError SdmDisplay::UpdateDisplayPll(int32_t ppm)
   }
 
   return kErrorNone;
+}
+
+DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
+    DisplayError error;
+
+    DisplayConfigFixedInfo fixed_info = {};
+    error = display_intf_->GetConfig(&fixed_info);
+
+    if (error != kErrorNone) {
+        DLOGE("Failed to get fixed info. Error = %d", error);
+        return error;
+    }
+
+    hdr_supported_ = fixed_info.hdr_supported;
+
+    if (!fixed_info.hdr_supported) {
+        DLOGI("HDR is not supported");
+        return error;
+    }
+
+    static const float kLuminanceFactor = 10000.0;
+    // luminance is expressed in the unit of 0.0001 cd/m2, convert it to 1cd/m2.
+    max_luminance_ = FLOAT(fixed_info.max_luminance)/kLuminanceFactor;
+    max_average_luminance_ = FLOAT(fixed_info.average_luminance)/kLuminanceFactor;
+    min_luminance_ = FLOAT(fixed_info.min_luminance)/kLuminanceFactor;
+
+    display_hdr_info->hdr_supported = fixed_info.hdr_supported;
+    display_hdr_info->hdr_eotf = fixed_info.hdr_eotf;
+    display_hdr_info->hdr_metadata_type_one = fixed_info.hdr_metadata_type_one;
+    display_hdr_info->max_luminance = fixed_info.max_luminance;
+    display_hdr_info->average_luminance = fixed_info.average_luminance;
+    display_hdr_info->min_luminance = fixed_info.min_luminance;
+
+    return error;
 }
 #ifdef __cplusplus
 }

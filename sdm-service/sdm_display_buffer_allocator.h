@@ -28,25 +28,36 @@
 #include <core/buffer_allocator.h>
 #include <gbm.h>
 #include <gbm_priv.h>
+#include "sdm_display_connect.h"
+#include <layer_stack.h>
 
 namespace sdm {
 
+template <class Type>
+inline Type ALIGN(Type x, Type align) {
+  return (x + align - 1) & ~(align - 1);
+}
 class SdmDisplayBufferAllocator : public BufferAllocator {
  public:
   SdmDisplayBufferAllocator();
+  ~SdmDisplayBufferAllocator() {
+    gbm_device_destroy(gbm_);
+    gbm_ = NULL;
+  };
 
   DisplayError AllocateBuffer(BufferInfo *buffer_info);
   DisplayError FreeBuffer(BufferInfo *buffer_info);
   uint32_t GetBufferSize(BufferInfo *buffer_info);
+
   DisplayError GetAllocatedBufferInfo(const BufferConfig &buffer_config,
                                       AllocatedBufferInfo *allocated_buffer_info);
-
-  int SetBufferInfo(LayerBufferFormat format, int *target, int *flags);
+  int SetBufferInfo(LayerBufferFormat format, uint32_t *target, uint64_t *flags);
   DisplayError GetBufferLayout(const AllocatedBufferInfo &buf_info,
                                uint32_t stride[4], uint32_t offset[4],
                                uint32_t *num_planes);
  private:
-  struct gbm_device *gbm_;
+  bool IsFormatVideo(uint32_t fmt);
+  struct gbm_device *gbm_ = NULL;
 };
 
 }  // namespace sdm

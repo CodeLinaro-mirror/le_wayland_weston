@@ -93,6 +93,7 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     DisplayError UpdateDisplayPll(int32_t ppm);
 
     void InstallVSyncSignalHandler(int siguser);
+    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
     int GetDrmMasterFd();
     int SetWait() {
         vb_wait_ = true;
@@ -178,6 +179,11 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     pthread_t tid_ = -1;
     int  display_id_ = -1;
     uint32_t fps_ = 0;
+    float max_luminance_ = 0.0;
+    float max_average_luminance_ = 0.0;
+    float min_luminance_ = 0.0;
+    int disable_hdr_handling_ = 0;
+    bool hdr_supported_ = false;
 };
 
 }  // namespace sdm

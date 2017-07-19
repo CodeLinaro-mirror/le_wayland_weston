@@ -65,7 +65,7 @@ bin_PROGRAMS += weston
 if ENABLE_DRM_COMPOSITOR
 COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
 COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
-COMPOSITOR_LIBS += -lsdmutils -lsdmcore -lsdedrm
+COMPOSITOR_LIBS += -lsdmutils -lhdr_tm -lsdmcore -lsdedrm
 endif
 
 weston_LDFLAGS = -export-dynamic

@@ -460,6 +460,11 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
         goto finish_frame;
     }
 
+    // SDM backend cannot inovke page-flip as it needs to construct
+    // layer stack from drm_assign_planes. Since we cannot push the frame
+    // handle this funciton gracefully
+    goto finish_frame;
+
         /* TODO (user): To get time stamp information from SDM interface */
     /* Try to get current msc and timestamp via instant query */
     vbl.request.type |= drm_waitvblank_pipe(output);
@@ -2140,9 +2145,12 @@ drm_backend_create(struct weston_compositor *compositor,
 
     b->compositor = compositor;
 
+    // Framebuffer should be in ARGB format to support mixed mode composition
+	// e.g., if framebuffer is sandwiched between application views where in
+	// these application views are composed by overlays/SDE.
     section = weston_config_get_section(config, "core", NULL, NULL);
     if (get_gbm_format_from_section(section,
-                    GBM_FORMAT_XRGB8888,
+                    GBM_FORMAT_ARGB8888,
                     &b->format) == -1)
         goto err_base;
 
