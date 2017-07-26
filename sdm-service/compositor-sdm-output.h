@@ -123,6 +123,7 @@ struct sdm_layer {
        struct weston_view *view;
        bool is_cursor;
        bool is_skip;
+       uint32_t composition_type; /* type: enum SDM_COMPOSITION_XXXXX */
        pixman_region32_t overlap;
 };
 
