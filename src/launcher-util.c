@@ -129,18 +129,18 @@ weston_launcher_open(struct weston_launcher *launcher,
 		return weston_logind_open(launcher->logind, path, flags);
 
 	if (launcher->fd == -1) {
-		fd = get_drm_master_fd();
-
-		if (fd == -1)
-			return -1;
-
-		if (fstat(fd, &s) == -1) {
-			close(fd);
-			return -1;
-		}
-
-		if (major(s.st_rdev) == DRM_MAJOR) {
+		if(!strcmp(path, "/dev/dri/card0")) {
+			fd = get_drm_master_fd();
 			launcher->drm_fd = fd;
+		} else {
+			fd = open(path, flags);
+			if (fd == -1)
+				return -1;
+
+			if (fstat(fd, &s) == -1) {
+				close(fd);
+				return -1;
+			}
 		}
 
 		return fd;
@@ -200,7 +200,8 @@ weston_launcher_close(struct weston_launcher *launcher, int fd)
 		weston_logind_close(launcher->logind, fd);
 
 	//DRMMaster in SDM owns this fd and will take care of the fd closure
-	//close(fd);
+	if (fd != launcher->drm_fd)
+		close(fd);
 }
 
 void
