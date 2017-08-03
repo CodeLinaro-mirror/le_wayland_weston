@@ -499,6 +499,10 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
             weston_output_finish_frame(output_base, &ts,
                         PRESENTATION_FEEDBACK_INVALID);
             return;
+        } else {
+            weston_log("drm_output_start_repaint_loop: stale ts\n");
+            weston_output_finish_frame(output_base, &tnow,
+                        PRESENTATION_FEEDBACK_INVALID);
         }
     }
 
