@@ -90,6 +90,17 @@ gbm_buffer_params_implementation = {
 };
 
 static void
+gbm_buffer_destroy(struct gbm_buffer *buffer)
+{
+  if (buffer->fd != -1)
+    close(buffer->fd);
+  if (buffer->metadata_fd != -1)
+    close(buffer->metadata_fd);
+  free(buffer);
+}
+
+
+static void
 gbm_wl_buffer_destroy(struct wl_client *client,
     struct wl_resource *resource)
 {
@@ -103,14 +114,14 @@ gbm_wl_buffer_destroy(struct wl_client *client,
 static void
 destroy_params(struct wl_resource *params_resource)
 {
-    struct linux_dmabuf_buffer *buffer;
+    struct gbm_buffer *buffer;
 
     buffer = wl_resource_get_user_data(params_resource);
 
     if (!buffer)
         return;
 
-    linux_dmabuf_buffer_destroy(buffer);
+    gbm_buffer_destroy(buffer);
 }
 
 static const struct wl_buffer_interface gbm_buffer_implementation = {
@@ -127,7 +138,7 @@ gbm_buffer_destroy_params(struct wl_resource *params_resource)
     if (!buffer)
         return;
 
-    free(buffer);
+    gbm_buffer_destroy(buffer);
 }
 
 static void
@@ -147,6 +158,8 @@ gbm_buffer_backend_create_params(struct wl_client *client,
     if (!buffer)
         goto err_out;
 
+    buffer->fd = -1;
+    buffer->metadata_fd = -1;
     buffer->compositor = compositor;
     buffer->params_resource =
         wl_resource_create(client,
@@ -200,11 +213,13 @@ destroy_gbm_buffer(struct wl_resource *resource)
 
 
     buffer = wl_resource_get_user_data(resource);
+    assert(buffer->buffer_resource == resource);
+    assert(!buffer->params_resource);
 
     if (buffer->user_data_destroy_func)
         buffer->user_data_destroy_func(buffer);
 
-    free(buffer);
+    gbm_buffer_destroy(buffer);
 
     GBM_PROTOCOL_LOG(LOG_DBG,"destroy_gbm_buffer::Exited\n");
 }
@@ -231,8 +246,13 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
 
     if (!buffer) {
         weston_log("gbm_buffer_backend_create_buffer::buffer already used\n");
+        close(fd);
+        close(metadata_fd);
         return;
     }
+
+    assert(buffer->params_resource == params_resource);
+    assert(!buffer->buffer_resource);
 
     wl_resource_set_user_data(buffer->params_resource, NULL);
     buffer->params_resource = NULL;
@@ -281,6 +301,7 @@ err_buffer:
 
 err_failed:
     gbm_buffer_params_send_failed(params_resource);
+    gbm_buffer_destroy(buffer);
 
     GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Exited with Error\n");
 }
