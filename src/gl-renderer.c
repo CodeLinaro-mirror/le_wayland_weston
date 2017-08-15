@@ -1778,8 +1778,7 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
 		printf("GET YUV Info success\n");
 		gbm_buf->num_planes = buf_lyt.num_planes;
 		for(j = 0;j < buf_lyt.num_planes; j++){
-			gbm_buf->offset[j] =
-			((uint32_t)(buf_lyt.planes[j].top_left) - (uint32_t)(buf_lyt.planes[0].top_left));
+			gbm_buf->offset[j] = buf_lyt.planes[j].offset;
 			gbm_buf->stride[j] = buf_lyt.planes[j].v_increment;
 		}
 	}
