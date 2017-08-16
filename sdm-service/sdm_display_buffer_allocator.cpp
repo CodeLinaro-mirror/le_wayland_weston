@@ -151,14 +151,34 @@ uint32_t SdmDisplayBufferAllocator::GetBufferSize(BufferInfo *buffer_info) {
 
 int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t *target, uint64_t *flags) {
   switch (format) {
-  case kFormatRGBA8888:                 *target = GBM_FORMAT_ABGR8888;             break;
-  case kFormatRGBX8888:                 *target = GBM_FORMAT_XBGR8888;             break;
+  case kFormatRGBA8888:                 *target = GBM_FORMAT_ABGR8888;
+                                        break;
+  case kFormatRGBX8888:                 *target = GBM_FORMAT_XBGR8888;
+                                        break;
   case kFormatRGB888:                   *target = GBM_FORMAT_BGR888;               break;
-  case kFormatRGB565:                   *target = GBM_FORMAT_BGR565;               break;
+  case kFormatRGB565:                   *target = GBM_FORMAT_BGR565;
+                                        break;
   case kFormatBGR565:                   *target = GBM_FORMAT_RGB565;               break;
   case kFormatBGRA8888:                 *target = GBM_FORMAT_ARGB8888;             break;
   case kFormatBGRX8888:                 *target = GBM_FORMAT_XRGB8888;             break;
   case kFormatYCbCr420SemiPlanarVenus:  *target = GBM_FORMAT_NV12;                 break;
+  case kFormatYCbCr420SPVenusUbwc:      *target = GBM_FORMAT_NV12;                 break;
+  case kFormatRGBA8888Ubwc:             *target = GBM_FORMAT_ABGR8888;
+                                        *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
+                                                 GBM_BO_USAGE_HW_RENDERING_QTI;
+                                        break;
+  case kFormatRGBX8888Ubwc:             *target = GBM_FORMAT_XBGR8888;
+                                        *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
+                                                 GBM_BO_USAGE_HW_RENDERING_QTI;
+                                        break;
+  case kFormatBGR565Ubwc:              *target = GBM_FORMAT_BGR565;
+                                        *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
+                                                 GBM_BO_USAGE_HW_RENDERING_QTI;
+                                        break;
+  case kFormatABGR2101010:              *target = GBM_FORMAT_ABGR2101010;
+                                        *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
+                                                 GBM_BO_USAGE_HW_RENDERING_QTI;
+                                        break;
   case kFormatYCbCr420TP10Ubwc:         *target = GBM_FORMAT_YCbCr_420_TP10_UBWC;  break;
   case kFormatYCbCr420P010Ubwc:         *target = GBM_FORMAT_YCbCr_420_P010_UBWC;  break;
   default:
