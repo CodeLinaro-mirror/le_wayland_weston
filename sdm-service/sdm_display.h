@@ -32,7 +32,6 @@
 #include <utils/debug.h>
 #include <utils/constants.h>
 #include <utils/formats.h>
-#include <utils/locker.h>
 #include <stdio.h>
 #include <string>
 #include <utility>
@@ -40,8 +39,6 @@
 #include <vector>
 #include <iostream>
 #include <thread>
-#include <mutex>
-#include <condition_variable>
 
 #include "sdm_display_debugger.h"
 #include "sdm_display_interface.h"
@@ -50,16 +47,6 @@
 #include "sdm_display_socket_handler.h"
 #include "compositor-sdm-output.h"
 #include "drm_master.h"
-#include <signal.h>
-#include <pthread.h>
-
-#define VSYNC_MAGIC    13579
-#define vblank_signal  SIGUSR2
-struct signal_data {
-       int magic, fd;
-       unsigned int sequence, tv_sec, tv_usec;
-       void *data;
-};
 
 namespace sdm {
 using namespace drm_utils;
@@ -71,8 +58,6 @@ using std::to_string;
 using std::map;
 using std::pair;
 using std::fstream;
-using std::condition_variable;
-using std::unique_lock;
 
 enum SdmDisplayIntfType {null_disp, sdm_disp};
 
@@ -87,12 +72,10 @@ class SdmDisplayInterface {
     virtual DisplayError SetDisplayState(DisplayState state) = 0;
     virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
     virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
-    virtual DisplayError RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb) = 0;
+    virtual DisplayError RegisterCb(int display_id, vblank_cb_t vbcb) = 0;
     virtual DisplayError EnablePllUpdate(int32_t enable) = 0;
     virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
     virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
-    virtual int SetWait() = 0;
-    virtual int ReleaseWait() = 0;
     virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
 
     static int GetDrmMasterFd();
@@ -113,12 +96,10 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
-    DisplayError RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb);
+    DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
-    int SetWait();
-    int ReleaseWait();
 };
 
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
@@ -138,24 +119,11 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
-    DisplayError RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb);
+    DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
 
-    void InstallVSyncSignalHandler(int siguser);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
-
-    int SetWait() {
-        vb_wait_ = true;
-        SCOPE_LOCK(uevent_locker_);
-        uevent_locker_.Wait();
-    }
-
-    int ReleaseWait() {
-        uevent_locker_.Lock();
-        uevent_locker_.Signal();
-        uevent_locker_.Unlock();
-    }
 
  protected:
     virtual DisplayError VSync(const DisplayEventVSync &vsync);
@@ -213,7 +181,6 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     int GetVisibleRegion(struct drm_output *output, struct weston_view *ev,
                          pixman_region32_t *aboved_opaque, struct RectArray *visible);
     bool IsTransparentGbmFormat(uint32_t format);
-    Locker uevent_locker_;
     CoreInterface *core_intf_ = NULL;
     SdmDisplayBufferAllocator buffer_allocator_;
     SdmDisplayBufferSyncHandler buffer_sync_handler_;
@@ -224,9 +191,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayConfigVariableInfo variable_info_;
     HWDisplayInterfaceInfo hw_disp_info_;
     bool shutdown_pending_ = false;
-    bool vb_wait_ = false;
     LayerStack layer_stack_;
-    pthread_t tid_ = -1;
     int  display_id_ = -1;
     uint32_t fps_ = 0;
     float max_luminance_ = 0.0;
@@ -261,7 +226,7 @@ class SdmDisplayProxy {
     DisplayError RegisterCbs(int display_id, sdm_cbs_t *cbs) {
       // TODO: move vblank_cb up?
       hotplug_cb_ = cbs->hotplug_cb;
-      return display_intf_->RegisterCb(display_id, cbs->tid, cbs->vblank_cb);
+      return display_intf_->RegisterCb(display_id, cbs->vblank_cb);
     }
     DisplayError EnablePllUpdate(int32_t enable) {
       return display_intf_->EnablePllUpdate(enable);
@@ -271,12 +236,6 @@ class SdmDisplayProxy {
     }
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
       return display_intf_->GetHdrInfo(display_hdr_info);
-    }
-    int SetWait() {
-      return display_intf_->SetWait();
-    }
-    int ReleaseWait() {
-      return display_intf_->ReleaseWait();
     }
 
     int HandleHotplug(bool connected);
