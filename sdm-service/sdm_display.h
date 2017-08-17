@@ -32,16 +32,12 @@
 #include <utils/debug.h>
 #include <utils/constants.h>
 #include <utils/formats.h>
-#include <utils/locker.h>
 #include <stdio.h>
 #include <string>
 #include <utility>
 #include <map>
 #include <vector>
 #include <iostream>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
 
 #include "sdm_display_debugger.h"
 #include "sdm_display_interface.h"
@@ -50,16 +46,6 @@
 #include "sdm_display_socket_handler.h"
 #include "compositor-sdm-output.h"
 #include "drm_master.h"
-#include <signal.h>
-#include <pthread.h>
-
-#define VSYNC_MAGIC    13579
-#define vblank_signal  SIGUSR2
-struct signal_data {
-       int magic, fd;
-       unsigned int sequence, tv_sec, tv_usec;
-       void *data;
-};
 
 namespace sdm {
 using namespace drm_utils;
@@ -71,8 +57,6 @@ using std::to_string;
 using std::map;
 using std::pair;
 using std::fstream;
-using std::condition_variable;
-using std::unique_lock;
 
 class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
 
@@ -88,24 +72,12 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
-    DisplayError RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb);
+    DisplayError RegisterCb(int display_id,       vblank_cb_t vbcb);
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
 
-    void InstallVSyncSignalHandler(int siguser);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
     int GetDrmMasterFd();
-    int SetWait() {
-        vb_wait_ = true;
-        SCOPE_LOCK(uevent_locker_);
-        uevent_locker_.Wait();
-    }
-
-    int ReleaseWait() {
-        uevent_locker_.Lock();
-        uevent_locker_.Signal();
-        uevent_locker_.Unlock();
-    }
     const char * FourccToString(uint32_t fourcc);
 
  protected:
@@ -163,7 +135,6 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     int GetVisibleRegion(struct drm_output *output, struct weston_view *ev,
                          pixman_region32_t *aboved_opaque, struct RectArray *visible);
     bool IsTransparentGbmFormat(uint32_t format);
-    Locker uevent_locker_;
     CoreInterface *core_intf_ = NULL;
     SdmDisplayBufferAllocator buffer_allocator_;
     SdmDisplayBufferSyncHandler buffer_sync_handler_;
@@ -174,9 +145,7 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     DisplayConfigVariableInfo variable_info_;
     HWDisplayInterfaceInfo hw_disp_info_;
     bool shutdown_pending_ = false;
-    bool vb_wait_ = false;
     LayerStack layer_stack_;
-    pthread_t tid_ = -1;
     int  display_id_ = -1;
     uint32_t fps_ = 0;
     float max_luminance_ = 0.0;

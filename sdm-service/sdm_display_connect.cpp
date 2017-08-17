@@ -320,13 +320,12 @@ bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info)
     return SUCCESS;
 }
 
-int RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb)
+int RegisterCb(int display_id, vblank_cb_t vbcb)
 {
     DisplayError error = kErrorNone;
 
-    if (display_id >= kDisplayMax || display_id < 0 || tid < 0) {
-        DLOGE("Display id(%d) or thread id(%d) out of range.",
-              display_id, tid);
+    if (display_id >= kDisplayMax || display_id < 0) {
+        DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
     }
 
@@ -336,7 +335,7 @@ int RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb)
         return kErrorParameters;
     }
 
-    error = display_[display_id]->RegisterCb(display_id, tid, vbcb);
+    error = display_[display_id]->RegisterCb(display_id, vbcb);
 
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
@@ -420,16 +419,6 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
     #endif
 
     return kErrorNone;
-}
-
-int SetWait(int display_id)
-{
-    display_[display_id]->SetWait();
-}
-
-int ReleaseWait(int display_id)
-{
-    display_[display_id]->ReleaseWait();
 }
 
 int EnablePllUpdate(int display_id, int enable)

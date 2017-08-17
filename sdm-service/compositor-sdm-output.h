@@ -184,4 +184,11 @@ struct drm_output {
 
        struct wl_list plane_flip_list; /* drm_plane::flip_link */
        struct wl_list sdm_layer_list;  /* sdm_layer::link      */
+       int vblank_ev_fd;
+       struct wl_event_source *vblank_ev_source;
+       struct {
+           unsigned int frame;
+           unsigned int sec;
+           unsigned int usec;
+       } last_vblank;
 };

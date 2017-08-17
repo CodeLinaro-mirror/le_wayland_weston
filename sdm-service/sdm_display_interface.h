@@ -203,7 +203,7 @@ struct DisplayConfigInfo {
   bool     is_yuv;            //!< If the display output is in YUV format.
 };
 
-typedef void (*vblank_cb_t)(int fd, unsigned int sequence, unsigned int tv_sec,
+typedef void (*vblank_cb_t)(unsigned int sequence, unsigned int tv_sec,
                            unsigned int tv_usec, struct drm_output *data);
 #ifdef __cplusplus
 }
