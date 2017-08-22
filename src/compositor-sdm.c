@@ -937,10 +937,10 @@ static int
 fallback_format_for(uint32_t format)
 {
     switch (format) {
+    case GBM_FORMAT_ARGB8888:
+        return GBM_FORMAT_ABGR8888;
     case GBM_FORMAT_XRGB8888:
-        return GBM_FORMAT_ARGB8888;
-    case GBM_FORMAT_XRGB2101010:
-        return GBM_FORMAT_ARGB2101010;
+        return GBM_FORMAT_XBGR8888;
     default:
         return 0;
     }
