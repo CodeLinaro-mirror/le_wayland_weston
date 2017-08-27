@@ -74,13 +74,63 @@ using std::fstream;
 using std::condition_variable;
 using std::unique_lock;
 
-class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
+enum SdmDisplayIntfType {null_disp, sdm_disp};
+
+class SdmDisplayInterface {
+  public:
+    virtual ~SdmDisplayInterface() {}
+
+    virtual DisplayError CreateDisplay() = 0;
+    virtual DisplayError DestroyDisplay() = 0;
+    virtual DisplayError Prepare(struct drm_output *output) = 0;
+    virtual DisplayError Commit(struct drm_output *output) = 0;
+    virtual DisplayError SetDisplayState(DisplayState state) = 0;
+    virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
+    virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
+    virtual DisplayError RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb) = 0;
+    virtual DisplayError EnablePllUpdate(int32_t enable) = 0;
+    virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
+    virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
+    virtual int SetWait() = 0;
+    virtual int ReleaseWait() = 0;
+    virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
+
+    static int GetDrmMasterFd();
+};
+
+class SdmNullDisplay : public SdmDisplayInterface {
+  public:
+    SdmNullDisplay(DisplayType type, CoreInterface *core_intf);
+    ~SdmNullDisplay();
+
+    SdmDisplayIntfType GetDisplayIntfType() {
+      return null_disp;
+    }
+    DisplayError CreateDisplay();
+    DisplayError DestroyDisplay();
+    DisplayError Prepare(struct drm_output *output);
+    DisplayError Commit(struct drm_output *output);
+    DisplayError SetDisplayState(DisplayState state);
+    DisplayError SetVSyncState(bool enable, struct drm_output *output);
+    DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
+    DisplayError RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb);
+    DisplayError EnablePllUpdate(int32_t enable);
+    DisplayError UpdateDisplayPll(int32_t ppm);
+    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
+    int SetWait();
+    int ReleaseWait();
+};
+
+class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
 
  public:
     SdmDisplay(DisplayType type, CoreInterface *core_intf);
     ~SdmDisplay();
 
-    DisplayError Init();
+    SdmDisplayIntfType GetDisplayIntfType() {
+      return sdm_disp;
+    }
+
     DisplayError CreateDisplay();
     DisplayError DestroyDisplay();
     DisplayError Prepare(struct drm_output *output);
@@ -94,7 +144,7 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
 
     void InstallVSyncSignalHandler(int siguser);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
-    static int GetDrmMasterFd();
+
     int SetWait() {
         vb_wait_ = true;
         SCOPE_LOCK(uevent_locker_);
@@ -106,7 +156,6 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
         uevent_locker_.Signal();
         uevent_locker_.Unlock();
     }
-    const char * FourccToString(uint32_t fourcc);
 
  protected:
     virtual DisplayError VSync(const DisplayEventVSync &vsync);
@@ -151,6 +200,7 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
                           void *base, int fence);
     const char*  GetDisplayString();
     /* support functions */
+    const char * FourccToString(uint32_t fourcc);
     uint32_t GetMappedFormatFromGbm(uint32_t fmt);
     bool GetVideoPresenceByFormatFromGbm(uint32_t fmt);
     uint32_t GetMappedFormatFromShm(uint32_t fmt);
@@ -184,6 +234,67 @@ class SdmDisplay : public DisplayEventHandler, SdmDisplayDebugger {
     float min_luminance_ = 0.0;
     int disable_hdr_handling_ = 0;
     bool hdr_supported_ = false;
+};
+
+class SdmDisplayProxy {
+  public:
+    SdmDisplayProxy(DisplayType type, CoreInterface *core_intf);
+    ~SdmDisplayProxy();
+
+    DisplayError CreateDisplay() { return display_intf_->CreateDisplay(); }
+    DisplayError DestroyDisplay() { return display_intf_->DestroyDisplay(); }
+    DisplayError Prepare(struct drm_output *output) {
+      return display_intf_->Prepare(output);
+    }
+    DisplayError Commit(struct drm_output *output) {
+      return display_intf_->Commit(output);
+    }
+    DisplayError SetDisplayState(DisplayState state) {
+      return display_intf_->SetDisplayState(state);
+    }
+    DisplayError SetVSyncState(bool enable, struct drm_output *output) {
+      return display_intf_->SetVSyncState(enable, output);
+    }
+    DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
+      return display_intf_->GetDisplayConfiguration(display_config);
+    }
+    DisplayError RegisterCbs(int display_id, sdm_cbs_t *cbs) {
+      // TODO: move vblank_cb up?
+      hotplug_cb_ = cbs->hotplug_cb;
+      return display_intf_->RegisterCb(display_id, cbs->tid, cbs->vblank_cb);
+    }
+    DisplayError EnablePllUpdate(int32_t enable) {
+      return display_intf_->EnablePllUpdate(enable);
+    }
+    DisplayError UpdateDisplayPll(int32_t ppm) {
+      return display_intf_->UpdateDisplayPll(ppm);
+    }
+    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
+      return display_intf_->GetHdrInfo(display_hdr_info);
+    }
+    int SetWait() {
+      return display_intf_->SetWait();
+    }
+    int ReleaseWait() {
+      return display_intf_->ReleaseWait();
+    }
+
+    int HandleHotplug(bool connected);
+
+  private:
+    // Uevent thread
+    static void *UeventThread(void *context);
+    void *UeventThreadHandler();
+
+    SdmDisplayInterface *display_intf_;
+    DisplayType disp_type_;
+    CoreInterface *core_intf_;
+    SdmNullDisplay null_disp_;
+    SdmDisplay sdm_disp_;
+    std::thread uevent_thread_;
+    bool uevent_thread_exit_ = false;
+    const char *uevent_thread_name_ = "SDM_UeventThread";
+    hotplug_cb_t hotplug_cb_;
 };
 
 }  // namespace sdm

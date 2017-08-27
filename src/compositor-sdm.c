@@ -439,7 +439,10 @@ drm_output_repaint(struct weston_output *output_base,
         weston_log("fail to commit to sdm display! err=%d\n", ret);
     }
 
+    pthread_mutex_lock(&output->hpd_lock);
     output->frame_pending = 1;
+    pthread_mutex_unlock(&output->hpd_lock);
+
     SetWait(display_id);
 
     return 0;
@@ -507,7 +510,11 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
     }
 
         fb_id = output->current->fb_id;
+
+	pthread_mutex_lock(&output->hpd_lock);
         output->frame_pending = 1;
+	pthread_mutex_unlock(&output->hpd_lock);
+
         return;
 
 finish_frame:
@@ -542,13 +549,18 @@ vblank_handler(int fd, unsigned int frame, unsigned int sec, unsigned int usec,
         drm_output_release_fb(output, output->current);
         output->current = output->next;
         output->next = NULL;
+
+	pthread_mutex_lock(&output->hpd_lock);
         output->frame_pending = 0;
+	pthread_cond_signal(&output->hpd_cond);
+	pthread_mutex_unlock(&output->hpd_lock);
 
         ts.tv_sec = sec;
         ts.tv_nsec = usec * 1000;
         weston_output_finish_frame(&output->base, &ts, flags);
     }
 }
+
 
 static void
 drm_output_destroy(struct weston_output *output_base);
@@ -743,6 +755,8 @@ drm_output_destroy(struct weston_output *output_base)
     struct drm_backend *b =
         (struct drm_backend *)output->base.compositor->backend;
     drmModeCrtcPtr origcrtc = output->original_crtc;
+
+    wl_event_source_remove(output->finish_frame_timer);
 
     if (output->backlight)
         backlight_destroy(output->backlight);
@@ -1554,6 +1568,73 @@ connector_get_current_mode(drmModeConnector *connector, int drm_fd,
     return 0;
 }
 
+static void
+headless_output_start_repaint_loop(struct weston_output *output)
+{
+	struct timespec ts;
+
+	weston_compositor_read_presentation_clock(output->compositor, &ts);
+	weston_output_finish_frame(output, &ts, PRESENTATION_FEEDBACK_INVALID);
+}
+
+static int
+finish_frame_handler(void *data)
+{
+	struct drm_output *output = data;
+	struct timespec ts;
+
+	weston_compositor_read_presentation_clock(output->base.compositor, &ts);
+	weston_output_finish_frame(&output->base, &ts, 0);
+
+	return 1;
+}
+
+static int
+headless_output_repaint(struct weston_output *output_base,
+		       pixman_region32_t *damage)
+{
+	struct drm_output *output = (struct drm_output *) output_base;
+	struct weston_compositor *ec = output->base.compositor;
+
+	wl_event_source_timer_update(output->finish_frame_timer, 16);
+
+	return 0;
+}
+
+static void
+hotplug_handler(int disp, bool connected, void *data)
+{
+    struct drm_output *output = (struct drm_output *) data;
+    struct timespec ts;
+
+    pthread_mutex_lock(&output->hpd_lock);
+    while (output->frame_pending)
+        pthread_cond_wait(&output->hpd_cond, &output->hpd_lock);
+    pthread_mutex_unlock(&output->hpd_lock);
+
+    if (connected) {
+	output->base.start_repaint_loop = drm_output_start_repaint_loop;
+	output->base.repaint = drm_output_repaint;
+	output->base.assign_planes = drm_assign_planes;
+	output->base.set_dpms = drm_set_dpms;
+	output->base.switch_mode = drm_output_switch_mode;
+	output->base.enable_ppm = drm_enable_ppm;
+	output->base.set_ppm = drm_set_ppm;
+    } else {
+	output->base.start_repaint_loop = headless_output_start_repaint_loop;
+	output->base.repaint = headless_output_repaint;
+	output->base.assign_planes = NULL;
+	output->base.set_backlight = NULL;
+	output->base.set_dpms = NULL;
+	output->base.switch_mode = NULL;
+	output->base.enable_ppm = NULL;
+	output->base.set_ppm = NULL;
+    }
+
+    weston_output_schedule_repaint(&output->base);
+}
+
+
 /**
  * Create and configure a Weston output structure
  *
@@ -1580,6 +1661,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     char *s;
     enum output_config config;
     uint32_t transform;
+    struct wl_event_loop *loop;
+    struct weston_compositor *c = b->compositor;
 
     output = zalloc(sizeof *output);
     if (output == NULL)
@@ -1696,6 +1779,10 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     weston_compositor_add_output(b->compositor, &output->base);
     bool ret = SetDisplayState(display_id, WESTON_DPMS_ON);
     output->base.connection_internal = 1;
+
+    loop = wl_display_get_event_loop(c->wl_display);
+    output->finish_frame_timer =
+		wl_event_loop_add_timer(loop, finish_frame_handler, output);
 
     output->base.start_repaint_loop = drm_output_start_repaint_loop;
     output->base.repaint = drm_output_repaint;
@@ -2151,6 +2238,7 @@ drm_backend_create(struct weston_compositor *compositor,
     struct wl_event_loop *loop;
     const char *path;
     uint32_t key;
+    sdm_cbs_t sdm_cbs;
 
     weston_log("initializing drm backend\n");
 
@@ -2232,8 +2320,11 @@ drm_backend_create(struct weston_compositor *compositor,
     rc = CreateDisplay(display_id);
     weston_log("CreateDisplay: %d successful\n", rc);
 
-    /* Now register vblank_handler (VSYNC handler) with SDM services */
-    RegisterCb(display_id, pthread_self(), vblank_handler);
+    /* Now register callbacks with SDM services */
+    sdm_cbs.vblank_cb = vblank_handler,
+    sdm_cbs.hotplug_cb = hotplug_handler,
+    sdm_cbs.tid = pthread_self();
+    RegisterCbs(display_id, &sdm_cbs);
 
     if (udev_input_init(&b->input, compositor, b->udev, param->seat_id) < 0) {
         weston_log("failed to create input devices\n");
