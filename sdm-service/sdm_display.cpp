@@ -572,6 +572,9 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             uint32_t fb_id, stride, handle, size;
             uint32_t fb_id1;
 
+            //save gbm bo in sdm layer for future reference.
+            sdm_layer->bo = bo;
+
             width = gbm_bo_get_width(bo);
             height = gbm_bo_get_height(bo);
             stride = gbm_bo_get_stride(bo);

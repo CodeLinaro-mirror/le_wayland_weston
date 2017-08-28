@@ -534,6 +534,8 @@ drm_output_update_msc(struct drm_output *output, unsigned int seq)
     output->base.msc = (msc_hi << 32) + seq;
 }
 
+static void destroy_sdm_layer(struct sdm_layer *layer);
+
 static void
 vblank_handler(unsigned int frame, unsigned int sec, unsigned int usec,
            void *data)
@@ -560,6 +562,7 @@ on_vblank(int fd, uint32_t mask, void *data)
    uint32_t flags = PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
                     PRESENTATION_FEEDBACK_KIND_VSYNC |
                     PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
+   struct sdm_layer *sdm_layer, *next_sdm_layer;
 
    read(fd, &v, sizeof v);
 
@@ -572,6 +575,13 @@ on_vblank(int fd, uint32_t mask, void *data)
        output->frame_pending = 0;
        pthread_cond_signal(&output->hpd_cond);
 
+       wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->commited_layer_list, link) {
+           destroy_sdm_layer(sdm_layer);
+       }
+
+       assert(wl_list_empty(&output->commited_layer_list));
+       wl_list_insert_list(&output->commited_layer_list, &output->sdm_layer_list);
+       wl_list_init(&output->sdm_layer_list);
        ts.tv_sec = output->last_vblank.sec;
        ts.tv_nsec = output->last_vblank.usec * 1000;
        weston_output_finish_frame(&output->base, &ts, flags);
@@ -640,7 +650,11 @@ static void
 destroy_sdm_layer(struct sdm_layer *layer)
 {
     pixman_region32_fini(&layer->overlap);
+    weston_buffer_reference(&layer->buffer_ref, NULL);
     wl_list_remove(&layer->link);
+    if (layer->bo) {
+        gbm_bo_destroy(layer->bo);
+    }
     free(layer);
 }
 
@@ -660,6 +674,7 @@ create_sdm_layer(struct drm_output *output, struct weston_view *ev, pixman_regio
 
     pixman_region32_init(&layer->overlap);
     pixman_region32_copy(&layer->overlap, overlap);
+    weston_buffer_reference(&layer->buffer_ref, ev->surface->buffer_ref.buffer);
 
     return layer;
 }
@@ -675,6 +690,7 @@ drm_assign_planes(struct weston_output *output_base)
     struct weston_plane *primary, *next_plane;
     struct sdm_layer *sdm_layer, *next_sdm_layer;
     output->view_count = 0;
+    assert(wl_list_empty(&output->sdm_layer_list));
 
     /*
      * Find a surface for each sprite in the output using some heuristics:
@@ -753,13 +769,14 @@ drm_assign_planes(struct weston_output *output_base)
             weston_view_move_to_plane(ev, next_plane);
             pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
             ev->psf_flags = 0;
+            destroy_sdm_layer(sdm_layer);
         } else {
             /* Composed by Display Hardware directly */
             /* ToDo(User): handle scenarios if SDE composition is not possible */
             ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
+            /* Forget the view as it might be destroyed at anytime */
+            sdm_layer->view = NULL;
         }
-
-        destroy_sdm_layer(sdm_layer);
     }
 
     return;
@@ -1732,6 +1749,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     /* TODO (user): wl_list_init(&output->plane_flip_list) */
     wl_list_init(&output->plane_flip_list);
     wl_list_init(&output->sdm_layer_list);
+    wl_list_init(&output->commited_layer_list);
 
     section = weston_config_get_section(b->compositor->config, "output", "name",
                         output->base.name);
