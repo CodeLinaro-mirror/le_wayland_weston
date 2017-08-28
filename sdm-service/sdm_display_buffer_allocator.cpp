@@ -257,6 +257,7 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
       stride[0] = gbm_bo_get_stride(bo);
       offset[0] = 0;
       *num_planes++;
+      gbm_bo_destroy(bo);
       return kErrorNone;
     }
 
@@ -277,6 +278,8 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
       offset[0] = 0;
       offset[1] = 0;
     }
+
+  gbm_bo_destroy(bo);
 
   return kErrorNone;
 }
