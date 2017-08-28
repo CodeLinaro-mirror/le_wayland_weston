@@ -304,6 +304,11 @@ DisplayError SdmDisplay::RegisterCb(int display_id, pthread_t tid,
 DisplayError SdmDisplay::FreeLayerStack() {
     for (Layer *layer : layer_stack_.layers) {
 
+         layer->visible_regions.erase(layer->visible_regions.begin(),
+                                       layer->visible_regions.end());
+         layer->dirty_regions.erase(layer->dirty_regions.begin(),
+                                       layer->dirty_regions.end());
+
          delete layer;
     }
     layer_stack_ = {};
@@ -311,12 +316,13 @@ DisplayError SdmDisplay::FreeLayerStack() {
     return kErrorNone;
 }
 
-/* TODO (user): FreeGeometryRegions to keep in case we need to use it. */
-DisplayError SdmDisplay::FreeGeometryRegions(struct LayerGeometry *glayer) {
+DisplayError SdmDisplay::FreeLayerGeometry(struct LayerGeometry *glayer) {
     if (glayer->dirty_regions.count)
         delete[] glayer->dirty_regions.rects;
     if (glayer->visible_regions.count)
         delete[] glayer->visible_regions.rects;
+
+    delete glayer;
 
     return kErrorNone;
 }
@@ -713,6 +719,7 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     /* If no view can be handled by SDM, just skip below and prepare fb target directly. */
     if (gpu_target_index > 0) {
         wl_list_for_each_reverse(sdm_layer, &output->sdm_layer_list, link) {
+            glayer = NULL;
             if(PrepareNormalLayerGeometry(output, &glayer, sdm_layer)) {
                 DLOGE("fail to prepare normal layer geometry.");
                 return kErrorUndefined;
@@ -721,10 +728,10 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
             error = AddGeometryLayerToLayerStack(output, index++, glayer, sdm_layer->is_skip);
             if (error) {
                 DLOGE("failed add Geometry Layer to LayerStack.");
-                /* TODO: Free glayer */
+                FreeLayerGeometry(glayer);
                 return kErrorUndefined;
             }
-            /* TODO: Free glayer */
+            FreeLayerGeometry(glayer);
 
             if (sdm_layer->is_skip)
                 layer_stack_.flags.skip_present = true;
@@ -739,10 +746,10 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
         error = AddGeometryLayerToLayerStack(output, index, glayer, false);
         if (error) {
             DLOGE("fail to prepare Fb target: Add Geometry failure fb\n");
-            /* TODO: Free glayer */
+            FreeLayerGeometry(glayer);
             return kErrorUndefined;
         }
-        /* TODO: Free glayer */
+        FreeLayerGeometry(glayer);
     }
 
     return error;

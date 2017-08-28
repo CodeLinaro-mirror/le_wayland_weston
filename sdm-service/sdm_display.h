@@ -171,7 +171,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
  private:
     static const int kBufferDepth = 2;
     DisplayError FreeLayerStack();
-    DisplayError FreeGeometryRegions(struct LayerGeometry *glayer);
+    DisplayError FreeLayerGeometry(struct LayerGeometry *glayer);
     DisplayError AllocateMemoryForLayerGeometry(struct drm_output *output,
                                                 uint32_t index,
                                                 struct LayerGeometry *glayer);
