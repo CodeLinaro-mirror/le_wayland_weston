@@ -352,7 +352,7 @@ int RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb)
 
 int get_drm_master_fd() {
 
-    int fd = SdmDisplay::GetDrmMasterFd();
+    int fd = display_[0]->GetDrmMasterFd();
 
     #if SDM_DISPLAY_DEBUG
     DLOGD("fd is: %d \n", fd);
