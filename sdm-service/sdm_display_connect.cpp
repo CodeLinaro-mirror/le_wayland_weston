@@ -325,7 +325,8 @@ int RegisterCbs(int display_id, sdm_cbs *cbs) {
     DisplayError error = kErrorNone;
 
     if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
+        DLOGE("Display id(%d) out of range.",
+              display_id);
         return kErrorParameters;
     }
 
@@ -419,6 +420,16 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
     #endif
 
     return kErrorNone;
+}
+
+int SetWait(int display_id)
+{
+    display_[display_id]->SetWait();
+}
+
+int ReleaseWait(int display_id)
+{
+    display_[display_id]->ReleaseWait();
 }
 
 int EnablePllUpdate(int display_id, int enable)

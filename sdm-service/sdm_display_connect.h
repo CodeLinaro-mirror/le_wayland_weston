@@ -192,6 +192,7 @@ bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info);
 
 int RegisterCbs(int display_id, sdm_cbs_t *cbs);
 
+
 /*! @brief Method to turn on power of display
 
     @details Client shall use this method to turn on display. DisplayError
@@ -221,6 +222,33 @@ bool SetDisplayState(int display_id, int power_mode);
     @sa
 */
 int SetVSyncState(int display_id, bool enable, struct drm_output *output);
+
+/*! @brief Method for compositor backend thread to wait after Commit()
+
+    @details Client shall use this method to wait in the client thread
+    after calling Commit().
+
+    @param[in] display_id \link int \endlink
+
+    @return \link int \endlink
+
+    @sa
+*/
+int SetWait(int display_id);
+
+/*! @brief Method for VSync event thread handler to allow client's thread
+    to release from wait after calling Commit().
+
+    @details VSync event thread handler calls this method to release waiting
+    of client thread after Commit() by client thread.
+
+    @param[in] display_id \link int \endlink
+
+    @return \link int \endlink
+
+    @sa
+*/
+int ReleaseWait(int display_id);
 
 /*! @brief Method for obtaining master fd.
 
