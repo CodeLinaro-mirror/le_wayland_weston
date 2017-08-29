@@ -178,20 +178,23 @@ bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_c
 */
 bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info);
 
-/*! @brief Method to register callbacks: VBlank Handler function to be called on
-    enabling VBlank (VSync), and hotplug handler function to be called on hotplug
-    uevent. SDM shall trigger a call back through this interface function.
+/*! @brief Method to register VBlank Handler function to be called on
+    enabling VBlank (VSync). SDM shall trigger a call back through this
+    interface function.
+
+    @details Client shall use this method for VBlank Handler function
+    to be called by hardware composer.
 
     @param[in] display_id \link int \endlink
-    @param[in] cbs \link sdm_cbs_t \endlink
+    @param[in] tid \link pthread_t \endlink
+    @param[in] vbcb \link vblank_cb_t \endlink
 
     @return \link DisplayError \endlink
 
     @sa
 */
 
-int RegisterCbs(int display_id, sdm_cbs_t *cbs);
-
+int RegisterCb(int display_id, pthread_t tid, vblank_cb_t vblank_handler);
 
 /*! @brief Method to turn on power of display
 

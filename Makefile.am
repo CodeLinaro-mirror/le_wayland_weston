@@ -295,8 +295,7 @@ drm_backend_la_SOURCES =			\
 	sdm-service/sdm_display_buffer_allocator.cpp \
 	sdm-service/sdm_display_buffer_sync_handler.cpp \
 	sdm-service/sdm_display_socket_handler.cpp \
-	sdm-service/sdm_display_connect.cpp \
-	sdm-service/uevent.c
+	sdm-service/sdm_display_connect.cpp
 
 if ENABLE_VAAPI_RECORDER
 drm_backend_la_SOURCES += src/vaapi-recorder.c src/vaapi-recorder.h

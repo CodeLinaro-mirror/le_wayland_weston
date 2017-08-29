@@ -24,7 +24,6 @@
 
 #include "sdm_display.h"
 #include "sdm_display_connect.h"
-#include "uevent.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,7 +44,7 @@ SdmDisplayBufferAllocator buffer_allocator_;
 SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
-SdmDisplayProxy *display_[kDisplayMax] = {0};
+SdmDisplay *display_[kDisplayMax] = {0};
 
 int CreateCore()
 {
@@ -143,7 +142,7 @@ int CreateDisplay(int display_id)
     }
 
     if (display_[display_id] != NULL) {
-        DLOGE("Display(%d) was already created.", display_id);
+        DLOGI("Display(%d) was already created.", display_id);
         return kErrorNone;
     }
 
@@ -160,7 +159,7 @@ int CreateDisplay(int display_id)
        default: display_type  = kDisplayMax; break;
     }
 
-    SdmDisplayProxy *sdm_display = new SdmDisplayProxy(display_type, core_intf_);
+    SdmDisplay *sdm_display = new SdmDisplay(display_type, core_intf_);
     display_[display_id] = sdm_display;
     error = display_[display_id]->CreateDisplay() ;
     if (error != kErrorNone) {
@@ -244,11 +243,11 @@ int DestroyDisplay(int display_id)
     }
 
     if (!display_[display_id]) {
-        DLOGE("Display(%d) was already destroyed.", display_id);
+        DLOGI("Display(%d) was already destroyed.", display_id);
         return kErrorNone;
     }
 
-    SdmDisplayProxy *temp_display = display_[display_id];
+    SdmDisplay *temp_display = display_[display_id];
     error = temp_display->DestroyDisplay();
     delete temp_display;
     display_[display_id] = NULL;
@@ -321,12 +320,13 @@ bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info)
     return SUCCESS;
 }
 
-int RegisterCbs(int display_id, sdm_cbs *cbs) {
+int RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb)
+{
     DisplayError error = kErrorNone;
 
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.",
-              display_id);
+    if (display_id >= kDisplayMax || display_id < 0 || tid < 0) {
+        DLOGE("Display id(%d) or thread id(%d) out of range.",
+              display_id, tid);
         return kErrorParameters;
     }
 
@@ -336,7 +336,7 @@ int RegisterCbs(int display_id, sdm_cbs *cbs) {
         return kErrorParameters;
     }
 
-    error = display_[display_id]->RegisterCbs(display_id, cbs);
+    error = display_[display_id]->RegisterCb(display_id, tid, vbcb);
 
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
@@ -352,7 +352,7 @@ int RegisterCbs(int display_id, sdm_cbs *cbs) {
 
 int get_drm_master_fd() {
 
-    int fd = SdmDisplayInterface::GetDrmMasterFd();
+    int fd = SdmDisplay::GetDrmMasterFd();
 
     #if SDM_DISPLAY_DEBUG
     DLOGD("fd is: %d \n", fd);
