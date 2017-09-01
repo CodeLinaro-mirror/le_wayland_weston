@@ -440,9 +440,7 @@ drm_output_repaint(struct weston_output *output_base,
         weston_log("fail to commit to sdm display! err=%d\n", ret);
     }
 
-    pthread_mutex_lock(&output->hpd_lock);
     output->frame_pending = 1;
-    pthread_mutex_unlock(&output->hpd_lock);
 
     return 0;
 }
@@ -510,9 +508,7 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
 
         fb_id = output->current->fb_id;
 
-	pthread_mutex_lock(&output->hpd_lock);
         output->frame_pending = 1;
-	pthread_mutex_unlock(&output->hpd_lock);
 
         return;
 
@@ -566,14 +562,12 @@ on_vblank(int fd, uint32_t mask, void *data)
 
    read(fd, &v, sizeof v);
 
-   pthread_mutex_lock(&output->hpd_lock);
    if (output->frame_pending) {
        drm_output_update_msc(output, output->last_vblank.frame);
        drm_output_release_fb(output, output->current);
        output->current = output->next;
        output->next = NULL;
        output->frame_pending = 0;
-       pthread_cond_signal(&output->hpd_cond);
 
        wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->commited_layer_list, link) {
            destroy_sdm_layer(sdm_layer);
@@ -586,7 +580,6 @@ on_vblank(int fd, uint32_t mask, void *data)
        ts.tv_nsec = output->last_vblank.usec * 1000;
        weston_output_finish_frame(&output->base, &ts, flags);
    }
-   pthread_mutex_unlock(&output->hpd_lock);
 
    return 1;
 }
@@ -1675,11 +1668,6 @@ hotplug_handler(int disp, bool connected, void *data)
 {
     struct drm_output *output = (struct drm_output *) data;
     struct timespec ts;
-
-    pthread_mutex_lock(&output->hpd_lock);
-    while (output->frame_pending)
-        pthread_cond_wait(&output->hpd_cond, &output->hpd_lock);
-    pthread_mutex_unlock(&output->hpd_lock);
 
     if (connected) {
 	output->base.start_repaint_loop = drm_output_start_repaint_loop;
