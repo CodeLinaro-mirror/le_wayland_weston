@@ -103,7 +103,6 @@ SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
     core_intf_    = core_intf;
     drm_output_   = NULL;
     vblank_cb_    = NULL;
-    InstallVSyncSignalHandler(vblank_signal);
 }
 
 SdmDisplay::~SdmDisplay() {
@@ -163,52 +162,10 @@ DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
     return kErrorNone;
 }
 
-void VSyncSignalHandler(int signum, siginfo_t *info, void *moredata) {
-    struct signal_data *sigdata = reinterpret_cast<struct signal_data *> (info->si_value.sival_ptr);
-
-    if (signum == vblank_signal && sigdata->magic == VSYNC_MAGIC) {
-        int fd          = sigdata->fd;
-        unsigned int sequence = sigdata->sequence;
-        unsigned int tv_sec   = sigdata->tv_sec;
-        unsigned int tv_usec  = sigdata->tv_usec;
-        void *data         = sigdata->data;
-        delete info->si_value.sival_ptr;
-        vblank_cb_(fd, sequence, tv_sec, tv_usec, drm_output_);
-    } else {
-        DLOGW("Spurious Vsync signal: SIGNAL = %d", signum);
-    }
-}
-
-void SdmDisplay::InstallVSyncSignalHandler(int siguser) {
-    struct sigaction act;
-
-    DLOGI("Installing handler for: SIGNAL = %d", siguser);
-    memset(&act, 0, sizeof(act));
-    act.sa_sigaction = &VSyncSignalHandler;
-    act.sa_flags = SA_SIGINFO;
-    if (sigaction(siguser, &act, NULL) == -1)
-        DLOGE("sigusr error: sigaction, SIGNAL = %d", siguser);
-}
-
 DisplayError SdmDisplay::VSync(int fd, unsigned int sequence, unsigned int tv_sec,
                                unsigned int tv_usec, void *data) {
-    sigval value;
-    struct signal_data *sigdata = reinterpret_cast<struct signal_data *> (zalloc(sizeof *sigdata));
 
-    sigdata->magic    = VSYNC_MAGIC;
-    sigdata->fd       = fd;
-    sigdata->sequence = sequence;
-    sigdata->tv_sec   = tv_sec;
-    sigdata->tv_usec  = tv_usec;
-    sigdata->data     = data;
-    value.sival_ptr   = reinterpret_cast<void *> (sigdata);
-    if (vb_wait_) {
-        vb_wait_ = false;
-        pthread_sigqueue(tid_, vblank_signal, (const union sigval) value);
-        ReleaseWait();
-    } else {
-        delete value.sival_ptr;
-    }
+    vblank_cb_(sequence, tv_sec, tv_usec, drm_output_);
 
     return kErrorNone;
 }
@@ -290,13 +247,11 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
     return kErrorNone;
 }
 
-DisplayError SdmDisplay::RegisterCb(int display_id, pthread_t tid,
-                     vblank_cb_t vbcb) {
+DisplayError SdmDisplay::RegisterCb(int display_id,       vblank_cb_t vbcb) {
     DisplayError error = kErrorNone;
 
     vblank_cb_   = vbcb;
     display_id_  = display_id;
-    tid_         = tid;
 
     return error;
 }
@@ -616,6 +571,9 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             uint32_t *fbid;
             uint32_t fb_id, stride, handle, size;
             uint32_t fb_id1;
+
+            //save gbm bo in sdm layer for future reference.
+            sdm_layer->bo = bo;
 
             width = gbm_bo_get_width(bo);
             height = gbm_bo_get_height(bo);
@@ -1481,7 +1439,7 @@ DisplayError SdmNullDisplay::SetVSyncState(bool enable, struct drm_output *outpu
 DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
   return kErrorNone;
 }
-DisplayError SdmNullDisplay::RegisterCb(int display_id, pthread_t tid, vblank_cb_t vbcb) {
+DisplayError SdmNullDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::EnablePllUpdate(int32_t enable) {
@@ -1491,12 +1449,6 @@ DisplayError SdmNullDisplay::UpdateDisplayPll(int32_t ppm) {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
-  return kErrorNone;
-}
-int SdmNullDisplay::SetWait() {
-  return kErrorNone;
-}
-int SdmNullDisplay::ReleaseWait() {
   return kErrorNone;
 }
 
