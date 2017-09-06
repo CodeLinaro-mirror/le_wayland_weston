@@ -176,6 +176,10 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
                                                  GBM_BO_USAGE_HW_RENDERING_QTI;
                                         break;
   case kFormatABGR2101010:              *target = GBM_FORMAT_ABGR2101010;
+                                        break;
+  case kFormatRGBA1010102:              *target = GBM_FORMAT_ABGR2101010;
+                                        break;
+  case kFormatRGBA1010102Ubwc:          *target = GBM_FORMAT_ABGR2101010;
                                         *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
                                                  GBM_BO_USAGE_HW_RENDERING_QTI;
                                         break;

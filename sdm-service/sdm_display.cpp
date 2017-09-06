@@ -884,8 +884,8 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
             case SDM_BUFFER_FORMAT_BGR_565:
                 format = sdm::kFormatBGR565Ubwc;
                 break;
-            case SDM_BUFFER_FORMAT_ABGR2101010:
-                format = sdm::kFormatABGR2101010;
+            case SDM_BUFFER_FORMAT_RGBA_2101010:
+                format = sdm::kFormatRGBA1010102Ubwc;
                 break;
             case SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS:
             case SDM_BUFFER_FORMAT_NV12_ENCODEABLE:
@@ -937,8 +937,11 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
         case SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS:
             format = sdm::kFormatYCbCr420SemiPlanarVenus;
             break;
-        case SDM_BUFFER_FORMAT_ABGR2101010:
+        case SDM_BUFFER_FORMAT_ABGR_2101010:
             format = sdm::kFormatABGR2101010;
+            break;
+        case SDM_BUFFER_FORMAT_RGBA_2101010:
+            format = sdm::kFormatRGBA1010102;
             break;
         case SDM_BUFFER_FORMAT_YCbCr_420_TP10_UBWC:
             format = sdm::kFormatYCbCr420TP10Ubwc;
@@ -1049,7 +1052,7 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
          ret = SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS;
          break;
     case GBM_FORMAT_ABGR2101010:
-         ret = SDM_BUFFER_FORMAT_ABGR2101010;
+         ret = SDM_BUFFER_FORMAT_RGBA_2101010;
          break;
     case GBM_FORMAT_YCbCr_420_TP10_UBWC:
          ret = SDM_BUFFER_FORMAT_YCbCr_420_TP10_UBWC;
