@@ -54,6 +54,7 @@
 #include <linux/vt.h>
 #include <assert.h>
 #include <sys/mman.h>
+#include <sys/eventfd.h>
 #include <dlfcn.h>
 #include <time.h>
 
@@ -153,6 +154,7 @@ drm_fb_create_dumb(struct drm_backend *b, unsigned width, unsigned height)
     struct drm_mode_create_dumb create_arg;
     struct drm_mode_destroy_dumb destroy_arg;
     struct drm_mode_map_dumb map_arg;
+    struct drm_prime_handle prime_arg;
 
     fb = zalloc(sizeof *fb);
     if (!fb)
@@ -171,6 +173,15 @@ drm_fb_create_dumb(struct drm_backend *b, unsigned width, unsigned height)
     fb->stride = create_arg.pitch;
     fb->size = create_arg.size;
     fb->fd = b->drm.fd;
+
+    memset(&prime_arg, 0, sizeof prime_arg);
+    prime_arg.handle = fb->handle;
+
+    ret = drmIoctl(b->drm.fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime_arg);
+    if (ret)
+      goto err_bo;
+
+    fb->ion_fd = prime_arg.fd;
 
     ret = drmModeAddFB(b->drm.fd, width, height, 24, 32,
                fb->stride, fb->handle, &fb->fb_id);
@@ -429,8 +440,9 @@ drm_output_repaint(struct weston_output *output_base,
         weston_log("fail to commit to sdm display! err=%d\n", ret);
     }
 
+    pthread_mutex_lock(&output->hpd_lock);
     output->frame_pending = 1;
-    SetWait(display_id);
+    pthread_mutex_unlock(&output->hpd_lock);
 
     return 0;
 }
@@ -489,11 +501,19 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
             weston_output_finish_frame(output_base, &ts,
                         PRESENTATION_FEEDBACK_INVALID);
             return;
+        } else {
+            weston_log("drm_output_start_repaint_loop: stale ts\n");
+            weston_output_finish_frame(output_base, &tnow,
+                        PRESENTATION_FEEDBACK_INVALID);
         }
     }
 
         fb_id = output->current->fb_id;
+
+	pthread_mutex_lock(&output->hpd_lock);
         output->frame_pending = 1;
+	pthread_mutex_unlock(&output->hpd_lock);
+
         return;
 
 finish_frame:
@@ -514,27 +534,63 @@ drm_output_update_msc(struct drm_output *output, unsigned int seq)
     output->base.msc = (msc_hi << 32) + seq;
 }
 
+static void destroy_sdm_layer(struct sdm_layer *layer);
+
 static void
-vblank_handler(int fd, unsigned int frame, unsigned int sec, unsigned int usec,
+vblank_handler(unsigned int frame, unsigned int sec, unsigned int usec,
            void *data)
 {
     struct drm_output *output = (struct drm_output *) data;
-    struct timespec ts;
-    uint32_t flags = PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
-             PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
+    uint64_t v = 1;
 
-    if (output->frame_pending) {
-        drm_output_update_msc(output, frame);
-        drm_output_release_fb(output, output->current);
-        output->current = output->next;
-        output->next = NULL;
-        output->frame_pending = 0;
+    output->last_vblank.frame = frame;
+    output->last_vblank.sec = sec;
+    output->last_vblank.usec = usec;
 
-        ts.tv_sec = sec;
-        ts.tv_nsec = usec * 1000;
-        weston_output_finish_frame(&output->base, &ts, flags);
-    }
+    if (!output->frame_pending)
+        return;
+
+    write(output->vblank_ev_fd, &v, sizeof v);
 }
+
+static int
+on_vblank(int fd, uint32_t mask, void *data)
+{
+   struct drm_output *output = (struct drm_output *) data;
+   struct timespec ts;
+   uint64_t v;
+   uint32_t flags = PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
+                    PRESENTATION_FEEDBACK_KIND_VSYNC |
+                    PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
+   struct sdm_layer *sdm_layer, *next_sdm_layer;
+
+   read(fd, &v, sizeof v);
+
+   pthread_mutex_lock(&output->hpd_lock);
+   if (output->frame_pending) {
+       drm_output_update_msc(output, output->last_vblank.frame);
+       drm_output_release_fb(output, output->current);
+       output->current = output->next;
+       output->next = NULL;
+       output->frame_pending = 0;
+       pthread_cond_signal(&output->hpd_cond);
+
+       wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->commited_layer_list, link) {
+           destroy_sdm_layer(sdm_layer);
+       }
+
+       assert(wl_list_empty(&output->commited_layer_list));
+       wl_list_insert_list(&output->commited_layer_list, &output->sdm_layer_list);
+       wl_list_init(&output->sdm_layer_list);
+       ts.tv_sec = output->last_vblank.sec;
+       ts.tv_nsec = output->last_vblank.usec * 1000;
+       weston_output_finish_frame(&output->base, &ts, flags);
+   }
+   pthread_mutex_unlock(&output->hpd_lock);
+
+   return 1;
+}
+
 
 static void
 drm_output_destroy(struct weston_output *output_base);
@@ -594,7 +650,11 @@ static void
 destroy_sdm_layer(struct sdm_layer *layer)
 {
     pixman_region32_fini(&layer->overlap);
+    weston_buffer_reference(&layer->buffer_ref, NULL);
     wl_list_remove(&layer->link);
+    if (layer->bo) {
+        gbm_bo_destroy(layer->bo);
+    }
     free(layer);
 }
 
@@ -614,6 +674,7 @@ create_sdm_layer(struct drm_output *output, struct weston_view *ev, pixman_regio
 
     pixman_region32_init(&layer->overlap);
     pixman_region32_copy(&layer->overlap, overlap);
+    weston_buffer_reference(&layer->buffer_ref, ev->surface->buffer_ref.buffer);
 
     return layer;
 }
@@ -629,6 +690,7 @@ drm_assign_planes(struct weston_output *output_base)
     struct weston_plane *primary, *next_plane;
     struct sdm_layer *sdm_layer, *next_sdm_layer;
     output->view_count = 0;
+    assert(wl_list_empty(&output->sdm_layer_list));
 
     /*
      * Find a surface for each sprite in the output using some heuristics:
@@ -686,18 +748,6 @@ drm_assign_planes(struct weston_output *output_base)
             is_skip = true;
         }
 
-        if (is_skip) {
-          /* Composed by GPU */
-          next_plane = primary;
-          weston_view_move_to_plane(ev, next_plane);
-          pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
-          ev->psf_flags = 0;
-        } else {
-            /* Composed by Display Hardware directly */
-            /* ToDo(User): handle scenarios if SDE composition is not possible */
-            ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
-        }
-
         sdm_layer = create_sdm_layer(output, ev, &surface_overlap, is_cursor, is_skip);
         wl_list_insert(output->sdm_layer_list.prev, &sdm_layer->link);
 
@@ -712,10 +762,54 @@ drm_assign_planes(struct weston_output *output_base)
     int error = Prepare(display_id, output);
     pixman_region32_fini(&overlap);
     wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
-        destroy_sdm_layer(sdm_layer);
+        next_plane = primary;
+        ev = sdm_layer->view;
+        /* Move to primary plane if Strategy set it to GPU composition */
+        if (sdm_layer->composition_type == SDM_COMPOSITION_GPU) {
+            weston_view_move_to_plane(ev, next_plane);
+            pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
+            ev->psf_flags = 0;
+            destroy_sdm_layer(sdm_layer);
+        } else {
+            /* Composed by Display Hardware directly */
+            /* ToDo(User): handle scenarios if SDE composition is not possible */
+            ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
+            /* Forget the view as it might be destroyed at anytime */
+            sdm_layer->view = NULL;
+        }
     }
 
     return;
+}
+
+static int
+drm_output_enable_vblank(struct drm_output *output)
+{
+     struct wl_event_loop *loop;
+
+     output->vblank_ev_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+     if (output->vblank_ev_fd < 0)
+        return -1;
+
+     loop = wl_display_get_event_loop(output->base.compositor->wl_display);
+     output->vblank_ev_source = wl_event_loop_add_fd(loop, output->vblank_ev_fd,
+                                                     WL_EVENT_READABLE, on_vblank, output);
+
+     return 0;
+}
+
+static void
+drm_output_disable_vblank(struct drm_output *output)
+{
+       if (output->vblank_ev_source != NULL) {
+               wl_event_source_remove(output->vblank_ev_source);
+               output->vblank_ev_source = NULL;
+       }
+
+       if (output->vblank_ev_fd != -1) {
+               close(output->vblank_ev_fd);
+               output->vblank_ev_fd = -1;
+       }
 }
 
 static void
@@ -728,6 +822,8 @@ drm_output_destroy(struct weston_output *output_base)
     struct drm_backend *b =
         (struct drm_backend *)output->base.compositor->backend;
     drmModeCrtcPtr origcrtc = output->original_crtc;
+
+    wl_event_source_remove(output->finish_frame_timer);
 
     if (output->backlight)
         backlight_destroy(output->backlight);
@@ -743,6 +839,8 @@ drm_output_destroy(struct weston_output *output_base)
         gl_renderer->output_destroy(output_base);
         gbm_surface_destroy(output->surface);
     }
+
+    drm_output_disable_vblank(output);
 
     weston_plane_release(&output->fb_plane);
     weston_plane_release(&output->cursor_plane);
@@ -926,10 +1024,10 @@ static int
 fallback_format_for(uint32_t format)
 {
     switch (format) {
+    case GBM_FORMAT_ARGB8888:
+        return GBM_FORMAT_ABGR8888;
     case GBM_FORMAT_XRGB8888:
-        return GBM_FORMAT_ARGB8888;
-    case GBM_FORMAT_XRGB2101010:
-        return GBM_FORMAT_ARGB2101010;
+        return GBM_FORMAT_XBGR8888;
     default:
         return 0;
     }
@@ -1539,6 +1637,73 @@ connector_get_current_mode(drmModeConnector *connector, int drm_fd,
     return 0;
 }
 
+static void
+headless_output_start_repaint_loop(struct weston_output *output)
+{
+	struct timespec ts;
+
+	weston_compositor_read_presentation_clock(output->compositor, &ts);
+	weston_output_finish_frame(output, &ts, PRESENTATION_FEEDBACK_INVALID);
+}
+
+static int
+finish_frame_handler(void *data)
+{
+	struct drm_output *output = data;
+	struct timespec ts;
+
+	weston_compositor_read_presentation_clock(output->base.compositor, &ts);
+	weston_output_finish_frame(&output->base, &ts, 0);
+
+	return 1;
+}
+
+static int
+headless_output_repaint(struct weston_output *output_base,
+		       pixman_region32_t *damage)
+{
+	struct drm_output *output = (struct drm_output *) output_base;
+	struct weston_compositor *ec = output->base.compositor;
+
+	wl_event_source_timer_update(output->finish_frame_timer, 16);
+
+	return 0;
+}
+
+static void
+hotplug_handler(int disp, bool connected, void *data)
+{
+    struct drm_output *output = (struct drm_output *) data;
+    struct timespec ts;
+
+    pthread_mutex_lock(&output->hpd_lock);
+    while (output->frame_pending)
+        pthread_cond_wait(&output->hpd_cond, &output->hpd_lock);
+    pthread_mutex_unlock(&output->hpd_lock);
+
+    if (connected) {
+	output->base.start_repaint_loop = drm_output_start_repaint_loop;
+	output->base.repaint = drm_output_repaint;
+	output->base.assign_planes = drm_assign_planes;
+	output->base.set_dpms = drm_set_dpms;
+	output->base.switch_mode = drm_output_switch_mode;
+	output->base.enable_ppm = drm_enable_ppm;
+	output->base.set_ppm = drm_set_ppm;
+    } else {
+	output->base.start_repaint_loop = headless_output_start_repaint_loop;
+	output->base.repaint = headless_output_repaint;
+	output->base.assign_planes = NULL;
+	output->base.set_backlight = NULL;
+	output->base.set_dpms = NULL;
+	output->base.switch_mode = NULL;
+	output->base.enable_ppm = NULL;
+	output->base.set_ppm = NULL;
+    }
+
+    weston_output_schedule_repaint(&output->base);
+}
+
+
 /**
  * Create and configure a Weston output structure
  *
@@ -1565,6 +1730,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     char *s;
     enum output_config config;
     uint32_t transform;
+    struct wl_event_loop *loop;
+    struct weston_compositor *c = b->compositor;
 
     output = zalloc(sizeof *output);
     if (output == NULL)
@@ -1582,6 +1749,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     /* TODO (user): wl_list_init(&output->plane_flip_list) */
     wl_list_init(&output->plane_flip_list);
     wl_list_init(&output->sdm_layer_list);
+    wl_list_init(&output->commited_layer_list);
 
     section = weston_config_get_section(b->compositor->config, "output", "name",
                         output->base.name);
@@ -1682,6 +1850,10 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     bool ret = SetDisplayState(display_id, WESTON_DPMS_ON);
     output->base.connection_internal = 1;
 
+    loop = wl_display_get_event_loop(c->wl_display);
+    output->finish_frame_timer =
+		wl_event_loop_add_timer(loop, finish_frame_handler, output);
+
     output->base.start_repaint_loop = drm_output_start_repaint_loop;
     output->base.repaint = drm_output_repaint;
     output->base.destroy = drm_output_destroy;
@@ -1700,6 +1872,11 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     weston_compositor_stack_plane(b->compositor, &output->cursor_plane, NULL);
     weston_compositor_stack_plane(b->compositor, &output->fb_plane,
                       &b->compositor->primary_plane);
+
+    if (drm_output_enable_vblank(output)) {
+        weston_log("Failed to create vblank event\n");
+        goto err_output;
+    }
 
     int count_modes = 1;
     wl_list_for_each(m, &output->base.mode_list, link)
@@ -2136,6 +2313,7 @@ drm_backend_create(struct weston_compositor *compositor,
     struct wl_event_loop *loop;
     const char *path;
     uint32_t key;
+    sdm_cbs_t sdm_cbs;
 
     weston_log("initializing drm backend\n");
 
@@ -2217,8 +2395,10 @@ drm_backend_create(struct weston_compositor *compositor,
     rc = CreateDisplay(display_id);
     weston_log("CreateDisplay: %d successful\n", rc);
 
-    /* Now register vblank_handler (VSYNC handler) with SDM services */
-    RegisterCb(display_id, pthread_self(), vblank_handler);
+    /* Now register callbacks with SDM services */
+    sdm_cbs.vblank_cb = vblank_handler,
+    sdm_cbs.hotplug_cb = hotplug_handler,
+    RegisterCbs(display_id, &sdm_cbs);
 
     if (udev_input_init(&b->input, compositor, b->udev, param->seat_id) < 0) {
         weston_log("failed to create input devices\n");

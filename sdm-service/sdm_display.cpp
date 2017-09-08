@@ -57,7 +57,16 @@
 #include <utility>
 #include <bitset>
 #include <math.h>
+#include <time.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <pthread.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
 #include "sdm_display.h"
+#include "uevent.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -75,19 +84,29 @@ namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
 #define GET_CURSOR_SLOT(max_layers) ((max_layers) - 2)
+#define LEN_LOCAL 2048
+
 #define SDM_DISPLAY_DEBUG 0
+#define SDM_DISPLAY_DUMP_LAYER_STACK 0
+
+int SdmDisplayInterface::GetDrmMasterFd() {
+  DRMMaster *master = nullptr;
+  int ret = DRMMaster::GetInstance(&master);
+  int fd;
+
+  master->GetHandle(&fd);
+  return fd;
+}
 
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
     display_type_ = type;
     core_intf_    = core_intf;
     drm_output_   = NULL;
     vblank_cb_    = NULL;
-    InstallVSyncSignalHandler(vblank_signal);
 }
 
 SdmDisplay::~SdmDisplay() {
 }
-
 
 const char * SdmDisplay::FourccToString(uint32_t fourcc)
 {
@@ -99,33 +118,9 @@ const char * SdmDisplay::FourccToString(uint32_t fourcc)
     return s;
 }
 
-DisplayError SdmDisplay::Init() {
-    DisplayError error = kErrorNone;
-
-    error = CoreInterface::CreateCore(SdmDisplayDebugger::Get(),
-                       &buffer_allocator_,
-                       &buffer_sync_handler_,
-                       &socket_handler_,
-                       &core_intf_);
-    if (error != kErrorNone) {
-        CoreInterface::DestroyCore();
-        DLOGE("display initialization failed, Error = %d", error);
-
-        return error;
-    }
-    #if SDM_DISPLAY_DEBUG
-    DLOGI("Initialization successful.");
-    #endif
-
-    return error;
-}
-
 DisplayError SdmDisplay::CreateDisplay() {
     DisplayError error = kErrorNone;
     struct DisplayHdrInfo display_hdr_info;
-
-    error = core_intf_->GetFirstDisplayInterfaceType(&hw_disp_info_);
-    display_type_ = hw_disp_info_.type;
 
     error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
 
@@ -167,52 +162,10 @@ DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
     return kErrorNone;
 }
 
-void VSyncSignalHandler(int signum, siginfo_t *info, void *moredata) {
-    struct signal_data *sigdata = reinterpret_cast<struct signal_data *> (info->si_value.sival_ptr);
-
-    if (signum == vblank_signal && sigdata->magic == VSYNC_MAGIC) {
-        int fd          = sigdata->fd;
-        unsigned int sequence = sigdata->sequence;
-        unsigned int tv_sec   = sigdata->tv_sec;
-        unsigned int tv_usec  = sigdata->tv_usec;
-        void *data         = sigdata->data;
-        delete info->si_value.sival_ptr;
-        vblank_cb_(fd, sequence, tv_sec, tv_usec, drm_output_);
-    } else {
-        DLOGW("Spurious Vsync signal: SIGNAL = %d", signum);
-    }
-}
-
-void SdmDisplay::InstallVSyncSignalHandler(int siguser) {
-    struct sigaction act;
-
-    DLOGI("Installing handler for: SIGNAL = %d", siguser);
-    memset(&act, 0, sizeof(act));
-    act.sa_sigaction = &VSyncSignalHandler;
-    act.sa_flags = SA_SIGINFO;
-    if (sigaction(siguser, &act, NULL) == -1)
-        DLOGE("sigusr error: sigaction, SIGNAL = %d", siguser);
-}
-
 DisplayError SdmDisplay::VSync(int fd, unsigned int sequence, unsigned int tv_sec,
                                unsigned int tv_usec, void *data) {
-    sigval value;
-    struct signal_data *sigdata = reinterpret_cast<struct signal_data *> (zalloc(sizeof *sigdata));
 
-    sigdata->magic    = VSYNC_MAGIC;
-    sigdata->fd       = fd;
-    sigdata->sequence = sequence;
-    sigdata->tv_sec   = tv_sec;
-    sigdata->tv_usec  = tv_usec;
-    sigdata->data     = data;
-    value.sival_ptr   = reinterpret_cast<void *> (sigdata);
-    if (vb_wait_) {
-        vb_wait_ = false;
-        pthread_sigqueue(tid_, vblank_signal, (const union sigval) value);
-        ReleaseWait();
-    } else {
-        delete value.sival_ptr;
-    }
+    vblank_cb_(sequence, tv_sec, tv_usec, drm_output_);
 
     return kErrorNone;
 }
@@ -294,19 +247,22 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
     return kErrorNone;
 }
 
-DisplayError SdmDisplay::RegisterCb(int display_id, pthread_t tid,
-                     vblank_cb_t vbcb) {
+DisplayError SdmDisplay::RegisterCb(int display_id,       vblank_cb_t vbcb) {
     DisplayError error = kErrorNone;
 
     vblank_cb_   = vbcb;
     display_id_  = display_id;
-    tid_         = tid;
 
     return error;
 }
 
 DisplayError SdmDisplay::FreeLayerStack() {
     for (Layer *layer : layer_stack_.layers) {
+
+         layer->visible_regions.erase(layer->visible_regions.begin(),
+                                       layer->visible_regions.end());
+         layer->dirty_regions.erase(layer->dirty_regions.begin(),
+                                       layer->dirty_regions.end());
 
          delete layer;
     }
@@ -315,12 +271,13 @@ DisplayError SdmDisplay::FreeLayerStack() {
     return kErrorNone;
 }
 
-/* TODO (user): FreeGeometryRegions to keep in case we need to use it. */
-DisplayError SdmDisplay::FreeGeometryRegions(struct LayerGeometry *glayer) {
+DisplayError SdmDisplay::FreeLayerGeometry(struct LayerGeometry *glayer) {
     if (glayer->dirty_regions.count)
         delete[] glayer->dirty_regions.rects;
     if (glayer->visible_regions.count)
         delete[] glayer->visible_regions.rects;
+
+    delete glayer;
 
     return kErrorNone;
 }
@@ -558,21 +515,6 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
     return 0;
 }
 
-int SdmDisplay::GetDrmMasterFd() {
-    DRMMaster *master = nullptr;
-    int ret = DRMMaster::GetInstance(&master);
-    int fd;
-
-    if (ret < 0) {
-        DLOGE("Failed to acquire DRMMaster instance");
-        return kErrorNotSupported;
-    }
-
-    master->GetHandle(&fd);
-
-    return fd;
-}
-
 int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                          struct LayerGeometry **glayer,
                          struct sdm_layer *sdm_layer) {
@@ -630,12 +572,15 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             uint32_t fb_id, stride, handle, size;
             uint32_t fb_id1;
 
+            //save gbm bo in sdm layer for future reference.
+            sdm_layer->bo = bo;
+
             width = gbm_bo_get_width(bo);
             height = gbm_bo_get_height(bo);
             stride = gbm_bo_get_stride(bo);
             handle = gbm_bo_get_handle(bo).u32;
             format = gbm_bo_get_format(bo);
-            int drm_fd = GetDrmMasterFd();
+            int drm_fd = SdmDisplayInterface::GetDrmMasterFd();
 
             uint32_t handles[4], pitches[4], offsets[4];
             handles[0] = handle;
@@ -725,13 +670,14 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     FreeLayerStack();
     AllocLayerStackMemory(output);
 
-    #if SDM_DISPLAY_DEBUG
+#if SDM_DISPLAY_DEBUG
     DLOGW("gpu_target_index = %d\n", gpu_target_index);
-    #endif
+#endif
 
     /* If no view can be handled by SDM, just skip below and prepare fb target directly. */
     if (gpu_target_index > 0) {
         wl_list_for_each_reverse(sdm_layer, &output->sdm_layer_list, link) {
+            glayer = NULL;
             if(PrepareNormalLayerGeometry(output, &glayer, sdm_layer)) {
                 DLOGE("fail to prepare normal layer geometry.");
                 return kErrorUndefined;
@@ -740,10 +686,10 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
             error = AddGeometryLayerToLayerStack(output, index++, glayer, sdm_layer->is_skip);
             if (error) {
                 DLOGE("failed add Geometry Layer to LayerStack.");
-                /* TODO: Free glayer */
+                FreeLayerGeometry(glayer);
                 return kErrorUndefined;
             }
-            /* TODO: Free glayer */
+            FreeLayerGeometry(glayer);
 
             if (sdm_layer->is_skip)
                 layer_stack_.flags.skip_present = true;
@@ -755,13 +701,13 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
         DLOGE("failed to prepare Layer Geometry Fb target\n");
         return kErrorUndefined;
     } else {
-        error = AddGeometryLayerToLayerStack(output, index, glayer, true);
+        error = AddGeometryLayerToLayerStack(output, index, glayer, false);
         if (error) {
             DLOGE("fail to prepare Fb target: Add Geometry failure fb\n");
-            /* TODO: Free glayer */
+            FreeLayerGeometry(glayer);
             return kErrorUndefined;
         }
-        /* TODO: Free glayer */
+        FreeLayerGeometry(glayer);
     }
 
     return error;
@@ -782,7 +728,20 @@ DisplayError SdmDisplay::PrePrepare(struct drm_output *output)
 DisplayError SdmDisplay::PostPrepare(struct drm_output *output)
 {
     DisplayError error = kErrorNone;
-    // TODO: Check for Post-Prepare stuff here
+    int index = 0;
+    struct sdm_layer *sdm_layer = NULL;
+
+    wl_list_for_each_reverse(sdm_layer, &output->sdm_layer_list, link) {
+      Layer *layer = layer_stack_.layers.at(index);
+
+      if (layer->composition == kCompositionGPU) {
+        sdm_layer->composition_type = SDM_COMPOSITION_GPU;
+      } else {
+        sdm_layer->composition_type = SDM_COMPOSITION_OVERLAY;
+      }
+      index++;
+    }
+
     return error;
 }
 
@@ -790,19 +749,24 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
   if (!buffer || !length) {
     return;
   }
-
+  static int frame_count=0;
   buffer[0] = '\0';
   struct LayerStack *layer_stack;
   layer_stack = reinterpret_cast<struct LayerStack *>(layerStack);
-  DLOGW("\n-------- Display Manager: \nLayer Stack Dump --------");
+  DLOGI("\n-------- Display Manager: Layer Stack Dump --------");
+  fprintf(stderr,"Frame:%d LayerStack: NumLayers:%d flags:0x%x\n",
+                frame_count, layer_stack->layers.size(), layer_stack->flags);
+
   for (uint32_t i = 0; i < layer_stack->layers.size(); i++) {
-      #define LEN_LOCAL 2048
       char buf[LEN_LOCAL] = {0};
 
       struct Layer *layer;
+      struct LayerBuffer buffer;
       layer = layer_stack->layers.at(i);
+      buffer = layer->input_buffer;
+
       memset(buf, '\0', LEN_LOCAL);
-      sprintf(buf, "Layer: %d\n    width  = %d,     height = %d\n", i,
+      sprintf(buf, "Layer: %d\n    width  = %d,     height = %d", i,
         layer->input_buffer.width, layer->input_buffer.height);
       sprintf(buf, "%s\n LayerComposition = %#x", buf, layer->composition);
       sprintf(buf, "%s\n src_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f",
@@ -818,8 +782,13 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
       sprintf(buf, "%s\n Plane Alpha = %#x, frame_rate = %d,  solid_fill_color = %d",
         buf, layer->plane_alpha, layer->frame_rate, layer->solid_fill_color);
       sprintf(buf, "%s\n LayerFlags = %#x", buf, layer->flags);
-      DLOGI("Dumping Layer stack:\n%s\n", buf);
+      sprintf(buf, "%s\t LayerFlags.skip = %d", buf, layer->flags.skip);
+      sprintf(buf, "%s\n LayerBuffer Flags: hdr:%d secure:%d video:%d", buf,
+                    buffer.flags.hdr, buffer.flags.secure, buffer.flags.video);
+
+      fprintf(stderr,"\n%s\n", buf);
   }
+  frame_count++;
 
   return;
 }
@@ -830,6 +799,12 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
     char dump_buffer[8192] = {0};
 
     error = PrePrepare(output);
+
+#if SDM_DISPLAY_DUMP_LAYER_STACK
+    // Dump all input layers of the layer stack:
+    GetLayerStackDump(&layer_stack_, dump_buffer, sizeof(dump_buffer));
+#endif
+
     error = display_intf_->Prepare(&layer_stack_);
     DumpInterface::GetDump(dump_buffer, sizeof(dump_buffer));
     error = PostPrepare(output);
@@ -1433,6 +1408,144 @@ DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
     display_hdr_info->min_luminance = fixed_info.min_luminance;
 
     return error;
+}
+
+SdmNullDisplay::SdmNullDisplay(DisplayType type, CoreInterface *core_intf) {
+}
+
+SdmNullDisplay::~SdmNullDisplay() {
+}
+
+DisplayError SdmNullDisplay::CreateDisplay() {
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::DestroyDisplay() {
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::Prepare(struct drm_output *output) {
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::Commit(struct drm_output *output) {
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::SetDisplayState(DisplayState state) {
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::SetVSyncState(bool enable, struct drm_output *output) {
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::EnablePllUpdate(int32_t enable) {
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::UpdateDisplayPll(int32_t ppm) {
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
+  return kErrorNone;
+}
+
+SdmDisplayProxy::SdmDisplayProxy(DisplayType type, CoreInterface *core_intf)
+  : disp_type_(type), core_intf_(core_intf),
+    sdm_disp_(type, core_intf), null_disp_(type, core_intf) {
+    display_intf_ = &sdm_disp_;
+
+    std::thread uevent_thread(UeventThread, this);
+    uevent_thread_.swap(uevent_thread);
+}
+
+SdmDisplayProxy::~SdmDisplayProxy () {
+    uevent_thread_exit_ = true;
+    uevent_thread_.detach();
+}
+
+int SdmDisplayProxy::HandleHotplug(bool connected) {
+  DisplayError error = kErrorNone;
+
+  DLOGI("HandleHotplug = %d", connected);
+
+  if (connected) {
+    if (display_intf_->GetDisplayIntfType() == null_disp) {
+      display_intf_ = &sdm_disp_;
+      error = display_intf_->CreateDisplay();
+      if (error != kErrorNone) {
+        DLOGE("Failed to create display %d", error);
+        display_intf_ = &null_disp_;
+        return error;
+      }
+      display_intf_->SetDisplayState(kStateOn);
+      display_intf_->SetVSyncState(true, drm_output_);
+
+      if (hotplug_cb_) {
+        hotplug_cb_(disp_type_, connected, drm_output_);
+      }
+
+      DLOGI("Display is connected successfully.");
+    } else {
+      DLOGI("Display is already connected.");
+    }
+  } else {
+    if (display_intf_->GetDisplayIntfType() == sdm_disp) {
+      if (hotplug_cb_) {
+        hotplug_cb_(disp_type_, connected, drm_output_);
+      }
+
+      display_intf_->SetVSyncState(false, drm_output_);
+      display_intf_->DestroyDisplay();
+
+      display_intf_ = &null_disp_;
+
+      DLOGI("Display is disconnected successfully.");
+    } else {
+      DLOGI("Display is already disconnected.");
+    }
+  }
+}
+
+void *SdmDisplayProxy::UeventThread(void *context) {
+  if (context) {
+    return reinterpret_cast<SdmDisplayProxy *>(context)->UeventThreadHandler();
+  }
+
+  return NULL;
+}
+
+#define HAL_PRIORITY_URGENT_DISPLAY (-8)
+
+void *SdmDisplayProxy::UeventThreadHandler() {
+  static char uevent_data[4096];
+  int length = 0;
+  prctl(PR_SET_NAME, uevent_thread_name_, 0, 0, 0);
+  setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
+  if (!uevent_init()) {
+    DLOGE("Failed to init uevent");
+    pthread_exit(0);
+    return NULL;
+  }
+
+  DLOGI("SdmDisplayProxy::UeventThreadHandler");
+
+  while (!uevent_thread_exit_) {
+    // keep last 2 zeroes to ensure double 0 termination
+    length = uevent_next_event(uevent_data, INT32(sizeof(uevent_data)) - 2);
+    string s(uevent_data, length);
+
+    if (s.find("name=HDMI-A-1") != string::npos) {
+      bool connected = s.find("status=connected") != string::npos;
+      DLOGI("HDMI is %s !\n", connected ? "connected" : "removed");
+      HandleHotplug(connected);
+    }
+  }
+  pthread_exit(0);
+
+  return NULL;
 }
 #ifdef __cplusplus
 }

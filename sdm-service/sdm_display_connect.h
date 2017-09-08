@@ -178,23 +178,19 @@ bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_c
 */
 bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info);
 
-/*! @brief Method to register VBlank Handler function to be called on
-    enabling VBlank (VSync). SDM shall trigger a call back through this
-    interface function.
-
-    @details Client shall use this method for VBlank Handler function
-    to be called by hardware composer.
+/*! @brief Method to register callbacks: VBlank Handler function to be called on
+    enabling VBlank (VSync), and hotplug handler function to be called on hotplug
+    uevent. SDM shall trigger a call back through this interface function.
 
     @param[in] display_id \link int \endlink
-    @param[in] tid \link pthread_t \endlink
-    @param[in] vbcb \link vblank_cb_t \endlink
+    @param[in] cbs \link sdm_cbs_t \endlink
 
     @return \link DisplayError \endlink
 
     @sa
 */
 
-int RegisterCb(int display_id, pthread_t tid, vblank_cb_t vblank_handler);
+int RegisterCbs(int display_id, sdm_cbs_t *cbs);
 
 /*! @brief Method to turn on power of display
 
@@ -225,33 +221,6 @@ bool SetDisplayState(int display_id, int power_mode);
     @sa
 */
 int SetVSyncState(int display_id, bool enable, struct drm_output *output);
-
-/*! @brief Method for compositor backend thread to wait after Commit()
-
-    @details Client shall use this method to wait in the client thread
-    after calling Commit().
-
-    @param[in] display_id \link int \endlink
-
-    @return \link int \endlink
-
-    @sa
-*/
-int SetWait(int display_id);
-
-/*! @brief Method for VSync event thread handler to allow client's thread
-    to release from wait after calling Commit().
-
-    @details VSync event thread handler calls this method to release waiting
-    of client thread after Commit() by client thread.
-
-    @param[in] display_id \link int \endlink
-
-    @return \link int \endlink
-
-    @sa
-*/
-int ReleaseWait(int display_id);
 
 /*! @brief Method for obtaining master fd.
 
