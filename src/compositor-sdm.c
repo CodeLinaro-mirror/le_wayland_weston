@@ -2328,7 +2328,7 @@ drm_backend_create(struct weston_compositor *compositor,
 	// these application views are composed by overlays/SDE.
     section = weston_config_get_section(config, "core", NULL, NULL);
     if (get_gbm_format_from_section(section,
-                    GBM_FORMAT_ARGB8888,
+                    GBM_FORMAT_ABGR8888,
                     &b->format) == -1)
         goto err_base;
 
