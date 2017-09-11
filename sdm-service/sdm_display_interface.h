@@ -37,9 +37,11 @@ extern "C" {
 /* Buffer format enum */
 enum {
        SDM_BUFFER_FORMAT_ARGB_8888,
+       SDM_BUFFER_FORMAT_ABGR_8888,
        SDM_BUFFER_FORMAT_RGBA_8888,
        SDM_BUFFER_FORMAT_BGRA_8888,
        SDM_BUFFER_FORMAT_XRGB_8888,
+       SDM_BUFFER_FORMAT_XBGR_8888,
        SDM_BUFFER_FORMAT_RGBX_8888,
        SDM_BUFFER_FORMAT_BGRX_8888,
        SDM_BUFFER_FORMAT_RGBA_5551,
@@ -48,6 +50,8 @@ enum {
        SDM_BUFFER_FORMAT_BGR_888,
        SDM_BUFFER_FORMAT_RGB_565,
        SDM_BUFFER_FORMAT_BGR_565,
+       SDM_BUFFER_FORMAT_ABGR_2101010,
+       SDM_BUFFER_FORMAT_RGBA_2101010,
        SDM_BUFFER_FORMAT_RGBA_8888_Ubwc,
        SDM_BUFFER_FORMAT_RGBX_8888_Ubwc,
        SDM_BUFFER_FORMAT_BGR565_Ubwc,
@@ -203,8 +207,16 @@ struct DisplayConfigInfo {
   bool     is_yuv;            //!< If the display output is in YUV format.
 };
 
-typedef void (*vblank_cb_t)(int fd, unsigned int sequence, unsigned int tv_sec,
+typedef void (*vblank_cb_t)(unsigned int sequence, unsigned int tv_sec,
                            unsigned int tv_usec, struct drm_output *data);
+
+typedef void (*hotplug_cb_t)(int disp, bool connected, struct drm_output *data);
+
+typedef struct sdm_cbs {
+  vblank_cb_t vblank_cb;
+  hotplug_cb_t hotplug_cb;
+} sdm_cbs_t;
+
 #ifdef __cplusplus
 }
 #endif

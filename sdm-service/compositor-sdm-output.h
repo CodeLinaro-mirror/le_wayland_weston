@@ -121,8 +121,10 @@ struct drm_edid {
 struct sdm_layer {
        struct wl_list link; /* drm_output::sdm_layer_list */
        struct weston_view *view;
+       struct weston_buffer_reference buffer_ref;
        bool is_cursor;
        bool is_skip;
+       struct gbm_bo *bo;
        uint32_t composition_type; /* type: enum SDM_COMPOSITION_XXXXX */
        pixman_region32_t overlap;
 };
@@ -184,4 +186,17 @@ struct drm_output {
 
        struct wl_list plane_flip_list; /* drm_plane::flip_link */
        struct wl_list sdm_layer_list;  /* sdm_layer::link      */
+       struct wl_list commited_layer_list;  /* sdm_layer::link */
+
+       struct wl_event_source *finish_frame_timer;
+       pthread_mutex_t hpd_lock;
+       pthread_cond_t hpd_cond;
+
+       int vblank_ev_fd;
+       struct wl_event_source *vblank_ev_source;
+       struct {
+           unsigned int frame;
+           unsigned int sec;
+           unsigned int usec;
+       } last_vblank;
 };
