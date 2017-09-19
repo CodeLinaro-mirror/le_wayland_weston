@@ -590,12 +590,14 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             uint32_t alignedWidth = 0;
             uint32_t alignedHeight = 0;
             uint32_t secure_status = 0;
+            uint32_t ubwc_status = 0;
             void *prm = reinterpret_cast<void *> (&layer->color_metadata);
 
             gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_WIDTH, bo, &alignedWidth);
             gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_HEIGHT, bo, &alignedHeight);
             gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, bo, &secure_status);
             gbm_perform(GBM_PERFORM_GET_METADATA, bo, GBM_METADATA_GET_COLOR_METADATA, prm);
+            gbm_perform(GBM_PERFORM_GET_UBWC_STATUS, bo, &ubwc_status);
 
             // Override buffer width/height to reflect aligned width and aligned height.
             layer->width = alignedWidth;
@@ -604,6 +606,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             layer->unaligned_height = height;
             layer->ion_fd = gbm_bo_get_fd(bo);
             layer->flags.secure_present = secure_status;
+            layer->flags.has_ubwc_buf = ubwc_status;
 
             bool hdr_layer = layer->color_metadata.colorPrimaries == ColorPrimaries_BT2020 &&
                              (layer->color_metadata.transfer == Transfer_SMPTE_ST2084 ||
@@ -637,8 +640,6 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
 
     /* TODO: update property src_config, csc, color_fill, scaler ... */
     layer->flags.is_cursor = is_cursor;
-    /* TODO:Check if view has a ubwc buffer. Now set it to false */
-    layer->flags.has_ubwc_buf = 0;
     layer->flags.video_present = GetVideoPresenceByFormatFromGbm(format);
 
     /* Get blending. Now Weston only support premultipled alpha */
@@ -883,6 +884,9 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
             case SDM_BUFFER_FORMAT_BGR_565:
                 format = sdm::kFormatBGR565Ubwc;
                 break;
+            case SDM_BUFFER_FORMAT_RGBA_2101010:
+                format = sdm::kFormatRGBA1010102Ubwc;
+                break;
             case SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS:
             case SDM_BUFFER_FORMAT_NV12_ENCODEABLE:
                 format = sdm::kFormatYCbCr420SPVenusUbwc;
@@ -932,6 +936,12 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
         case SDM_BUFFER_FORMAT_NV12_ENCODEABLE:
         case SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS:
             format = sdm::kFormatYCbCr420SemiPlanarVenus;
+            break;
+        case SDM_BUFFER_FORMAT_ABGR_2101010:
+            format = sdm::kFormatABGR2101010;
+            break;
+        case SDM_BUFFER_FORMAT_RGBA_2101010:
+            format = sdm::kFormatRGBA1010102;
             break;
         case SDM_BUFFER_FORMAT_YCbCr_420_TP10_UBWC:
             format = sdm::kFormatYCbCr420TP10Ubwc;
@@ -1041,6 +1051,9 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
     case GBM_FORMAT_NV12:
          ret = SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS;
          break;
+    case GBM_FORMAT_ABGR2101010:
+         ret = SDM_BUFFER_FORMAT_RGBA_2101010;
+         break;
     case GBM_FORMAT_YCbCr_420_TP10_UBWC:
          ret = SDM_BUFFER_FORMAT_YCbCr_420_TP10_UBWC;
          break;
@@ -1050,54 +1063,6 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
     default:
          DLOGE("Unsupported GBM format %s\n", FourccToString(fmt));
          break;
-    }
-
-    return ret;
-}
-
-uint32_t SdmDisplay::GetMappedFormatFromShm(uint32_t fmt)
-{
-    uint32_t ret = SDM_BUFFER_FORMAT_INVALID;
-
-    switch (fmt) {
-    case WL_SHM_FORMAT_ARGB8888:
-     ret = SDM_BUFFER_FORMAT_BGRA_8888;
-     break;
-    case WL_SHM_FORMAT_XRGB8888:
-     ret = SDM_BUFFER_FORMAT_BGRX_8888;
-     break;
-    case WL_SHM_FORMAT_ABGR8888:
-     ret = SDM_BUFFER_FORMAT_RGBA_8888;
-     break;
-    case WL_SHM_FORMAT_XBGR8888:
-     ret = SDM_BUFFER_FORMAT_RGBX_8888;
-     break;
-    case WL_SHM_FORMAT_BGRA8888:
-    case WL_SHM_FORMAT_RGBA8888:
-     ret = SDM_BUFFER_FORMAT_ARGB_8888;
-     break;
-    case WL_SHM_FORMAT_ARGB4444:
-    case WL_SHM_FORMAT_ABGR4444:
-     ret = SDM_BUFFER_FORMAT_RGBA_4444;
-     break;
-    case WL_SHM_FORMAT_ARGB1555:
-    case WL_SHM_FORMAT_ABGR1555:
-     ret = SDM_BUFFER_FORMAT_RGBA_5551;
-     break;
-    case WL_SHM_FORMAT_RGB565:
-     ret = SDM_BUFFER_FORMAT_BGR_565;
-     break;
-    case WL_SHM_FORMAT_BGR565:
-     ret = SDM_BUFFER_FORMAT_RGB_565;
-     break;
-    case WL_SHM_FORMAT_RGB888:
-     ret = SDM_BUFFER_FORMAT_BGR_888;
-     break;
-    case WL_SHM_FORMAT_BGR888:
-     ret = SDM_BUFFER_FORMAT_RGB_888;
-     break;
-    default:
-     break;
     }
 
     return ret;
