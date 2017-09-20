@@ -128,23 +128,24 @@ DisplayError SdmDisplayBufferAllocator::FreeBuffer(BufferInfo *buffer_info) {
 uint32_t SdmDisplayBufferAllocator::GetBufferSize(BufferInfo *buffer_info) {
 
   uint32_t size = 0;
-  const BufferConfig &buffer_config = buffer_info->buffer_config;
-  uint64_t alloc_flags = 0;
-  uint32_t gformat = 0;
-  struct gbm_buf_info buf_info;
+  const BufferConfig &bufferConfig = buffer_info->buffer_config;
+  uint64_t usageFlags = 0;
+  uint32_t gbmFormat = 0;
+  struct gbm_buf_info bufInfo;
 
-  if (SetBufferInfo(buffer_config.format, &gformat, &alloc_flags) < 0) {
+  if (SetBufferInfo(bufferConfig.format, &gbmFormat, &usageFlags) < 0) {
      return 0;
   }
 
-  buf_info.width = INT(buffer_config.width);
-  buf_info.height = INT(buffer_config.height);
-  buf_info.format = gformat;
+  bufInfo.width = INT(bufferConfig.width);
+  bufInfo.height = INT(bufferConfig.height);
+  bufInfo.format = gbmFormat;
 
   uint32_t alignedWidth = 0;
   uint32_t alignedHeight = 0;
 
-  gbm_perform(GBM_PERFORM_GET_BUFFER_SIZE_DIMENSIONS, &buf_info, &alignedWidth, &alignedHeight, &size);
+  gbm_perform(GBM_PERFORM_GET_BUFFER_SIZE_DIMENSIONS, &bufInfo, usageFlags,
+              &alignedWidth, &alignedHeight, &size);
 
   return size;
 }
@@ -197,33 +198,32 @@ DisplayError SdmDisplayBufferAllocator::GetAllocatedBufferInfo(const BufferConfi
                                                                &buffer_config,
                                                                AllocatedBufferInfo \
                                                                *allocated_buffer_info) {
-
   /* This API does not fill or provide stride to the caller in AllocatedBufferInfo structure */
-
-  uint64_t alloc_flags = 0;
-  uint32_t gformat = 0;
-  struct gbm_buf_info buf_info;
-
-  if (SetBufferInfo(buffer_config.format, &gformat, &alloc_flags) < 0) {
-     return kErrorParameters;
-  }
-
-  buf_info.width = INT(buffer_config.width);
-  buf_info.height = INT(buffer_config.height);
-  buf_info.format = gformat;
-
+  uint64_t usageFlags = 0;
+  uint32_t gbmFormat = 0;
+  struct gbm_buf_info bufInfo;
   uint32_t alignedWidth = 0;
   uint32_t alignedHeight = 0;
   uint32_t size = 0;
 
-  gbm_perform(GBM_PERFORM_GET_BUFFER_SIZE_DIMENSIONS, &buf_info, &alignedWidth, &alignedHeight, &size);
-  DLOGI("perform_aligned_width = %d, perform_aligned_height = %d, size = %d, perform_gformat = %d, kformat = %d",
-         alignedWidth, alignedHeight, size, gformat, buffer_config.height);
+  if (SetBufferInfo(buffer_config.format, &gbmFormat, &usageFlags) < 0) {
+     return kErrorParameters;
+  }
+
+  bufInfo.width = INT(buffer_config.width);
+  bufInfo.height = INT(buffer_config.height);
+  bufInfo.format = gbmFormat;
+
+  gbm_perform(GBM_PERFORM_GET_BUFFER_SIZE_DIMENSIONS, &bufInfo, usageFlags,
+              &alignedWidth, &alignedHeight, &size);
+  DLOGI("aligned_width:%d, aligned_height:%d, size:%d, gbm_format:0x%x usage_flags:0x%x",
+         alignedWidth, alignedHeight, size, gbmFormat, usageFlags);
 
   allocated_buffer_info->aligned_width = alignedWidth;
   allocated_buffer_info->aligned_height = alignedHeight;
   allocated_buffer_info->size = size;
   allocated_buffer_info->format = buffer_config.format;
+
   return kErrorNone;
 }
 
