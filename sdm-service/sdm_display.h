@@ -76,6 +76,7 @@ class SdmDisplayInterface {
     virtual DisplayError EnablePllUpdate(int32_t enable) = 0;
     virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
     virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
+    virtual DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) = 0;
     virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
 
     static int GetDrmMasterFd();
@@ -100,6 +101,7 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
+    DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol);
 };
 
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
@@ -124,6 +126,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError UpdateDisplayPll(int32_t ppm);
 
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
+    DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol);
 
  protected:
     virtual DisplayError VSync(const DisplayEventVSync &vsync);
@@ -199,6 +202,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     float min_luminance_ = 0.0;
     int disable_hdr_handling_ = 0;
     bool hdr_supported_ = false;
+    uint32_t hdcp_version_ = 0;
 };
 
 class SdmDisplayProxy {
@@ -236,6 +240,9 @@ class SdmDisplayProxy {
     }
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
       return display_intf_->GetHdrInfo(display_hdr_info);
+    }
+    DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) {
+      return display_intf_->GetHdcpProtocol(display_hdcp_protocol);
     }
 
     int HandleHotplug(bool connected);
