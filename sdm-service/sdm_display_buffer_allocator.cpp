@@ -38,22 +38,46 @@ SdmDisplayBufferAllocator::SdmDisplayBufferAllocator() {
     gbm_ = gbm_create_device(drm_fd);
 }
 
-LayerBufferFormat GetLayerBufferFormat(uint32_t format) {
+LayerBufferFormat GetLayerBufferFormat(uint32_t format, uint32_t ubwc_status) {
    LayerBufferFormat layer_buffer_format = kFormatInvalid;
 
    switch (format) {
-       case GBM_FORMAT_ABGR8888: layer_buffer_format = kFormatRGBA8888; break;
-       case GBM_FORMAT_XBGR8888: layer_buffer_format = kFormatRGBX8888; break;
-       case GBM_FORMAT_BGR888: layer_buffer_format = kFormatRGB888; break;
-       case GBM_FORMAT_BGR565: layer_buffer_format = kFormatRGB565; break;
-       case GBM_FORMAT_RGB565: layer_buffer_format = kFormatBGR565; break;
-       case GBM_FORMAT_ARGB8888: layer_buffer_format = kFormatBGRA8888; break;
-       case GBM_FORMAT_XRGB8888: layer_buffer_format = kFormatBGRX8888; break;
-       case GBM_FORMAT_NV12: layer_buffer_format = kFormatYCbCr420SemiPlanarVenus; break;
-       case GBM_FORMAT_YCbCr_420_TP10_UBWC: layer_buffer_format = kFormatYCbCr420TP10Ubwc; break;
-       case GBM_FORMAT_YCbCr_420_P010_UBWC: layer_buffer_format = kFormatYCbCr420P010Ubwc; break;
+       case GBM_FORMAT_ABGR8888:
+          layer_buffer_format = ubwc_status ? kFormatRGBA8888Ubwc: kFormatRGBA8888;
+          break;
+       case GBM_FORMAT_XBGR8888:
+          layer_buffer_format = ubwc_status ? kFormatRGBX8888Ubwc: kFormatRGBX8888;
+          break;
+       case GBM_FORMAT_BGR888:
+          layer_buffer_format = kFormatRGB888;
+          break;
+       case GBM_FORMAT_BGR565:
+          layer_buffer_format = kFormatRGB565;
+          break;
+       case GBM_FORMAT_RGB565:
+          layer_buffer_format = ubwc_status ? kFormatBGR565Ubwc: kFormatBGR565;
+          break;
+       case GBM_FORMAT_ARGB8888:
+          layer_buffer_format = kFormatBGRA8888;
+          break;
+       case GBM_FORMAT_XRGB8888:
+          layer_buffer_format = kFormatBGRX8888;
+          break;
+       case GBM_FORMAT_NV12:
+          layer_buffer_format = kFormatYCbCr420SemiPlanarVenus;
+          break;
+       case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+          layer_buffer_format = kFormatYCbCr420TP10Ubwc;
+          break;
+       case GBM_FORMAT_YCbCr_420_P010_UBWC:
+          layer_buffer_format = kFormatYCbCr420P010Ubwc;
+          break;
+       case GBM_FORMAT_ABGR2101010:
+         layer_buffer_format = ubwc_status ? kFormatRGBA1010102Ubwc: kFormatRGBA1010102;
+         break;
        default:
-            layer_buffer_format = kFormatInvalid; break;
+         layer_buffer_format = kFormatInvalid;
+         break;
    }
 
    return layer_buffer_format;
@@ -67,6 +91,7 @@ DisplayError SdmDisplayBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) 
   uint32_t format;
   int metadata_fd = -1;
   uint64_t alloc_flags = 0;
+  uint32_t ubwc_status;
   int error = SetBufferInfo(buffer_config.format, &format, &alloc_flags);
   if (error != 0) {
     return kErrorParameters;
@@ -86,9 +111,9 @@ DisplayError SdmDisplayBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) 
       alloc_buffer_info->aligned_height = alignedHeight;
       uint32_t bo_size = 0;
       gbm_perform(GBM_PERFORM_GET_BO_SIZE, bo, &bo_size);
+      gbm_perform(GBM_PERFORM_GET_UBWC_STATUS, bo, &ubwc_status);
       alloc_buffer_info->size = bo_size;
-      alloc_buffer_info->format = GetLayerBufferFormat(gbm_bo_get_format(bo));
-
+      alloc_buffer_info->format = GetLayerBufferFormat(gbm_bo_get_format(bo), ubwc_status);
       gbm_perform(GBM_PERFORM_GET_METADATA_ION_FD, bo, &metadata_fd);
 
   } else {
@@ -111,6 +136,7 @@ DisplayError SdmDisplayBufferAllocator::FreeBuffer(BufferInfo *buffer_info) {
       DLOGE("Unable to destroy bo = NULL.\n");
       err = kErrorParameters;
   }
+  buffer_info->private_data = NULL;
   if (err == kErrorNone) {
       AllocatedBufferInfo *alloc_buffer_info = &buffer_info->alloc_buffer_info;
       alloc_buffer_info->fd = -1;
@@ -172,7 +198,7 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
                                         *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
                                                  GBM_BO_USAGE_HW_RENDERING_QTI;
                                         break;
-  case kFormatBGR565Ubwc:              *target = GBM_FORMAT_BGR565;
+  case kFormatBGR565Ubwc:              *target = GBM_FORMAT_RGB565;
                                         *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
                                                  GBM_BO_USAGE_HW_RENDERING_QTI;
                                         break;
@@ -261,7 +287,7 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     import_fd_data.height = buf_info.aligned_height;
 
     // Import gbm bo from buf_info
-    bo = gbm_bo_import(gbm_, GBM_BO_IMPORT_FD, &import_fd_data, GBM_BO_USE_SCANOUT);
+    bo = gbm_bo_import(gbm_, GBM_BO_IMPORT_FD, &import_fd_data, flags);
 
     if (bo == NULL) {
         return kErrorNone;
