@@ -1659,6 +1659,7 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 
     //If format is in skip list, return with out creating egl image.
     if ((gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
+        (gbmbuf->format == GBM_FORMAT_P010) ||
         (gbmbuf->format == GBM_FORMAT_NV12)) {
       return image;
     }
@@ -1789,6 +1790,7 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
 	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Invoke import_gbm_buffer()");
 
 	if((gbm_buf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
+		(gbm_buf->format == GBM_FORMAT_P010) ||
 		(gbm_buf->format == GBM_FORMAT_NV12)) {
 			return true;
 	}
@@ -1926,6 +1928,7 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 		!!(gbmbuf->flags & ZLINUX_BUFFER_PARAMS_FLAGS_Y_INVERT);
 
     if ((gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) &&
+        (gbmbuf->format != GBM_FORMAT_P010) &&
         (gbmbuf->format != GBM_FORMAT_NV12)) {
     	for (i = 0; i < gs->num_images; i++)
   	    	egl_image_unref(gs->images[i]);
@@ -1953,6 +1956,7 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 	gs->images[0] = gbm_buffer_backend_get_user_data(gbmbuf);
 
     if ((gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) &&
+        (gbmbuf->format != GBM_FORMAT_P010) &&
         (gbmbuf->format != GBM_FORMAT_NV12)) {
   	    if (gs->images[0]) {
   		    int ret;
