@@ -514,7 +514,7 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
 
     fb_layer->flags.skip = 0;
     fb_layer->flags.is_cursor = 0;
-    fb_layer->flags.has_ubwc_buf = 0;
+    fb_layer->flags.has_ubwc_buf = output->framebuffer_ubwc;
 
     return 0;
 }
