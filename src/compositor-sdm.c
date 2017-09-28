@@ -1258,7 +1258,14 @@ drm_output_init_egl(struct drm_output *output, struct drm_backend *b)
                          output->base.current_mode->height,
                          format[0],
                          GBM_BO_USE_SCANOUT |
-                         GBM_BO_USE_RENDERING);
+                         GBM_BO_USE_RENDERING |
+                         GBM_BO_USAGE_UBWC_ALIGNED_QTI |
+                         GBM_BO_USAGE_HW_RENDERING_QTI);
+
+    output->framebuffer_ubwc = false;
+    //Query whether allocated BOs are UBWC or not
+    gbm_perform(GBM_PERFORM_GET_SURFACE_UBWC_STATUS, output->surface, &output->framebuffer_ubwc);
+
     if (!output->surface) {
         weston_log("failed to create gbm surface\n");
         return -1;
