@@ -321,6 +321,34 @@ bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info)
     return SUCCESS;
 }
 
+bool GetDisplayHdcpProtocol(int display_id, struct DisplayHdcpProtocol *display_hdcp_protocol)
+{
+    DisplayError error = kErrorNone;
+
+    if (display_id >= kDisplayMax || display_id < 0) {
+        DLOGE("Display id(%d) out of range.", display_id);
+        return FAIL;
+    }
+
+    if (!display_[display_id]) {
+        DLOGE("function failed. Display(%d) not created yet.", display_id);
+        return FAIL;
+    }
+
+    error = display_[display_id]->GetHdcpProtocol(display_hdcp_protocol);
+
+    if (error != kErrorNone) {
+        DLOGE("function failed with error = %d", error);
+        return FAIL;
+    }
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGD("function successful.");
+    #endif
+
+    return SUCCESS;
+}
+
 int RegisterCbs(int display_id, sdm_cbs *cbs) {
     DisplayError error = kErrorNone;
 

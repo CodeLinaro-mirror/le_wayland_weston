@@ -121,6 +121,7 @@ const char * SdmDisplay::FourccToString(uint32_t fourcc)
 DisplayError SdmDisplay::CreateDisplay() {
     DisplayError error = kErrorNone;
     struct DisplayHdrInfo display_hdr_info;
+    struct DisplayHdcpProtocol display_hdcp_protocol;
 
     error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
 
@@ -142,6 +143,14 @@ DisplayError SdmDisplay::CreateDisplay() {
         DLOGI("Display Device supports HDR functionality");
     } else {
         DLOGI("Display Device doesn't support HDR functionality");
+    }
+
+    GetHdcpProtocol(&display_hdcp_protocol);
+    /* TODO: */
+    if (hdcp_version_) {
+        DLOGI("Display Device supports HDCP functionality");
+    } else {
+        DLOGI("Display Device doesn't support HDCP functionality");
     }
 
     return kErrorNone;
@@ -1375,6 +1384,26 @@ DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
     return error;
 }
 
+DisplayError SdmDisplay::GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) {
+    DisplayError error;
+
+    DisplayConfigFixedInfo fixed_info = {};
+    error = display_intf_->GetConfig(&fixed_info);
+
+    if (error != kErrorNone) {
+        DLOGE("Failed to get fixed info. Error = %d", error);
+        return error;
+    }
+
+    hdcp_version_ = fixed_info.hdcp_version;
+
+    display_hdcp_protocol->hdcp_version = fixed_info.hdcp_version;
+    display_hdcp_protocol->hdcp_interface_type = fixed_info.hdcp_interface_type;
+
+    return error;
+}
+
+
 SdmNullDisplay::SdmNullDisplay(DisplayType type, CoreInterface *core_intf) {
 }
 
@@ -1416,6 +1445,10 @@ DisplayError SdmNullDisplay::UpdateDisplayPll(int32_t ppm) {
 DisplayError SdmNullDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
   return kErrorNone;
 }
+DisplayError SdmNullDisplay::GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) {
+  return kErrorNone;
+}
+
 
 SdmDisplayProxy::SdmDisplayProxy(DisplayType type, CoreInterface *core_intf)
   : disp_type_(type), core_intf_(core_intf),
