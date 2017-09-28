@@ -197,4 +197,6 @@ struct drm_output {
            unsigned int sec;
            unsigned int usec;
        } last_vblank;
+       // Indicate whether allocation of framebuffer is UBWC or not
+       int framebuffer_ubwc;
 };
