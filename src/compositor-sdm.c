@@ -122,7 +122,6 @@ struct drm_parameters {
     int use_pixman;
     const char *seat_id;
 };
-int display_id = -1;
 
 static struct gl_renderer_interface *gl_renderer;
 
@@ -431,11 +430,11 @@ drm_output_repaint(struct weston_output *output_base,
     }
     assert(wl_list_empty(&output->plane_flip_list));
 
-    SetDisplayState(display_id, WESTON_DPMS_ON);
+    SetDisplayState(output->display_id, WESTON_DPMS_ON);
     output->dpms = WESTON_DPMS_ON;
 
-    SetVSyncState(display_id, ENABLE, output);
-    ret = Commit(display_id, output);
+    SetVSyncState(output->display_id, ENABLE, output);
+    ret = Commit(output->display_id, output);
     if (ret) {
         weston_log("fail to commit to sdm display! err=%d\n", ret);
     }
@@ -759,7 +758,7 @@ drm_assign_planes(struct weston_output *output_base)
      */
 
     output->view_count++;
-    int error = Prepare(display_id, output);
+    int error = Prepare(output->display_id, output);
     pixman_region32_fini(&overlap);
     wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
         next_plane = primary;
@@ -1206,48 +1205,50 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
     struct drm_output *output = (struct drm_output *) output_base;
 
     weston_log("drm_set_dpms: Calling SDM to SetDisplaySatte.");
-    bool ret = SetDisplayState(display_id, level);
+    bool ret = SetDisplayState(output->display_id, level);
 
-        if (ret)
+    if (ret)
         output->dpms = level;
 }
 
 static void
 drm_enable_ppm(struct weston_output *output_base, int32_t enable)
 {
-	int ret = 0;
+    struct drm_output *output = (struct drm_output *) output_base;
+    int ret = 0;
 
-	if (display_id < 0) {
-		weston_log("invalid display id\n");
-		return;
-	}
+    if (output->display_id < 0) {
+        weston_log("invalid display id\n");
+        return;
+    }
 
-	ret = EnablePllUpdate(display_id, enable);
-	if (ret) {
-		weston_log("DRM: PLL: enable pll update failed for %d\n",
-			display_id);
-	}
+    ret = EnablePllUpdate(output->display_id, enable);
+    if (ret) {
+        weston_log("DRM: PLL: enable pll update failed for %d\n",
+                      output->display_id);
+    }
 
-	return;
+    return;
 }
 
 static void
 drm_set_ppm(struct weston_output *output_base, int32_t ppm)
 {
-	int ret = 0;
+    struct drm_output *output = (struct drm_output *) output_base;
+    int ret = 0;
 
-	if (display_id < 0) {
-		weston_log("invalid display id\n");
-		return;
-	}
+    if (output->display_id < 0) {
+        weston_log("invalid display id\n");
+        return;
+    }
 
-	ret = UpdateDisplayPll(display_id, ppm);
-	if (ret) {
-		weston_log("DRM: PLL: update display pll failed for %d\n",
-			display_id);
-	}
+    ret = UpdateDisplayPll(output->display_id, ppm);
+    if (ret) {
+        weston_log("DRM: PLL: update display pll failed for %d\n",
+                      output->display_id);
+    }
 
-	return;
+    return;
 }
 
 /* Init output state that depends on gl or gbm */
@@ -1719,7 +1720,8 @@ hotplug_handler(int disp, bool connected, void *data)
  * @returns 0 on success, or -1 on failure
  */
 static int
-create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_device *drm_device)
+create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, int y,
+				struct DisplayConfigInfo *display_config, struct udev_device *drm_device)
 {
     struct drm_output *output;
     struct drm_mode *drm_mode, *next, *current;
@@ -1794,26 +1796,6 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
         goto err_free;
     }
 
-        struct DisplayConfigInfo display_config;
-        display_config.x_pixels        = 0;
-        display_config.y_pixels        = 0;
-        display_config.x_dpi           = 0.0f;
-        display_config.y_dpi           = 0.0f;
-        display_config.fps             = 0;
-        display_config.vsync_period_ns = 0;
-        display_config.is_yuv          = false;
-
-        bool rc = GetDisplayConfiguration(display_id, &display_config);
-        if (rc) {
-            width   = display_config.x_pixels;
-            height  = display_config.y_pixels;
-            refresh = display_config.fps*1000;
-        } else { /* default 1080p, 60 fps */
-            width   = 1920;
-            height  = 1080;
-            refresh = 60*1000;
-        }
-
     config = OUTPUT_CONFIG_MODE;
 
     current = drm_output_choose_initial_mode(output, config,
@@ -1824,14 +1806,14 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
         // goto err_free;
     }
     current = zalloc(sizeof *current);
-    current->base.width   = width;
-    current->base.height  = height;
-    current->base.refresh = refresh;
+    current->base.width   = display_config->x_pixels;
+    current->base.height  = display_config->y_pixels;
+    current->base.refresh = display_config->fps * 1000;
     output->base.current_mode = &current->base;
     output->base.current_mode->flags |= WL_OUTPUT_MODE_CURRENT;
 
-    uint32_t mmWidth  = (display_config.x_pixels/display_config.x_dpi)*25.4;
-    uint32_t mmHeight = (display_config.y_pixels/display_config.y_dpi)*25.4;
+    uint32_t mmWidth  = (display_config->x_pixels/display_config->x_dpi)*25.4;
+    uint32_t mmHeight = (display_config->y_pixels/display_config->y_dpi)*25.4;
     weston_output_init(&output->base, b->compositor, x, y, mmWidth, mmHeight, transform, scale);
 
     if (b->use_pixman) {
@@ -1893,6 +1875,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.native_mode = output->base.current_mode;
     output->base.native_scale = output->base.current_scale;
 
+    output->display_id = display_id;
     SetDisplayState(display_id, WESTON_DPMS_ON);
     return 0;
 
@@ -1914,9 +1897,55 @@ static int
 create_outputs(struct drm_backend *b, uint32_t option_connector,
            struct udev_device *drm_device)
 {
+    uint32_t display_count = 0;
     int x=0, y=0;
-    if (create_output_for_connector(b, x, y, drm_device) < 0)
+    int idx, rc;
+
+    display_count = GetDisplayCount();
+    if (!display_count) {
+        weston_log("fail to get display from SDM! count=%d \n", display_count);
         return -1;
+    }
+    weston_log("%d displays are connected\n", display_count);
+
+    if (GetDisplayInfos()) {
+        weston_log("fail to get display info from SDM!\n");
+        return -1;
+    }
+
+    for (idx = 0; idx < display_count; idx++) {
+        sdm_cbs_t sdm_cbs;
+
+        /* and create default display */
+        rc = CreateDisplay(idx);
+        weston_log("CreateDisplay: %d successful\n", rc);
+
+        /* Now register callbacks with SDM services */
+        sdm_cbs.vblank_cb = vblank_handler,
+        sdm_cbs.hotplug_cb = hotplug_handler,
+        RegisterCbs(idx, &sdm_cbs);
+
+        struct DisplayConfigInfo display_config;
+        display_config.x_pixels        = 0;
+        display_config.y_pixels        = 0;
+        display_config.x_dpi           = 96.0f;
+        display_config.y_dpi           = 96.0f;
+        display_config.fps             = 0;
+        display_config.vsync_period_ns = 0;
+        display_config.is_yuv          = false;
+
+        bool rc = GetDisplayConfiguration(idx, &display_config);
+        if (!rc) {
+            weston_log("Fail to get preferred mode, use default mode instead!");
+            /* default 1080p, 60 fps */
+            display_config.x_pixels = 1920;
+            display_config.y_pixels = 1080;
+            display_config.fps = 60;
+        }
+        if (create_output_for_connector(b, idx, x, y, &display_config, drm_device) < 0)
+            return -1;
+        x += display_config.x_pixels;
+    }
 
     return 0;
 }
@@ -1935,7 +1964,20 @@ update_outputs(struct drm_backend *b, struct udev_device *drm_device)
     else
         x = 0;
     y = 0;
-    create_output_for_connector(b, x, y, drm_device);
+
+    /* TODO: How to handle it even though hotplug is not supported?
+     * Fake a config first
+     */
+    struct DisplayConfigInfo display_config;
+    display_config.x_pixels        = 1920;
+    display_config.y_pixels        = 1080;
+    display_config.x_dpi           = 96.0f;
+    display_config.y_dpi           = 96.0f;
+    display_config.fps             = 60;
+    display_config.vsync_period_ns = 0;
+    display_config.is_yuv          = false;
+
+    create_output_for_connector(b, 0, x, y, &display_config, drm_device);
 }
 
 static int
@@ -2312,8 +2354,7 @@ drm_backend_create(struct weston_compositor *compositor,
     struct udev_device *drm_device;
     struct wl_event_loop *loop;
     const char *path;
-    uint32_t key;
-    sdm_cbs_t sdm_cbs;
+    uint32_t key, display_count = 0;
 
     weston_log("initializing drm backend\n");
 
@@ -2388,17 +2429,6 @@ drm_backend_create(struct weston_compositor *compositor,
 
     /* begin SDM initialization */
     int rc = CreateCore();
-    rc = GetFirstDisplayType(&display_id);
-    weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
-
-    /* and create default display */
-    rc = CreateDisplay(display_id);
-    weston_log("CreateDisplay: %d successful\n", rc);
-
-    /* Now register callbacks with SDM services */
-    sdm_cbs.vblank_cb = vblank_handler,
-    sdm_cbs.hotplug_cb = hotplug_handler,
-    RegisterCbs(display_id, &sdm_cbs);
 
     if (udev_input_init(&b->input, compositor, b->udev, param->seat_id) < 0) {
         weston_log("failed to create input devices\n");

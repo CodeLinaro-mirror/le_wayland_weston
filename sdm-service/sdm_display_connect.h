@@ -77,7 +77,7 @@ int GetFirstDisplayType(int *display_id);
 
 /*! @brief Method to create a display device for a given display id.
 
-    @details Client shall use this method to create each of the display id.
+    @details Client shall use this method to create each of the display.
     display_id must be valid to create display.
 
     @param[in] display_id \link int \endlink

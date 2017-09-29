@@ -147,6 +147,7 @@ struct drm_fb {
 
 struct drm_output {
        struct weston_output   base;
+       int display_id;
 
        uint32_t view_count;
        uint32_t crtc_id;

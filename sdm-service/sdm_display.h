@@ -78,12 +78,14 @@ class SdmDisplayInterface {
     virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
     virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
 
+    virtual struct drm_output * GetOutput() = 0;
+
     static int GetDrmMasterFd();
 };
 
 class SdmNullDisplay : public SdmDisplayInterface {
   public:
-    SdmNullDisplay(DisplayType type, CoreInterface *core_intf);
+    SdmNullDisplay(DisplayOrder order, DisplayType type, CoreInterface *core_intf);
     ~SdmNullDisplay();
 
     SdmDisplayIntfType GetDisplayIntfType() {
@@ -100,12 +102,14 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
+
+    struct drm_output * GetOutput() { return NULL; };
 };
 
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
 
  public:
-    SdmDisplay(DisplayType type, CoreInterface *core_intf);
+    SdmDisplay(DisplayOrder order, DisplayType type, CoreInterface *core_intf);
     ~SdmDisplay();
 
     SdmDisplayIntfType GetDisplayIntfType() {
@@ -124,6 +128,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError UpdateDisplayPll(int32_t ppm);
 
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
+
+    struct drm_output * GetOutput() { return drm_output_; };
 
  protected:
     virtual DisplayError VSync(const DisplayEventVSync &vsync);
@@ -187,6 +193,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     SdmDisplaySocketHandler socket_handler_;
     DisplayEventHandler *client_event_handler_ = NULL;
     DisplayInterface *display_intf_ = NULL;
+    DisplayOrder display_order_ = kOrderMax;
     DisplayType display_type_ = kDisplayMax;
     DisplayConfigVariableInfo variable_info_;
     HWDisplayInterfaceInfo hw_disp_info_;
@@ -199,11 +206,14 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     float min_luminance_ = 0.0;
     int disable_hdr_handling_ = 0;
     bool hdr_supported_ = false;
+
+    struct drm_output *drm_output_ = NULL;
+    vblank_cb_t vblank_cb_ = NULL;
 };
 
 class SdmDisplayProxy {
   public:
-    SdmDisplayProxy(DisplayType type, CoreInterface *core_intf);
+    SdmDisplayProxy(DisplayOrder order, DisplayType type, CoreInterface *core_intf);
     ~SdmDisplayProxy();
 
     DisplayError CreateDisplay() { return display_intf_->CreateDisplay(); }
@@ -246,6 +256,7 @@ class SdmDisplayProxy {
     void *UeventThreadHandler();
 
     SdmDisplayInterface *display_intf_;
+    DisplayOrder disp_order_;
     DisplayType disp_type_;
     CoreInterface *core_intf_;
     SdmNullDisplay null_disp_;

@@ -77,8 +77,6 @@ extern "C" {
 
 #define __CLASS__ "SdmDisplay"
 
-struct drm_output *drm_output_;
-vblank_cb_t vblank_cb_;
 
 namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
@@ -98,7 +96,8 @@ int SdmDisplayInterface::GetDrmMasterFd() {
   return fd;
 }
 
-SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
+SdmDisplay::SdmDisplay(DisplayOrder order, DisplayType type, CoreInterface *core_intf) {
+    display_order_ = order;
     display_type_ = type;
     core_intf_    = core_intf;
     drm_output_   = NULL;
@@ -122,7 +121,7 @@ DisplayError SdmDisplay::CreateDisplay() {
     DisplayError error = kErrorNone;
     struct DisplayHdrInfo display_hdr_info;
 
-    error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
+    error = core_intf_->CreateDisplay(display_order_, display_type_, this, &display_intf_);
 
     if (error != kErrorNone) {
         DLOGE("Display creation failed. Error = %d", error);
@@ -206,7 +205,14 @@ DisplayError SdmDisplay::SetDisplayState(DisplayState state) {
 DisplayError SdmDisplay::SetVSyncState(bool VSyncState, struct drm_output *output) {
     DisplayError error;
 
-    drm_output_ = output;
+    if (drm_output_ && drm_output_ != output) {
+        DLOGE("VSync state error: set different output for the same sdm display!");
+        return kErrorNone;
+    }
+
+    if (!drm_output_)
+        drm_output_ = output;
+
     error = display_intf_->SetVSyncState(VSyncState);
     if (error != kErrorNone) {
         DLOGE("VSync state setting failed. Error = %d", error);
@@ -1375,7 +1381,7 @@ DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
     return error;
 }
 
-SdmNullDisplay::SdmNullDisplay(DisplayType type, CoreInterface *core_intf) {
+SdmNullDisplay::SdmNullDisplay(DisplayOrder order, DisplayType type, CoreInterface *core_intf) {
 }
 
 SdmNullDisplay::~SdmNullDisplay() {
@@ -1417,9 +1423,9 @@ DisplayError SdmNullDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info)
   return kErrorNone;
 }
 
-SdmDisplayProxy::SdmDisplayProxy(DisplayType type, CoreInterface *core_intf)
-  : disp_type_(type), core_intf_(core_intf),
-    sdm_disp_(type, core_intf), null_disp_(type, core_intf) {
+SdmDisplayProxy::SdmDisplayProxy(DisplayOrder order, DisplayType type, CoreInterface *core_intf)
+  : disp_order_(order), disp_type_(type), core_intf_(core_intf),
+    sdm_disp_(order, type, core_intf), null_disp_(order, type, core_intf) {
     display_intf_ = &sdm_disp_;
 
     std::thread uevent_thread(UeventThread, this);
@@ -1433,6 +1439,7 @@ SdmDisplayProxy::~SdmDisplayProxy () {
 
 int SdmDisplayProxy::HandleHotplug(bool connected) {
   DisplayError error = kErrorNone;
+  struct drm_output *output = NULL;
 
   DLOGI("HandleHotplug = %d", connected);
 
@@ -1445,11 +1452,12 @@ int SdmDisplayProxy::HandleHotplug(bool connected) {
         display_intf_ = &null_disp_;
         return error;
       }
+      output = display_intf_->GetOutput();
       display_intf_->SetDisplayState(kStateOn);
-      display_intf_->SetVSyncState(true, drm_output_);
+      display_intf_->SetVSyncState(true, output);
 
       if (hotplug_cb_) {
-        hotplug_cb_(disp_type_, connected, drm_output_);
+        hotplug_cb_(disp_type_, connected, output);
       }
 
       DLOGI("Display is connected successfully.");
@@ -1459,10 +1467,11 @@ int SdmDisplayProxy::HandleHotplug(bool connected) {
   } else {
     if (display_intf_->GetDisplayIntfType() == sdm_disp) {
       if (hotplug_cb_) {
-        hotplug_cb_(disp_type_, connected, drm_output_);
+        hotplug_cb_(disp_type_, connected, display_intf_->GetOutput());
       }
 
-      display_intf_->SetVSyncState(false, drm_output_);
+      output = display_intf_->GetOutput();
+      display_intf_->SetVSyncState(false, output);
       display_intf_->DestroyDisplay();
 
       display_intf_ = &null_disp_;
