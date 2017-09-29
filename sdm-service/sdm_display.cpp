@@ -709,6 +709,9 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
                 return kErrorUndefined;
             }
 
+            // Pass the wl_resource handle from sdm layer to layer stack
+            // to use it for egl image creation in tone mapping
+            layer_stack_.layers.at(index)->userdata = sdm_layer->view->surface->resource;
             error = AddGeometryLayerToLayerStack(output, index++, glayer, sdm_layer->is_skip);
             if (error) {
                 DLOGE("failed add Geometry Layer to LayerStack.");
