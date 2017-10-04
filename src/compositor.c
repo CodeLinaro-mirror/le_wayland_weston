@@ -65,7 +65,7 @@
 
 #define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
 #define MAX_WL_OUTPUT_INTERFACE_VERSON 3
-#define CURRENT_WL_OUPUT_INTERFACE_VERSION 3
+#define CURRENT_WL_OUPUT_IMPLEMENTED_VERSION 3
 
 
 static void
@@ -4126,13 +4126,46 @@ weston_output_move(struct weston_output *output, int x, int y)
 }
 
 WL_EXPORT void
-weston_output_init_extended(struct weston_output *output, struct weston_compositor *c,
-			int x, int y, int mm_width, int mm_height, uint32_t transform, int32_t scale,
+weston_output_notify_updates(struct weston_output *output)
+{
+	static uint32_t hdcp_protocol_version = WL_OUTPUT_HDCP_VERSION_UNKNOWN;
+	static uint32_t hdcp_interface_type = WL_OUTPUT_HDCP_INTERFACE_TYPE_UNKNOWN;
+	static uint32_t hdr_supported = WL_OUTPUT_HDR_SUPPORTED_FALSE;
+	struct wl_resource *resource;
+
+	/* TODO: need to protect against async calls */
+	if (hdcp_protocol_version == output->hdcp_protocol.version &&
+			hdcp_interface_type == output->hdcp_protocol.interface_type &&
+			hdr_supported == output->hdr_info.hdr_supported)
+		return;
+
+	hdcp_protocol_version = output->hdcp_protocol.version;
+	hdcp_interface_type = output->hdcp_protocol.interface_type;
+	hdr_supported = output->hdr_info.hdr_supported;
+
+	wl_resource_for_each(resource, &output->resource_list) {
+		int version = wl_resource_get_version(resource);
+
+		if ( version >= WL_OUTPUT_HDCP_PROTOCOL_SINCE_VERSION)
+		wl_output_send_hdcp_protocol(resource,
+				output->hdcp_protocol.version,
+				output->hdcp_protocol.interface_type);
+
+		if (version >= WL_OUTPUT_HDR_INFO_SINCE_VERSION)
+			wl_output_send_hdr_info(resource,
+					output->hdr_info.hdr_supported);
+
+		if (version >= WL_OUTPUT_DONE_SINCE_VERSION)
+			wl_output_send_done(resource);
+		}
+}
+
+WL_EXPORT void
+weston_output_update_metadata(struct weston_output *output,
 			bool hdr_supported, uint32_t hdcp_version, uint32_t hdcp_interface_type)
 {
 	weston_output_init_hdr_info(output, hdr_supported);
 	weston_output_init_hdcp_protocol(output, hdcp_version, hdcp_interface_type);
-	weston_output_init(output, c, x, y, mm_width, mm_height, transform, scale);
 }
 
 WL_EXPORT void
@@ -4172,7 +4205,7 @@ weston_output_init(struct weston_output *output, struct weston_compositor *c,
 
 	output->global =
 		wl_global_create(c->wl_display, &wl_output_interface,
-				CURRENT_WL_OUPUT_INTERFACE_VERSION, output, bind_output);
+				CURRENT_WL_OUPUT_IMPLEMENTED_VERSION, output, bind_output);
 }
 
 /** Adds an output to the compositor's output list and

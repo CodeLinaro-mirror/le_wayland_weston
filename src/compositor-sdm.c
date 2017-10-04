@@ -128,6 +128,10 @@ static struct gl_renderer_interface *gl_renderer;
 
 static const char default_seat[] = "seat0";
 
+
+static void
+weston_output_refresh_metadata(struct weston_output *output);
+
 static void
 drm_output_update_msc(struct drm_output *output, unsigned int seq);
 
@@ -425,6 +429,9 @@ drm_output_repaint(struct weston_output *output_base,
 
     if (output->destroy_pending)
         return -1;
+
+    weston_output_refresh_metadata(output_base);
+    weston_output_notify_updates(output_base);
 
     if (!output->next) {
         drm_output_render(output, damage);
@@ -1698,6 +1705,37 @@ hotplug_handler(int disp, bool connected, void *data)
     weston_output_schedule_repaint(&output->base);
 }
 
+/**
+ * Gets HDCP and HDR metadata and configures the weston_output structure
+ *
+ * A helper function to get HDCP Protocol and HDR Info from the sdm backend
+ * and update the weston output object.
+ *
+ * @param output pointer to weston_output structure
+ */
+static void
+weston_output_refresh_metadata(struct weston_output *output){
+    struct DisplayHdrInfo display_hdr_info = {0};
+    struct DisplayHdcpProtocol display_hdcp_protocol = {0};
+    bool hdr_supported = false;
+    uint32_t hdcp_version = 0;
+    uint32_t hdcp_interface_type = 0;
+
+    bool rc_hdr = GetDisplayHdrInfo(display_id, &display_hdr_info);
+    bool rc_hdcp = GetDisplayHdcpProtocol(display_id, &display_hdcp_protocol);
+    if (rc_hdr) {
+        hdr_supported = display_hdr_info.hdr_supported;
+    } else {
+        weston_log("WARN: Failed to Get Display HDR Info\n");
+    }
+    if (rc_hdcp) {
+        hdcp_version = display_hdcp_protocol.hdcp_version;
+        hdcp_interface_type = display_hdcp_protocol.hdcp_interface_type;
+    } else {
+        weston_log("WARN: Failed to Get Display HDCP Protocol\n");
+    }
+    weston_output_update_metadata(output, hdr_supported, hdcp_version, hdcp_interface_type);
+}
 
 /**
  * Create and configure a Weston output structure
@@ -1828,29 +1866,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     uint32_t mmWidth  = (display_config.x_pixels/display_config.x_dpi)*25.4;
     uint32_t mmHeight = (display_config.y_pixels/display_config.y_dpi)*25.4;
 
-    struct DisplayHdrInfo display_hdr_info = {0};
-    struct DisplayHdcpProtocol display_hdcp_protocol = {0};
-    bool hdr_supported = false;
-    uint32_t hdcp_version = 0;
-    uint32_t hdcp_interface_type = 0;
-
-    bool rc_hdr = GetDisplayHdrInfo(display_id, &display_hdr_info);
-    bool rc_hdcp = GetDisplayHdcpProtocol(display_id, &display_hdcp_protocol);
-    if (rc_hdr) {
-        weston_log("INFO: Succeeded to Get Display HDR Info\n");
-        hdr_supported = display_hdr_info.hdr_supported;
-    } else {
-        weston_log("WARN: Failed to Get Display HDR Info\n");
-    }
-    if (rc_hdcp) {
-        weston_log("INFO: Succeeded to Get Display HDCP Protocol\n");
-        hdcp_version = display_hdcp_protocol.hdcp_version;
-        hdcp_interface_type = display_hdcp_protocol.hdcp_interface_type;
-    } else {
-        weston_log("WARN: Failed to Get Display HDCP Protocol\n");
-    }
-    weston_output_init_extended(&output->base, b->compositor, x, y, mmWidth, mmHeight,
-            transform, scale, hdr_supported, hdcp_version, hdcp_interface_type);
+    weston_output_refresh_metadata(&output->base);
+    weston_output_init(&output->base, b->compositor, x, y, mmWidth, mmHeight, transform, scale);
 
     if (b->use_pixman) {
         if (drm_output_init_pixman(output, b) < 0) {
