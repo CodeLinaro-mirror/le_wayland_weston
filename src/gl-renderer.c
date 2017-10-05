@@ -1758,18 +1758,13 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
 	buf_info.width       = gbm_buf->width;
 	buf_info.format      = gbm_buf->format;
 
-    if ((gbm_buf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
-        (gbm_buf->format == GBM_FORMAT_NV12)) {
-        return true;
-    }
-
-
 	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Invoked");
 
-	//We will import BO to create an entry into the hash map for
-	//this fd
-	bo = gbm_bo_import(gbm, GBM_BO_IMPORT_GBM_BUF_TYPE, &buf_info,
-											 GBM_BO_USE_RENDERING);
+	//We will import BO to create an entry into the hash map for this buf_info
+	bo = gbm_bo_import(gbm, GBM_BO_IMPORT_GBM_BUF_TYPE, &buf_info, GBM_BO_USE_RENDERING);
+
+	//save gbm buffer object
+	gbm_buf->bo = bo;
 
 	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:bo created= %p",bo);
 
@@ -1793,14 +1788,15 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
 
 	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Invoke import_gbm_buffer()");
 
+	if((gbm_buf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
+		(gbm_buf->format == GBM_FORMAT_NV12)) {
+			return true;
+	}
+
 	image = import_gbm_buffer(gr, gbm_buf);
+
 	if (!image)
 		return false;
-
-//We are done with the import to populate the hash map entry
-//so we will destroy since the egl_image_create import would
-//hold the ref count
-	gbm_bo_destroy(bo);
 
 /* Cache retains a ref. */
 	egl_image_unref(image);

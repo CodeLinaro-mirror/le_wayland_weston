@@ -189,8 +189,6 @@ struct drm_output {
        struct wl_list commited_layer_list;  /* sdm_layer::link */
 
        struct wl_event_source *finish_frame_timer;
-       pthread_mutex_t hpd_lock;
-       pthread_cond_t hpd_cond;
 
        int vblank_ev_fd;
        struct wl_event_source *vblank_ev_source;
