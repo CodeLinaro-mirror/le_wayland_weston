@@ -197,6 +197,14 @@ struct DisplayHdrInfo{
   uint32_t min_luminance; //!< From Panel's blackness level
 };
 
+/**
+ * List of HDCP capabilities of display
+ */
+struct DisplayHdcpProtocol{
+  uint32_t hdcp_version; //!< HDCP version number
+  uint32_t hdcp_interface_type; //!< HDCP phycical-layer interface
+};
+
 struct DisplayConfigInfo {
   uint32_t x_pixels;          //!< Total number of pixels in X-direction on the display panel.
   uint32_t y_pixels;          //!< Total number of pixels in Y-direction on the display panel.
