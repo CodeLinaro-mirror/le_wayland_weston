@@ -214,7 +214,12 @@ class SdmDisplayProxy {
                     SdmDisplayBufferAllocator *buffer_allocator);
     ~SdmDisplayProxy();
 
-    DisplayError CreateDisplay() { return display_intf_->CreateDisplay(); }
+    DisplayError CreateDisplay() {
+      DisplayError rc = display_intf_->CreateDisplay();
+      if (rc != kErrorNone)
+        display_intf_ = &null_disp_;
+      return kErrorNone;
+    }
     DisplayError DestroyDisplay() { return display_intf_->DestroyDisplay(); }
     DisplayError Prepare(struct drm_output *output) {
       return display_intf_->Prepare(output);

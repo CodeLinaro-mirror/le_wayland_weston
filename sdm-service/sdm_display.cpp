@@ -91,6 +91,16 @@ namespace sdm {
 #define SDM_DISPLAY_DEBUG 0
 #define SDM_DISPLAY_DUMP_LAYER_STACK 0
 
+#define SDM_DEAFULT_NULL_DISPLAY_WIDTH 1920
+#define SDM_DEAFULT_NULL_DISPLAY_HEIGHT 1080
+#define SDM_DEAFULT_NULL_DISPLAY_FPS 60
+#define SDM_DEAFULT_NULL_DISPLAY_X_DPI 25.4
+#define SDM_DEAFULT_NULL_DISPLAY_Y_DPI 25.4
+#define SDM_DEAFULT_NULL_DISPLAY_IS_YUV false
+
+#define MAX_PROP_STR_SIZE 64
+#define SDM_NULL_DISPLAY_RESOLUTON_PROP_NAME "weston.sdm.default.resolution"
+
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf,
                                          SdmDisplayBufferAllocator *buffer_allocator) {
     display_type_ = type;
@@ -122,7 +132,6 @@ DisplayError SdmDisplay::CreateDisplay() {
 
     if (error != kErrorNone) {
         DLOGE("Display creation failed. Error = %d", error);
-        CoreInterface::DestroyCore();
 
         return error;
     }
@@ -1472,6 +1481,11 @@ DisplayError SdmNullDisplay::Prepare(struct drm_output *output) {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::Commit(struct drm_output *output) {
+  /**
+   * TODO: We need to handle releasing the buffer references such that
+   * the video buffers/frames keep moving forward in time even though
+   * not displayed. This will be done at a later point of time.
+   */
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::SetDisplayState(DisplayState state) {
@@ -1479,13 +1493,54 @@ DisplayError SdmNullDisplay::SetDisplayState(DisplayState state) {
 }
 
 DisplayError SdmNullDisplay::SetVSyncState(bool enable, struct drm_output *output) {
+  /**
+   * TODO: drm_output_ needs to be re-initialized based on the preferred supported mode
+   *       of the plugged-in display. The recent Weston release contains better APIs
+   *       to handle this case. Hence this implementation will be improved based upon
+   *       the recent Weston release updates.
+   */
+  drm_output_ = output;
   return kErrorNone;
 }
 
 DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
+  uint32_t props_value[3] = {0};
+  char null_display_props[MAX_PROP_STR_SIZE] = {0};
+  char *prop = NULL, *saveptr = NULL;
+
+  // sdm.null.resolution format is width:height:fps
+  SdmDisplayDebugger::Get()->GetProperty(SDM_NULL_DISPLAY_RESOLUTON_PROP_NAME, null_display_props);
+
+  prop = strtok_r(null_display_props, ":", &saveptr);
+  for (int i =0; i<3 && prop != NULL; i++)
+  {
+    props_value[i] = UINT32(atoi(prop));
+    prop = strtok_r(NULL, ":", &saveptr);
+  }
+
+  if (props_value[0] == 0 || props_value[1] == 0) {
+    display_config->x_pixels = SDM_DEAFULT_NULL_DISPLAY_WIDTH;
+    display_config->y_pixels = SDM_DEAFULT_NULL_DISPLAY_HEIGHT;
+  } else {
+    display_config->x_pixels = props_value[0];
+    display_config->y_pixels = props_value[1];
+  }
+
+  if (props_value[2] == 0)
+    display_config->fps = SDM_DEAFULT_NULL_DISPLAY_FPS;
+  else
+    display_config->fps = props_value[2];
+
+  display_config->x_dpi = SDM_DEAFULT_NULL_DISPLAY_X_DPI;
+  display_config->y_dpi = SDM_DEAFULT_NULL_DISPLAY_Y_DPI;
+  display_config->vsync_period_ns = UINT32(1000000000/display_config->fps);
+  display_config->is_yuv = SDM_DEAFULT_NULL_DISPLAY_IS_YUV;
+
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
+  vblank_cb_   = vbcb;
+
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::EnablePllUpdate(int32_t enable) {

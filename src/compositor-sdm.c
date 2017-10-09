@@ -244,7 +244,7 @@ drm_fb_get_from_bo(struct gbm_bo *bo,
 {
     struct drm_fb *fb = gbm_bo_get_user_data(bo);
     uint32_t width, height;
-    uint32_t handles[4], pitches[4], offsets[4];
+    uint32_t handles[4] = {0}, pitches[4] = {0}, offsets[4] = {0};
     int ret;
 
     if (fb)
@@ -1094,7 +1094,7 @@ drm_output_add_mode(struct drm_output *output, const drmModeModeInfo *info)
     struct drm_mode *mode;
     uint64_t refresh;
 
-    mode = malloc(sizeof *mode);
+    mode = zalloc(sizeof *mode);
     if (mode == NULL)
         return NULL;
 
@@ -1270,13 +1270,14 @@ drm_output_init_egl(struct drm_output *output, struct drm_backend *b)
                          GBM_BO_USAGE_HW_RENDERING_QTI);
 
     output->framebuffer_ubwc = false;
-    //Query whether allocated BOs are UBWC or not
-    gbm_perform(GBM_PERFORM_GET_SURFACE_UBWC_STATUS, output->surface, &output->framebuffer_ubwc);
 
     if (!output->surface) {
         weston_log("failed to create gbm surface\n");
         return -1;
     }
+
+    //Query whether allocated BOs are UBWC or not
+    gbm_perform(GBM_PERFORM_GET_SURFACE_UBWC_STATUS, output->surface, &output->framebuffer_ubwc);
 
     if (format[1])
         n_formats = 2;
@@ -1758,7 +1759,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     struct drm_mode *drm_mode, *next, *current;
     struct weston_mode *m;
     struct weston_config_section *section;
-    drmModeModeInfo crtc_mode, modeline;
+    drmModeModeInfo crtc_mode = {0}, modeline = {0};
+    float x_dpi, y_dpi;
     int i, width, height, refresh, scale;
     char *s;
     enum output_config config;
@@ -1841,10 +1843,14 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
             width   = display_config.x_pixels;
             height  = display_config.y_pixels;
             refresh = display_config.fps*1000;
+            x_dpi = display_config.x_dpi;
+            y_dpi = display_config.y_dpi;
         } else { /* default 1080p, 60 fps */
             width   = 1920;
             height  = 1080;
             refresh = 60*1000;
+            x_dpi = 25.4;
+            y_dpi = 25.4;
         }
 
     config = OUTPUT_CONFIG_MODE;
@@ -1863,8 +1869,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.current_mode = &current->base;
     output->base.current_mode->flags |= WL_OUTPUT_MODE_CURRENT;
 
-    uint32_t mmWidth  = (display_config.x_pixels/display_config.x_dpi)*25.4;
-    uint32_t mmHeight = (display_config.y_pixels/display_config.y_dpi)*25.4;
+    uint32_t mmWidth  = (width/x_dpi)*25.4;
+    uint32_t mmHeight = (height/y_dpi)*25.4;
 
     weston_output_refresh_metadata(&output->base);
     weston_output_init(&output->base, b->compositor, x, y, mmWidth, mmHeight, transform, scale);
