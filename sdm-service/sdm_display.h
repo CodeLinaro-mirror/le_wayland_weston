@@ -45,6 +45,7 @@
 #include "sdm_display_buffer_allocator.h"
 #include "sdm_display_buffer_sync_handler.h"
 #include "sdm_display_socket_handler.h"
+#include "sdm_display_tonemapper.h"
 #include "compositor-sdm-output.h"
 #include "drm_master.h"
 
@@ -107,7 +108,8 @@ class SdmNullDisplay : public SdmDisplayInterface {
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
 
  public:
-    SdmDisplay(DisplayType type, CoreInterface *core_intf);
+    SdmDisplay(DisplayType type, CoreInterface *core_intf,
+                                 SdmDisplayBufferAllocator *buffer_allocator);
     ~SdmDisplay();
 
     SdmDisplayIntfType GetDisplayIntfType() {
@@ -185,7 +187,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
                          pixman_region32_t *aboved_opaque, struct RectArray *visible);
     bool IsTransparentGbmFormat(uint32_t format);
     CoreInterface *core_intf_ = NULL;
-    SdmDisplayBufferAllocator buffer_allocator_;
+    SdmDisplayBufferAllocator *buffer_allocator_;
     SdmDisplayBufferSyncHandler buffer_sync_handler_;
     SdmDisplaySocketHandler socket_handler_;
     DisplayEventHandler *client_event_handler_ = NULL;
@@ -200,6 +202,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     float max_luminance_ = 0.0;
     float max_average_luminance_ = 0.0;
     float min_luminance_ = 0.0;
+    SdmDisplayToneMapper *tone_mapper_ = NULL;
     int disable_hdr_handling_ = 0;
     bool hdr_supported_ = false;
     uint32_t hdcp_version_ = 0;
@@ -207,7 +210,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
 
 class SdmDisplayProxy {
   public:
-    SdmDisplayProxy(DisplayType type, CoreInterface *core_intf);
+    SdmDisplayProxy(DisplayType type, CoreInterface *core_intf,
+                    SdmDisplayBufferAllocator *buffer_allocator);
     ~SdmDisplayProxy();
 
     DisplayError CreateDisplay() { return display_intf_->CreateDisplay(); }
@@ -256,6 +260,7 @@ class SdmDisplayProxy {
     DisplayType disp_type_;
     CoreInterface *core_intf_;
     SdmNullDisplay null_disp_;
+    SdmDisplayBufferAllocator *buffer_allocator_;
     SdmDisplay sdm_disp_;
     std::thread uevent_thread_;
     bool uevent_thread_exit_ = false;
