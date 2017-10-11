@@ -218,8 +218,7 @@ void SdmDisplayToneMapper::ToneMap(Layer* layer, ToneMapSession *session) {
 
   void *src_hnd = static_cast<void *>(&gbuf_info);
 
-  if (layer->userdata != NULL)
-    fence_fd = session->gpu_tone_mapper_->blit(dst_hnd, src_hnd, merged_fd, layer->userdata);
+  fence_fd = session->gpu_tone_mapper_->blit(dst_hnd, src_hnd, merged_fd, layer->userdata);
   DumpToneMapOutput(session, &fence_fd);
 
   session->UpdateBuffer(fence_fd, &layer->input_buffer);
