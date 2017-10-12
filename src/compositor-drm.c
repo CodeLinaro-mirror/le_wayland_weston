@@ -1146,6 +1146,7 @@ drm_fb_get_from_bo(struct gbm_bo *bo,
 		   struct drm_backend *backend, uint32_t format)
 {
 	struct drm_fb *fb = gbm_bo_get_user_data(bo);
+	struct gbm_device *gbm = gbm_bo_get_device(bo);
 	uint32_t width, height;
 	uint32_t handles[4], pitches[4], offsets[4];
 	int ret;
@@ -1181,6 +1182,9 @@ drm_fb_get_from_bo(struct gbm_bo *bo,
 		/*todo: should call gbm_bo_get_offset(bo), but gbm don't support yet.*/
 		offsets[0] = 0;
 		/* Need to plug in with bufdef utility once it's ready */
+
+		handles[3] = gbm_device_get_fd(gbm);
+
 		switch (format) {
 		case GBM_FORMAT_NV12:
 			handles[1] = fb->handle;
