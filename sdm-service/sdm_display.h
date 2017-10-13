@@ -195,6 +195,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayInterface *display_intf_ = NULL;
     DisplayOrder display_order_ = kOrderMax;
     DisplayType display_type_ = kDisplayMax;
+    DisplaySyncEventType sync_event_type_ = kVBlankEvent;
     DisplayConfigVariableInfo variable_info_;
     HWDisplayInterfaceInfo hw_disp_info_;
     bool shutdown_pending_ = false;

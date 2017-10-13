@@ -121,7 +121,7 @@ DisplayError SdmDisplay::CreateDisplay() {
     DisplayError error = kErrorNone;
     struct DisplayHdrInfo display_hdr_info;
 
-    error = core_intf_->CreateDisplay(display_order_, display_type_, this, &display_intf_);
+    error = core_intf_->CreateDisplay(display_order_, display_type_, sync_event_type_, this, &display_intf_);
 
     if (error != kErrorNone) {
         DLOGE("Display creation failed. Error = %d", error);
