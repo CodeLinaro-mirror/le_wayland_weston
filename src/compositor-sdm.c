@@ -546,48 +546,47 @@ vblank_handler(unsigned int frame, unsigned int sec, unsigned int usec,
     output->last_vblank.sec = sec;
     output->last_vblank.usec = usec;
 
-    if (!output->frame_pending)
-        return;
-
     write(output->vblank_ev_fd, &v, sizeof v);
 }
 
 static int
 on_vblank(int fd, uint32_t mask, void *data)
 {
-   struct drm_output *output = (struct drm_output *) data;
-   struct timespec ts;
-   uint64_t v;
-   uint32_t flags = PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
-                    PRESENTATION_FEEDBACK_KIND_VSYNC |
-                    PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
-   struct sdm_layer *sdm_layer, *next_sdm_layer;
+    struct drm_output *output = (struct drm_output *) data;
+    struct timespec ts;
+    uint64_t v;
+    uint32_t flags = PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
+                     PRESENTATION_FEEDBACK_KIND_VSYNC |
+                     PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
+    struct sdm_layer *sdm_layer, *next_sdm_layer;
 
-   read(fd, &v, sizeof v);
+    read(fd, &v, sizeof v);
 
-   pthread_mutex_lock(&output->hpd_lock);
-   if (output->frame_pending) {
-       drm_output_update_msc(output, output->last_vblank.frame);
-       drm_output_release_fb(output, output->current);
-       output->current = output->next;
-       output->next = NULL;
-       output->frame_pending = 0;
-       pthread_cond_signal(&output->hpd_cond);
+    pthread_mutex_lock(&output->hpd_lock);
 
-       wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->commited_layer_list, link) {
-           destroy_sdm_layer(sdm_layer);
-       }
+    if (output->frame_pending) {
+        drm_output_update_msc(output, output->last_vblank.frame);
+        drm_output_release_fb(output, output->current);
+        output->current = output->next;
+        output->next = NULL;
+        output->frame_pending = 0;
+        pthread_cond_signal(&output->hpd_cond);
 
-       assert(wl_list_empty(&output->commited_layer_list));
-       wl_list_insert_list(&output->commited_layer_list, &output->sdm_layer_list);
-       wl_list_init(&output->sdm_layer_list);
-       ts.tv_sec = output->last_vblank.sec;
-       ts.tv_nsec = output->last_vblank.usec * 1000;
-       weston_output_finish_frame(&output->base, &ts, flags);
-   }
-   pthread_mutex_unlock(&output->hpd_lock);
+        wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->commited_layer_list, link) {
+            destroy_sdm_layer(sdm_layer);
+        }
 
-   return 1;
+        assert(wl_list_empty(&output->commited_layer_list));
+        wl_list_insert_list(&output->commited_layer_list, &output->sdm_layer_list);
+        wl_list_init(&output->sdm_layer_list);
+    }
+    ts.tv_sec = output->last_vblank.sec;
+    ts.tv_nsec = output->last_vblank.usec * 1000;
+    weston_output_finish_frame(&output->base, &ts, flags);
+
+    pthread_mutex_unlock(&output->hpd_lock);
+
+    return 1;
 }
 
 
