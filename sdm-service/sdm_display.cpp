@@ -79,8 +79,9 @@ extern "C" {
 
 struct drm_output *drm_output_;
 vblank_cb_t vblank_cb_;
-bool tone_mapper_enable = false; /* TODO (user): enable this flag once  */
-                                 /* inverse tone mapping is functional. */
+int tone_mapper_disable = 0; /* (user): enable this flag once  */
+                             /* To disable tone mapping functionality. */
+
 namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
@@ -126,16 +127,19 @@ DisplayError SdmDisplay::CreateDisplay() {
         return error;
     }
 
-    SdmDisplayDebugger::Get()->GetProperty("sys.sdm_display_disable_hdr", &disable_hdr_handling_);
+    SdmDisplayDebugger::Get()->GetProperty("sys.weston_disable_hdr", &disable_hdr_handling_);
     if (disable_hdr_handling_) {
         DLOGI("HDR Handling disabled");
     }
 
-    if (tone_mapper_enable)
+    SdmDisplayDebugger::Get()->GetProperty("sys.weston_disable_hdr_tm", &tone_mapper_disable);
+    if (!tone_mapper_disable && !disable_hdr_handling_) {
+        DLOGI("Tone Mapper Enabled");
         tone_mapper_ = new SdmDisplayToneMapper(buffer_allocator_);
 
-    if (!tone_mapper_)
-        DLOGI("Failed to create tone_mapper instance");
+        if (!tone_mapper_)
+            DLOGI("Failed to create tone_mapper instance");
+    }
 
     GetHdrInfo(&display_hdr_info);
 
@@ -638,7 +642,8 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                              layer->color_metadata.transfer == Transfer_HLG);
 
             // Set to true if incoming layer has HDR support and Display supports HDR functionality
-            layer->flags.hdr_present = hdr_layer && hdr_supported_;
+            if (!disable_hdr_handling_)
+                layer->flags.hdr_present = hdr_layer;
         }
     }
 
