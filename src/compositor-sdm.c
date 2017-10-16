@@ -1775,7 +1775,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.compositor = b->compositor;
     output->base.subpixel = WL_OUTPUT_SUBPIXEL_NONE;
     /* TODO (user): To get name, make, model, serial no. from SDM interface */
-    output->base.name = "HDMI-A";
+    output->base.name = strdup("HDMI-A");
     output->base.make = "unknown";
     output->base.model = "unknown";
     output->base.serial_number = "unknown";
@@ -1821,7 +1821,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     setup_output_seat_constraint(b, &output->base, s);
     free(s);
 
-    output->dpms_prop = WESTON_DPMS_OFF;
+    output->dpms_prop = zalloc(sizeof *output->dpms_prop);
+    output->dpms = WESTON_DPMS_OFF;
     if (config == OUTPUT_CONFIG_OFF) {
         weston_log("Disabling output %s\n", output->base.name);
         drmModeSetCrtc(b->drm.fd, output->crtc_id,
