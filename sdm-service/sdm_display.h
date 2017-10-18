@@ -73,7 +73,7 @@ class SdmDisplayInterface {
     virtual DisplayError SetDisplayState(DisplayState state) = 0;
     virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
     virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
-    virtual DisplayError RegisterCb(int display_id, vblank_cb_t vbcb) = 0;
+    virtual DisplayError RegisterCb(int display_id, pageflip_cb_t pflipcb) = 0;
     virtual DisplayError EnablePllUpdate(int32_t enable) = 0;
     virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
     virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
@@ -98,7 +98,7 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
-    DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
+    DisplayError RegisterCb(int display_id, pageflip_cb_t pflipcb);
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
@@ -123,7 +123,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
-    DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
+    DisplayError RegisterCb(int display_id, pageflip_cb_t pflipcb);
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
 
@@ -193,6 +193,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayEventHandler *client_event_handler_ = NULL;
     DisplayInterface *display_intf_ = NULL;
     DisplayType display_type_ = kDisplayMax;
+    DisplaySyncEventType sync_event_type_ = kPageFlipEvent;
     DisplayConfigVariableInfo variable_info_;
     HWDisplayInterfaceInfo hw_disp_info_;
     bool shutdown_pending_ = false;
@@ -206,6 +207,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     int disable_hdr_handling_ = 0;
     bool hdr_supported_ = false;
     uint32_t hdcp_version_ = 0;
+    pageflip_cb_t pageflip_cb_ = NULL;
 };
 
 class SdmDisplayProxy {
@@ -237,9 +239,8 @@ class SdmDisplayProxy {
       return display_intf_->GetDisplayConfiguration(display_config);
     }
     DisplayError RegisterCbs(int display_id, sdm_cbs_t *cbs) {
-      // TODO: move vblank_cb up?
       hotplug_cb_ = cbs->hotplug_cb;
-      return display_intf_->RegisterCb(display_id, cbs->vblank_cb);
+      return display_intf_->RegisterCb(display_id, cbs->pageflip_cb);
     }
     DisplayError EnablePllUpdate(int32_t enable) {
       return display_intf_->EnablePllUpdate(enable);
