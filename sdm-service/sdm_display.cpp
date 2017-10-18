@@ -101,7 +101,7 @@ SdmDisplay::SdmDisplay(DisplayOrder order, DisplayType type, CoreInterface *core
     display_type_ = type;
     core_intf_    = core_intf;
     drm_output_   = NULL;
-    vblank_cb_    = NULL;
+    pageflip_cb_    = NULL;
 }
 
 SdmDisplay::~SdmDisplay() {
@@ -163,16 +163,14 @@ DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
 
 DisplayError SdmDisplay::VSync(int fd, unsigned int sequence, unsigned int tv_sec,
                                unsigned int tv_usec, void *data) {
-
-    vblank_cb_(sequence, tv_sec, tv_usec, drm_output_);
+    DLOGW("Not implemented");
 
     return kErrorNone;
 }
 
 DisplayError SdmDisplay::PFlip(int fd, unsigned int sequence, unsigned int tv_sec,
                                unsigned int tv_usec, void *data) {
-
-    DLOGW("Not implemented");
+    pageflip_cb_(sequence, tv_sec, tv_usec, drm_output_);
     return kErrorNone;
 }
 
@@ -253,10 +251,10 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
     return kErrorNone;
 }
 
-DisplayError SdmDisplay::RegisterCb(int display_id,       vblank_cb_t vbcb) {
+DisplayError SdmDisplay::RegisterCb(int display_id, pageflip_cb_t pflipcb) {
     DisplayError error = kErrorNone;
 
-    vblank_cb_   = vbcb;
+    pageflip_cb_   = pflipcb;
     display_id_  = display_id;
 
     return error;
@@ -1410,7 +1408,7 @@ DisplayError SdmNullDisplay::SetVSyncState(bool enable, struct drm_output *outpu
 DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
   return kErrorNone;
 }
-DisplayError SdmNullDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
+DisplayError SdmNullDisplay::RegisterCb(int display_id, pageflip_cb_t pflipcb) {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::EnablePllUpdate(int32_t enable) {
