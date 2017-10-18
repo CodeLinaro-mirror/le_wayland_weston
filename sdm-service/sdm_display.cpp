@@ -79,6 +79,8 @@ extern "C" {
 
 struct drm_output *drm_output_;
 vblank_cb_t vblank_cb_;
+int tone_mapper_disable = 0; /* (user): enable this flag once  */
+                             /* To disable tone mapping functionality. */
 
 namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
@@ -89,18 +91,11 @@ namespace sdm {
 #define SDM_DISPLAY_DEBUG 0
 #define SDM_DISPLAY_DUMP_LAYER_STACK 0
 
-int SdmDisplayInterface::GetDrmMasterFd() {
-  DRMMaster *master = nullptr;
-  int ret = DRMMaster::GetInstance(&master);
-  int fd;
-
-  master->GetHandle(&fd);
-  return fd;
-}
-
-SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf) {
+SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf,
+                                         SdmDisplayBufferAllocator *buffer_allocator) {
     display_type_ = type;
     core_intf_    = core_intf;
+    buffer_allocator_ = buffer_allocator;
     drm_output_   = NULL;
     vblank_cb_    = NULL;
 }
@@ -132,9 +127,18 @@ DisplayError SdmDisplay::CreateDisplay() {
         return error;
     }
 
-    SdmDisplayDebugger::Get()->GetProperty("sys.sdm_display_disable_hdr", &disable_hdr_handling_);
+    SdmDisplayDebugger::Get()->GetProperty("sys.weston_disable_hdr", &disable_hdr_handling_);
     if (disable_hdr_handling_) {
         DLOGI("HDR Handling disabled");
+    }
+
+    SdmDisplayDebugger::Get()->GetProperty("sys.weston_disable_hdr_tm", &tone_mapper_disable);
+    if (!tone_mapper_disable && !disable_hdr_handling_) {
+        DLOGI("Tone Mapper Enabled");
+        tone_mapper_ = new SdmDisplayToneMapper(buffer_allocator_);
+
+        if (!tone_mapper_)
+            DLOGI("Failed to create tone_mapper instance");
     }
 
     GetHdrInfo(&display_hdr_info);
@@ -161,6 +165,9 @@ DisplayError SdmDisplay::DestroyDisplay() {
 
     error = core_intf_->DestroyDisplay(display_intf_);
     display_intf_ = NULL;
+
+    delete tone_mapper_;
+    tone_mapper_ = nullptr;
 
     return error;
 }
@@ -519,9 +526,22 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
 
     fb_layer->flags.skip = 0;
     fb_layer->flags.is_cursor = 0;
-    fb_layer->flags.has_ubwc_buf = 0;
+    fb_layer->flags.has_ubwc_buf = output->framebuffer_ubwc;
 
     return 0;
+}
+
+int SdmDisplayInterface::GetDrmMasterFd() {
+    DRMMaster *master = nullptr;
+    int ret = DRMMaster::GetInstance(&master);
+    int fd;
+
+    if (ret < 0) {
+        DLOGE("Failed to acquire DRMMaster instance");
+        return kErrorNotSupported;
+        }
+    master->GetHandle(&fd);
+    return fd;
 }
 
 int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
@@ -622,7 +642,8 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                              layer->color_metadata.transfer == Transfer_HLG);
 
             // Set to true if incoming layer has HDR support and Display supports HDR functionality
-            layer->flags.hdr_present = hdr_layer && hdr_supported_;
+            if (!disable_hdr_handling_)
+                layer->flags.hdr_present = hdr_layer;
         }
     }
 
@@ -693,6 +714,9 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
                 return kErrorUndefined;
             }
 
+            // Pass the wl_resource handle from sdm layer to layer stack
+            // to use it for egl image creation in tone mapping
+            layer_stack_.layers.at(index)->userdata = sdm_layer->view->surface->resource;
             error = AddGeometryLayerToLayerStack(output, index++, glayer, sdm_layer->is_skip);
             if (error) {
                 DLOGE("failed add Geometry Layer to LayerStack.");
@@ -828,12 +852,33 @@ DisplayError SdmDisplay::PreCommit()
 {
     DisplayError error = kErrorNone;
 
+    if (layer_stack_.flags.hdr_present) {
+        int status = -1;
+        if (tone_mapper_) {
+            status = tone_mapper_->HandleToneMap(&layer_stack_);
+            if (status != 0) {
+                DLOGE("Error handling HDR in ToneMapper, status code = %d", status);
+            }
+        } else {
+            DLOGD("HandleToneMap failed due to invalid tone_mapper_ instance");
+        }
+    } else {
+        if (tone_mapper_)
+            tone_mapper_->Terminate();
+        else
+            DLOGD("ToneMap Terminate failed due to invalid tone_mapper_ instance");
+    }
+
     return error;
 }
 
 DisplayError SdmDisplay::PostCommit()
 {
     DisplayError error = kErrorNone;
+
+    if (tone_mapper_ && tone_mapper_->IsActive()) {
+        tone_mapper_->PostCommit(&layer_stack_);
+     }
 
     //Iterate through the layer buffer and close release fences
     for (uint32_t i = 0; i < layer_stack_.layers.size(); i++) {
@@ -973,6 +1018,9 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
         case SDM_BUFFER_FORMAT_YCbCr_422_I:
             format = sdm::kFormatYCbCr422H2V1Packed;
             break;
+        case SDM_BUFFER_FORMAT_P010:
+            format = sdm::kFormatYCbCr420P010;
+            break;
         default:
             DLOGE("Unsupported format %d\n", src_fmt);
             return sdm::kFormatInvalid;
@@ -1006,6 +1054,7 @@ bool SdmDisplay::GetVideoPresenceByFormatFromGbm(uint32_t fmt)
        case GBM_FORMAT_NV12:
        case GBM_FORMAT_YCbCr_420_TP10_UBWC:
        case GBM_FORMAT_YCbCr_420_P010_UBWC:
+       case GBM_FORMAT_P010:
             is_video_present = true;
             break;
        default:
@@ -1068,6 +1117,9 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
          break;
     case GBM_FORMAT_YCbCr_420_P010_UBWC:
         ret = SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC;
+        break;
+    case GBM_FORMAT_P010:
+        ret = SDM_BUFFER_FORMAT_P010;
         break;
     default:
          DLOGE("Unsupported GBM format %s\n", FourccToString(fmt));
@@ -1450,11 +1502,13 @@ DisplayError SdmNullDisplay::GetHdcpProtocol(struct DisplayHdcpProtocol *display
 }
 
 
-SdmDisplayProxy::SdmDisplayProxy(DisplayType type, CoreInterface *core_intf)
+SdmDisplayProxy::SdmDisplayProxy(DisplayType type, CoreInterface *core_intf,
+                                 SdmDisplayBufferAllocator *buffer_allocator)
   : disp_type_(type), core_intf_(core_intf),
-    sdm_disp_(type, core_intf), null_disp_(type, core_intf) {
-    display_intf_ = &sdm_disp_;
+    sdm_disp_(type, core_intf, buffer_allocator), null_disp_(type, core_intf) {
 
+    display_intf_ = &sdm_disp_;
+    buffer_allocator_ = buffer_allocator;
     std::thread uevent_thread(UeventThread, this);
     uevent_thread_.swap(uevent_thread);
 }
