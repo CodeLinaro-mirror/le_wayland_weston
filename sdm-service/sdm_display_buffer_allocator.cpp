@@ -42,16 +42,42 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format) {
    LayerBufferFormat layer_buffer_format = kFormatInvalid;
 
    switch (format) {
-       case GBM_FORMAT_ABGR8888: layer_buffer_format = kFormatRGBA8888; break;
-       case GBM_FORMAT_XBGR8888: layer_buffer_format = kFormatRGBX8888; break;
-       case GBM_FORMAT_BGR888: layer_buffer_format = kFormatRGB888; break;
-       case GBM_FORMAT_BGR565: layer_buffer_format = kFormatRGB565; break;
-       case GBM_FORMAT_RGB565: layer_buffer_format = kFormatBGR565; break;
-       case GBM_FORMAT_ARGB8888: layer_buffer_format = kFormatBGRA8888; break;
-       case GBM_FORMAT_XRGB8888: layer_buffer_format = kFormatBGRX8888; break;
-       case GBM_FORMAT_NV12: layer_buffer_format = kFormatYCbCr420SemiPlanarVenus; break;
-       case GBM_FORMAT_YCbCr_420_TP10_UBWC: layer_buffer_format = kFormatYCbCr420TP10Ubwc; break;
-       case GBM_FORMAT_YCbCr_420_P010_UBWC: layer_buffer_format = kFormatYCbCr420P010Ubwc; break;
+       case GBM_FORMAT_ABGR8888:
+          layer_buffer_format = ubwc_status ? kFormatRGBA8888Ubwc: kFormatRGBA8888;
+          break;
+       case GBM_FORMAT_XBGR8888:
+          layer_buffer_format = ubwc_status ? kFormatRGBX8888Ubwc: kFormatRGBX8888;
+          break;
+       case GBM_FORMAT_BGR888:
+          layer_buffer_format = kFormatRGB888;
+          break;
+       case GBM_FORMAT_BGR565:
+          layer_buffer_format = kFormatRGB565;
+          break;
+       case GBM_FORMAT_RGB565:
+          layer_buffer_format = ubwc_status ? kFormatBGR565Ubwc: kFormatBGR565;
+          break;
+       case GBM_FORMAT_ARGB8888:
+          layer_buffer_format = kFormatBGRA8888;
+          break;
+       case GBM_FORMAT_XRGB8888:
+          layer_buffer_format = kFormatBGRX8888;
+          break;
+       case GBM_FORMAT_NV12:
+          layer_buffer_format = kFormatYCbCr420SemiPlanarVenus;
+          break;
+       case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+          layer_buffer_format = kFormatYCbCr420TP10Ubwc;
+          break;
+       case GBM_FORMAT_P010:
+          layer_buffer_format = kFormatYCbCr420P010;
+          break;
+       case GBM_FORMAT_YCbCr_420_P010_UBWC:
+          layer_buffer_format = kFormatYCbCr420P010Ubwc;
+          break;
+       case GBM_FORMAT_ABGR2101010:
+         layer_buffer_format = ubwc_status ? kFormatRGBA1010102Ubwc: kFormatRGBA1010102;
+         break;
        default:
             layer_buffer_format = kFormatInvalid; break;
    }
@@ -186,6 +212,7 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
                                         break;
   case kFormatYCbCr420TP10Ubwc:         *target = GBM_FORMAT_YCbCr_420_TP10_UBWC;  break;
   case kFormatYCbCr420P010Ubwc:         *target = GBM_FORMAT_YCbCr_420_P010_UBWC;  break;
+  case kFormatYCbCr420P010:             *target = GBM_FORMAT_P010;  break;
   default:
     DLOGE("Unsupported format = 0x%x", format);
     return -1;
@@ -234,6 +261,7 @@ bool SdmDisplayBufferAllocator::IsFormatVideo(uint32_t fmt)
    switch (fmt) {
       case GBM_FORMAT_NV12:
       case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+      case GBM_FORMAT_P010:
            is_video_present = true;
            break;
       default:
@@ -289,7 +317,7 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     *num_planes = 2;
     gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
 
-    if (format == GBM_FORMAT_NV12) {
+    if (format == GBM_FORMAT_NV12 || format == GBM_FORMAT_P010) {
       stride[0] = buf_layout.planes[0].v_increment;
       offset[0] = 0;
 

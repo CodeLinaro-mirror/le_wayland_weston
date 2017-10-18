@@ -79,8 +79,9 @@ extern "C" {
 
 struct drm_output *drm_output_;
 vblank_cb_t vblank_cb_;
-bool tone_mapper_enable = false; /* TODO (user): enable this flag once  */
-                                 /* inverse tone mapping is functional. */
+int tone_mapper_disable = 0; /* (user): enable this flag once  */
+                             /* To disable tone mapping functionality. */
+
 namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
@@ -126,16 +127,19 @@ DisplayError SdmDisplay::CreateDisplay() {
         return error;
     }
 
-    SdmDisplayDebugger::Get()->GetProperty("sys.sdm_display_disable_hdr", &disable_hdr_handling_);
+    SdmDisplayDebugger::Get()->GetProperty("sys.weston_disable_hdr", &disable_hdr_handling_);
     if (disable_hdr_handling_) {
         DLOGI("HDR Handling disabled");
     }
 
-    if (tone_mapper_enable)
+    SdmDisplayDebugger::Get()->GetProperty("sys.weston_disable_hdr_tm", &tone_mapper_disable);
+    if (!tone_mapper_disable && !disable_hdr_handling_) {
+        DLOGI("Tone Mapper Enabled");
         tone_mapper_ = new SdmDisplayToneMapper(buffer_allocator_);
 
-    if (!tone_mapper_)
-        DLOGI("Failed to create tone_mapper instance");
+        if (!tone_mapper_)
+            DLOGI("Failed to create tone_mapper instance");
+    }
 
     GetHdrInfo(&display_hdr_info);
 
@@ -638,7 +642,8 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                              layer->color_metadata.transfer == Transfer_HLG);
 
             // Set to true if incoming layer has HDR support and Display supports HDR functionality
-            layer->flags.hdr_present = hdr_layer && hdr_supported_;
+            if (!disable_hdr_handling_)
+                layer->flags.hdr_present = hdr_layer;
         }
     }
 
@@ -1013,6 +1018,9 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
         case SDM_BUFFER_FORMAT_YCbCr_422_I:
             format = sdm::kFormatYCbCr422H2V1Packed;
             break;
+        case SDM_BUFFER_FORMAT_P010:
+            format = sdm::kFormatYCbCr420P010;
+            break;
         default:
             DLOGE("Unsupported format %d\n", src_fmt);
             return sdm::kFormatInvalid;
@@ -1046,6 +1054,7 @@ bool SdmDisplay::GetVideoPresenceByFormatFromGbm(uint32_t fmt)
        case GBM_FORMAT_NV12:
        case GBM_FORMAT_YCbCr_420_TP10_UBWC:
        case GBM_FORMAT_YCbCr_420_P010_UBWC:
+       case GBM_FORMAT_P010:
             is_video_present = true;
             break;
        default:
@@ -1108,6 +1117,9 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
          break;
     case GBM_FORMAT_YCbCr_420_P010_UBWC:
         ret = SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC;
+        break;
+    case GBM_FORMAT_P010:
+        ret = SDM_BUFFER_FORMAT_P010;
         break;
     default:
          DLOGE("Unsupported GBM format %s\n", FourccToString(fmt));
