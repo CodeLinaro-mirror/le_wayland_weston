@@ -1087,7 +1087,7 @@ drm_output_add_mode(struct drm_output *output, const drmModeModeInfo *info)
     if (mode == NULL)
         return NULL;
 
-    mode->base.flags = 0;
+    mode->base.flags = WL_OUTPUT_MODE_CURRENT;
     mode->base.width = info->hdisplay;
     mode->base.height = info->vdisplay;
 
@@ -1799,6 +1799,9 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
 
     uint32_t mmWidth  = (display_config->x_pixels/display_config->x_dpi)*25.4;
     uint32_t mmHeight = (display_config->y_pixels/display_config->y_dpi)*25.4;
+    crtc_mode.hdisplay = display_config->x_pixels;
+    crtc_mode.vdisplay = display_config->y_pixels;
+    drm_output_add_mode(output, &crtc_mode);
     weston_output_init(&output->base, b->compositor, x, y, mmWidth, mmHeight, transform, scale);
 
     if (b->use_pixman) {
