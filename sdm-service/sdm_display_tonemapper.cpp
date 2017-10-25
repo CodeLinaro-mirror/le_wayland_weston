@@ -120,8 +120,8 @@ bool ToneMapSession::IsSameToneMapConfig(Layer *layer) {
           (buffer.color_metadata.transfer == tone_map_config_.transfer) &&
           (layer->request.flags.secure == tone_map_config_.secure) &&
           (layer->request.format == tone_map_config_.format) &&
-          (layer->request.width == UINT32(buffer.width)) &&
-          (layer->request.height == UINT32(buffer.height)));
+          (layer->request.width == UINT32(buffer.unaligned_width)) &&
+          (layer->request.height == UINT32(buffer.unaligned_height)));
 }
 
 int SdmDisplayToneMapper::HandleToneMap(LayerStack *layer_stack) {
@@ -262,7 +262,7 @@ void SdmDisplayToneMapper::SetFrameDumpConfig(uint32_t count) {
 
 void SdmDisplayToneMapper::DumpToneMapOutput(ToneMapSession *session, int *acquire_fd) {
 
-  DLOGI("Not supported");
+  DLOGD("Not supported");
 }
 
 DisplayError SdmDisplayToneMapper::AcquireToneMapSession(Layer *layer, uint32_t *session_index) {
