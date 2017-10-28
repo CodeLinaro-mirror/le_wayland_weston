@@ -224,6 +224,10 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
   return 0;
 }
 
+void SdmDisplayBufferAllocator::GetGbmDeviceHandle(void **userdata) {
+  *userdata = (void *) gbm_;
+}
+
 DisplayError SdmDisplayBufferAllocator::GetAllocatedBufferInfo(const BufferConfig \
                                                                &buffer_config,
                                                                AllocatedBufferInfo \
