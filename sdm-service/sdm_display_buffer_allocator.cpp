@@ -69,6 +69,9 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format, uint32_t ubwc_status) {
        case GBM_FORMAT_YCbCr_420_TP10_UBWC:
           layer_buffer_format = kFormatYCbCr420TP10Ubwc;
           break;
+       case GBM_FORMAT_P010:
+          layer_buffer_format = kFormatYCbCr420P010;
+          break;
        case GBM_FORMAT_YCbCr_420_P010_UBWC:
           layer_buffer_format = kFormatYCbCr420P010Ubwc;
           break;
@@ -212,12 +215,17 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
                                         break;
   case kFormatYCbCr420TP10Ubwc:         *target = GBM_FORMAT_YCbCr_420_TP10_UBWC;  break;
   case kFormatYCbCr420P010Ubwc:         *target = GBM_FORMAT_YCbCr_420_P010_UBWC;  break;
+  case kFormatYCbCr420P010:             *target = GBM_FORMAT_P010;  break;
   default:
     DLOGE("Unsupported format = 0x%x", format);
     return -1;
   }
 
   return 0;
+}
+
+void SdmDisplayBufferAllocator::GetGbmDeviceHandle(void **userdata) {
+  *userdata = (void *) gbm_;
 }
 
 DisplayError SdmDisplayBufferAllocator::GetAllocatedBufferInfo(const BufferConfig \
@@ -260,6 +268,7 @@ bool SdmDisplayBufferAllocator::IsFormatVideo(uint32_t fmt)
    switch (fmt) {
       case GBM_FORMAT_NV12:
       case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+      case GBM_FORMAT_P010:
            is_video_present = true;
            break;
       default:
@@ -315,7 +324,7 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     *num_planes = 2;
     gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
 
-    if (format == GBM_FORMAT_NV12) {
+    if (format == GBM_FORMAT_NV12 || format == GBM_FORMAT_P010) {
       stride[0] = buf_layout.planes[0].v_increment;
       offset[0] = 0;
 
