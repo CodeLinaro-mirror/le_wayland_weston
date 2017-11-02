@@ -1169,9 +1169,6 @@ want_panel(struct desktop *desktop)
 	char *location = NULL;
 	int ret = 1;
 
-	fprintf(stderr, "Disable tool bar\n");
-	return 0;
-
 	s = weston_config_get_section(desktop->config, "shell", NULL, NULL);
 	weston_config_section_get_string(s, "panel-location",
 					 &location, "top");
