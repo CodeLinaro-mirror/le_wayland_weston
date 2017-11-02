@@ -190,6 +190,12 @@ weston_launcher_open(struct weston_launcher *launcher,
 		return -1;
 	}
 
+	/* Don't use the fd opened by weston-launch since SDM has already opened it
+	 * and get master permission. Or else, drm authentication will fail
+	 */
+	if(!strcmp(path, "/dev/dri/card0"))
+		return get_drm_master_fd();
+
 	return data->fd;
 }
 
