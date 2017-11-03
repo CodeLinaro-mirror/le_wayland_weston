@@ -530,6 +530,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     uint32_t format = GBM_FORMAT_XBGR8888;
     struct linux_dmabuf_buffer *dmabuf;
     struct gbm_buffer *gbm_buf;
+    pixman_region32_t r;
 
     *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
                            (zalloc(sizeof *layer));
@@ -646,9 +647,15 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->flags.is_cursor = is_cursor;
     layer->flags.video_present = GetVideoPresenceByFormatFromGbm(format);
 
-    /* Get blending. Now Weston only support premultipled alpha */
-    /* TODO (user): update property alpha, blend_op */
-    layer->blending = SDM_BLENDING_PREMULTIPLIED;
+    /* compute whether this view has no blending */
+    pixman_region32_init_rect(&r, 0, 0, ev->surface->width, ev->surface->height);
+    pixman_region32_subtract(&r, &r, &ev->surface->opaque);
+
+    if (!pixman_region32_not_empty(&r) && (layer->plane_alpha == 0xFF))
+        layer->blending = SDM_BLENDING_NONE;
+    else
+        layer->blending = SDM_BLENDING_PREMULTIPLIED;
+    pixman_region32_fini(&r);
 
     // Video layers are always opaque
     if (layer->flags.video_present) {
