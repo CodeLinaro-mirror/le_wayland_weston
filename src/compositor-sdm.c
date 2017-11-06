@@ -703,6 +703,15 @@ drm_assign_planes(struct weston_output *output_base)
         pixman_region32_intersect(&surface_overlap, &overlap,
                       &ev->transform.boundingbox);
 
+        /* Skip view that doesn't belong to the output, no need to increase overhead for SDM */
+        if (!(ev->output_mask & (1u << output->base.id))) {
+            weston_view_move_to_plane(ev, primary);
+            ev->psf_flags = 0;
+            pixman_region32_fini(&surface_overlap);
+            pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
+            continue;
+        }
+
         if (!es->buffer_ref.buffer) {
             is_skip = true;
         } else if (linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource)) {
@@ -715,6 +724,7 @@ drm_assign_planes(struct weston_output *output_base)
         wl_list_insert(output->sdm_layer_list.prev, &sdm_layer->link);
 
         output->view_count++;
+        pixman_region32_fini(&surface_overlap);
     }
     /*
      * SDM always need FB target layer, however, in Weston there is no explicit
@@ -723,14 +733,12 @@ drm_assign_planes(struct weston_output *output_base)
 
     output->view_count++;
     int error = Prepare(output->display_id, output);
-    pixman_region32_fini(&overlap);
     wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
         next_plane = primary;
         ev = sdm_layer->view;
         /* Move to primary plane if Strategy set it to GPU composition */
         if (sdm_layer->composition_type == SDM_COMPOSITION_GPU) {
             weston_view_move_to_plane(ev, next_plane);
-            pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
             ev->psf_flags = 0;
             destroy_sdm_layer(sdm_layer);
         } else {
@@ -741,6 +749,8 @@ drm_assign_planes(struct weston_output *output_base)
             sdm_layer->view = NULL;
         }
     }
+
+    pixman_region32_fini(&overlap);
 
     return;
 }
