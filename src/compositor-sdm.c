@@ -1701,8 +1701,8 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
 
     output->base.compositor = b->compositor;
     output->base.subpixel = WL_OUTPUT_SUBPIXEL_NONE;
-    /* TODO (user): To get name, make, model, serial no. from SDM interface */
-    output->base.name = "HDMI-A";
+    /* TODO (user): To get make, model, serial no. from SDM interface */
+    output->base.name = GetConnectorName(display_id);
     output->base.make = "unknown";
     output->base.model = "unknown";
     output->base.serial_number = "unknown";
@@ -1824,6 +1824,7 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
     }
 
     int count_modes = 1;
+    weston_log("Output name %s\n", output->base.name);
     wl_list_for_each(m, &output->base.mode_list, link)
         weston_log_continue(STAMP_SPACE "mode %dx%d@%.1f%s%s%s\n",
                     m->width, m->height, m->refresh / 1000.0,

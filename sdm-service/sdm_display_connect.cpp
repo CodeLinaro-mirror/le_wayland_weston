@@ -153,6 +153,11 @@ int GetDisplayInfos(void)
     }
 }
 
+char *GetConnectorName(uint32_t display_id)
+{
+    return strdup(hw_disp_info_[display_id].name);
+}
+
 static enum DisplayOrder GetDisplayOrder(int display_id)
 {
     return hw_disp_info_[display_id].order;
