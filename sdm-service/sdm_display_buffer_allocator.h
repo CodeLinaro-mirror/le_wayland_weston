@@ -58,6 +58,8 @@ class SdmDisplayBufferAllocator : public BufferAllocator {
   void GetGbmDeviceHandle(void **userdata);
  private:
   bool IsFormatVideo(uint32_t fmt);
+  bool IsVideoFormatLinear(uint32_t fmt, uint32_t ubwc_status);
+  bool IsVideoFormatUBWC(uint32_t fmt, uint32_t ubwc_status);
   struct gbm_device *gbm_ = NULL;
 };
 
