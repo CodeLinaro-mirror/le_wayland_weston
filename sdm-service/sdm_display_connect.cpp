@@ -167,7 +167,7 @@ int CreateDisplay(int display_id)
     display_[display_id] = sdm_display;
     error = display_[display_id]->CreateDisplay() ;
     if (error != kErrorNone) {
-        DLOGE("Failed to create display(%)", display_id);
+        DLOGE("Failed to create display(%d)", display_id);
         delete display_[display_id];
         display_[display_id] = NULL;
 
