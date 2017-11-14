@@ -100,6 +100,9 @@ DisplayError SdmDisplayBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) 
     return kErrorParameters;
   }
 
+  if (buffer_info->buffer_config.secure) {
+     alloc_flags |= GBM_BO_USAGE_PROTECTED_QTI;
+  }
   // CreateBuffer
   struct gbm_bo *bo = gbm_bo_create(gbm_, width, height, format, alloc_flags);
 
@@ -165,7 +168,9 @@ uint32_t SdmDisplayBufferAllocator::GetBufferSize(BufferInfo *buffer_info) {
   if (SetBufferInfo(bufferConfig.format, &gbmFormat, &usageFlags) < 0) {
      return 0;
   }
-
+  if (bufferConfig.secure) {
+     usageFlags |= GBM_BO_USAGE_PROTECTED_QTI;
+  }
   bufInfo.width = INT(bufferConfig.width);
   bufInfo.height = INT(bufferConfig.height);
   bufInfo.format = gbmFormat;
@@ -224,6 +229,10 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
   return 0;
 }
 
+void SdmDisplayBufferAllocator::GetGbmDeviceHandle(void **userdata) {
+  *userdata = (void *) gbm_;
+}
+
 DisplayError SdmDisplayBufferAllocator::GetAllocatedBufferInfo(const BufferConfig \
                                                                &buffer_config,
                                                                AllocatedBufferInfo \
@@ -239,7 +248,9 @@ DisplayError SdmDisplayBufferAllocator::GetAllocatedBufferInfo(const BufferConfi
   if (SetBufferInfo(buffer_config.format, &gbmFormat, &usageFlags) < 0) {
      return kErrorParameters;
   }
-
+  if (buffer_config.secure) {
+     usageFlags |= GBM_BO_USAGE_PROTECTED_QTI;
+  }
   bufInfo.width = INT(buffer_config.width);
   bufInfo.height = INT(buffer_config.height);
   bufInfo.format = gbmFormat;
