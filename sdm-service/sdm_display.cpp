@@ -469,22 +469,22 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
     *fb_glayer = fb_layer = reinterpret_cast<struct LayerGeometry *> \
                               (zalloc(sizeof *fb_layer));
 
-    fb_layer->width = output->base.width;
-    fb_layer->height = output->base.height;
-    fb_layer->unaligned_width = output->base.width;
-    fb_layer->unaligned_height = output->base.height;
+    fb_layer->width = output->base.current_mode->width;
+    fb_layer->height = output->base.current_mode->height;
+    fb_layer->unaligned_width = output->base.current_mode->width;
+    fb_layer->unaligned_height = output->base.current_mode->height;
 
     fb_layer->format = GetMappedFormatFromGbm(output->format);
     fb_layer->composition = SDM_COMPOSITION_FB_TARGET;
 
     fb_layer->src_rect.left = (float)0.0;
     fb_layer->src_rect.top = (float)0.0;
-    fb_layer->src_rect.right = (float)output->base.width;
-    fb_layer->src_rect.bottom = (float)output->base.height;
+    fb_layer->src_rect.right = (float)output->base.current_mode->width;
+    fb_layer->src_rect.bottom = (float)output->base.current_mode->height;
     fb_layer->dst_rect.left = (float)0.0;
     fb_layer->dst_rect.top = (float)0.0;
-    fb_layer->dst_rect.right = (float)output->base.width;
-    fb_layer->dst_rect.bottom = (float)output->base.height;
+    fb_layer->dst_rect.right = (float)output->base.current_mode->width;
+    fb_layer->dst_rect.bottom = (float)output->base.current_mode->height;
 
     fb_layer->visible_regions.rects = reinterpret_cast<struct Rect *> \
                               (zalloc(sizeof(struct Rect)));
