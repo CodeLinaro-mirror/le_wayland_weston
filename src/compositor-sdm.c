@@ -412,6 +412,8 @@ drm_waitvblank_pipe(struct drm_output *output)
         return 0;
 }
 
+static void destroy_sdm_layer(struct sdm_layer *layer);
+
 static int
 drm_output_repaint(struct weston_output *output_base,
            pixman_region32_t *damage)
@@ -420,7 +422,8 @@ drm_output_repaint(struct weston_output *output_base,
     struct drm_backend *backend =
         (struct drm_backend *)output->base.compositor->backend;
     struct drm_mode *mode;
-    int ret = 0;
+    int ret = -1;
+    struct sdm_layer *sdm_layer, *next_sdm_layer;
 
     if (output->destroy_pending)
         return -1;
@@ -434,12 +437,33 @@ drm_output_repaint(struct weston_output *output_base,
     output->dpms = WESTON_DPMS_ON;
 
     SetVSyncState(output->display_id, ENABLE, output);
-    ret = Commit(output->display_id, output);
+    if (output->skip_commit) {
+
+        output->skip_commit = false;
+    } else {
+        ret = Commit(output->display_id, output);
+    }
     if (ret) {
         weston_log("fail to commit to sdm display! err=%d\n", ret);
-    }
+        /* This is workaround for IVI shell. Since there is no surface created
+         * when the first commit happens, SDM Prepare will report non-app error
+         * then Commit will fail here.*/
+        drm_output_release_fb(output, output->current);
+        output->current = output->next;
+        output->next = NULL;
+        output->frame_pending = 0;
 
-    output->frame_pending = 1;
+        wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->commited_layer_list, link) {
+            destroy_sdm_layer(sdm_layer);
+        }
+
+        assert(wl_list_empty(&output->commited_layer_list));
+        wl_list_insert_list(&output->commited_layer_list, &output->sdm_layer_list);
+        wl_list_init(&output->sdm_layer_list);
+        wl_event_source_timer_update(output->finish_frame_timer, 16);
+    } else {
+        output->frame_pending = 1;
+    }
 
     return 0;
 }
@@ -529,7 +553,6 @@ drm_output_update_msc(struct drm_output *output, unsigned int seq)
     output->base.msc = (msc_hi << 32) + seq;
 }
 
-static void destroy_sdm_layer(struct sdm_layer *layer);
 
 static void
 drm_output_destroy(struct weston_output *output_base);

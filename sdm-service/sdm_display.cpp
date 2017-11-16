@@ -811,6 +811,8 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
 #endif
 
     error = display_intf_->Prepare(&layer_stack_);
+    if (error == kErrorNoAppLayers)
+        output->skip_commit = true;
     DumpInterface::GetDump(dump_buffer, sizeof(dump_buffer));
     error = PostPrepare(output);
     if (error != kErrorNone)

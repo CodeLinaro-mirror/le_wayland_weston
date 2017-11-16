@@ -200,4 +200,6 @@ struct drm_output {
        } last_vblank;
        // Indicate whether allocation of framebuffer is UBWC or not
        int framebuffer_ubwc;
+       // Indicate whether commit should be skipped or not.
+       bool skip_commit;
 };
