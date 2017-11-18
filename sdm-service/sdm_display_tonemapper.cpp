@@ -300,7 +300,8 @@ DisplayError SdmDisplayToneMapper::AcquireToneMapSession(Layer *layer, uint32_t 
   session->gpu_tone_mapper_ = TonemapperFactory_GetInstance(session->tone_map_config_.type,
                                                             layer->lut_3d.lutEntries,
                                                             layer->lut_3d.dim,
-                                                            grid_entries, grid_size);
+                                                            grid_entries, grid_size,
+                                                            layer->request.flags.secure);
   if (session->gpu_tone_mapper_ == NULL) {
     delete session;
     return kErrorNotSupported;

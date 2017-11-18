@@ -59,6 +59,9 @@ typedef EGLBoolean (EGLAPIENTRYP PFNEGLSWAPBUFFERSWITHDAMAGEEXTPROC)(EGLDisplay 
 #define EGL_BUFFER_AGE_EXT			0x313D
 #endif
 
+static uint8_t bg_red_=0, bg_green_=0, bg_blue_=0, bg_alpha_= 127;
+static int fg_red_=-1, fg_green_=-1, fg_blue_=-1;
+
 struct window;
 struct seat;
 
@@ -127,6 +130,18 @@ static const char *frag_shader_text =
 	"}\n";
 
 static int running = 1;
+
+static int32_t
+clamp(int32_t val, int32_t min, int32_t max)
+{
+	if (val < min)
+		return min;
+
+	if (max < val)
+		return max;
+
+	return val;
+}
 
 static void
 init_egl(struct display *display, struct window *window)
@@ -445,7 +460,7 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 		{  0.5, -0.5 },
 		{  0,    0.5 }
 	};
-	static const GLfloat colors[3][3] = {
+	static GLfloat colors[3][3] = {
 		{ 1, 0, 0 },
 		{ 0, 1, 0 },
 		{ 0, 0, 1 }
@@ -462,6 +477,30 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 	EGLint rect[4];
 	EGLint buffer_age = 0;
 	struct timeval tv;
+
+	if ((fg_red_ !=-1) || (fg_green_ !=-1) || (fg_blue_ !=-1 ))
+	{
+		memset(colors, 0, 9*sizeof(colors[0][0]));
+
+		if (fg_red_ !=-1 )
+		{
+			colors[0][0] = fg_red_/255.0;
+			colors[1][0] = colors[0][0];
+			colors[2][0] = colors[0][0];
+		}
+		if (fg_green_ !=-1 )
+		{
+			colors[0][1] = fg_green_/255.0;
+			colors[1][1] = colors[0][1];
+			colors[2][1] = colors[0][1];
+		}
+		if (fg_blue_ !=-1 )
+		{
+			colors[0][2] = fg_blue_/255.0;
+			colors[1][2] = colors[0][2];
+			colors[2][2] = colors[0][2];
+		}
+	}
 
 	assert(window->callback == callback);
 	window->callback = NULL;
@@ -497,7 +536,7 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 	glUniformMatrix4fv(window->gl.rotation_uniform, 1, GL_FALSE,
 			   (GLfloat *) rotation);
 
-	glClearColor(0.0, 0.0, 0.0, 0.5);
+	glClearColor(bg_red_/255.0, bg_green_/255.0, bg_blue_/255.0, bg_alpha_/255.0);
 	glClear(GL_COLOR_BUFFER_BIT);
 
 	glVertexAttribPointer(window->gl.pos, 2, GL_FLOAT, GL_FALSE, 0, verts);
@@ -814,6 +853,16 @@ static void
 usage(int error_code)
 {
 	fprintf(stderr, "Usage: simple-egl [OPTIONS]\n\n"
+		"  --width _num_ \tSets the width to integer _num_\n"
+		"  --height _num_ \tSets the height to integer _num_\n"
+		"  --bg-gray _num_ \tSets all background RGB channels to integer _num_\n"
+		"  --bg-red _num_ \tSets the background red channel to integer _num_\n"
+		"  --bg-green _num_ \tSets the background green channel to integer _num_\n"
+		"  --bg-blue _num_ \tSets the background blue channel to integer _num_\n"
+		"  --bg-alpha _num_ \tSets the background alpha channel to integer _num_\n"
+		"  --fg-red _num_ \tSets the solid foreground red component to integer _num_\n"
+		"  --fg-green _num_ \tSets the solid foreground green component to integer _num_\n"
+		"  --fg-blue _num_ \tSets the solid foreground blue component to integer _num_\n"
 		"  -f\tRun in fullscreen mode\n"
 		"  -o\tCreate an opaque surface\n"
 		"  -s\tUse a 16 bpp EGL config\n"
@@ -844,6 +893,30 @@ main(int argc, char **argv)
 			window.fullscreen = 1;
 		else if (strcmp("-o", argv[i]) == 0)
 			window.opaque = 1;
+		else if (strcmp("--width", argv[i]) == 0)
+			window.geometry.width = atoi(argv[++i]);
+		else if (strcmp("--height", argv[i]) == 0)
+			window.geometry.height = atoi(argv[++i]);
+		else if (strcmp("--bg-gray", argv[i]) == 0)
+		{
+			bg_red_= clamp(atoi(argv[++i]), 0, 255);
+			bg_green_= bg_red_;
+			bg_blue_= bg_red_;
+		}
+		else if (strcmp("--bg-red", argv[i]) == 0)
+			bg_red_= clamp(atoi(argv[++i]), 0, 255);
+		else if (strcmp("--bg-green", argv[i]) == 0)
+			bg_green_= clamp(atoi(argv[++i]), 0, 255);
+		else if (strcmp("--bg-blue", argv[i]) == 0)
+			bg_blue_= clamp(atoi(argv[++i]), 0, 255);
+		else if (strcmp("--bg-alpha", argv[i]) == 0)
+			bg_alpha_= clamp(atoi(argv[++i]), 0, 255);
+		else if (strcmp("--fg-red", argv[i]) == 0)
+			fg_red_= clamp(atoi(argv[++i]), 0, 255);
+		else if (strcmp("--fg-green", argv[i]) == 0)
+			fg_green_= clamp(atoi(argv[++i]), 0, 255);
+		else if (strcmp("--fg-blue", argv[i]) == 0)
+			fg_blue_= clamp(atoi(argv[++i]), 0, 255);
 		else if (strcmp("-s", argv[i]) == 0)
 			window.buffer_size = 16;
 		else if (strcmp("-b", argv[i]) == 0)
