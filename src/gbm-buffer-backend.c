@@ -83,8 +83,7 @@ static void
 gbm_buffer_backend_destroy(struct wl_client *client,
     struct wl_resource *resource);
 
-static const struct gbm_buffer_params_interface
-gbm_buffer_params_implementation = {
+static const struct gbm_buffer_params_interface gbm_buffer_params_implementation = {
     gbm_buffer_backend_destroy,
     gbm_buffer_backend_create_buffer
 };
@@ -92,10 +91,12 @@ gbm_buffer_params_implementation = {
 static void
 gbm_buffer_destroy(struct gbm_buffer *buffer)
 {
-  if (buffer->fd != -1)
-    close(buffer->fd);
-  if (buffer->metadata_fd != -1)
-    close(buffer->metadata_fd);
+  // Destroy gbm bo if it is still valid
+  if (buffer->bo) {
+    gbm_bo_destroy(buffer->bo);
+    buffer->bo = NULL;
+  }
+
   free(buffer);
 }
 
@@ -268,6 +269,7 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
 
     // Override return value if format is part of skip list.
     if ((format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
+        (format == GBM_FORMAT_P010) ||
         (format == GBM_FORMAT_NV12)) {
       ret = true;
     }
@@ -314,13 +316,13 @@ gbm_buffer_backend_destroy(struct wl_client *client,
 
     GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_destroy::Invoked\n");
 
+
     wl_resource_destroy(resource);
 
     GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_destroy::Invoked\n");
 }
 
-static const struct gbm_buffer_backend_interface
-        gbm_buffer_backend_implementation = {
+static const struct gbm_buffer_backend_interface gbm_buffer_backend_implementation = {
     gbm_buffer_backend_destroy,
     gbm_buffer_backend_create_params
 };
