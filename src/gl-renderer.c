@@ -793,7 +793,8 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 	if (!pixman_region32_not_empty(&repaint))
 		goto out;
 
-	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+	/* Use GL_ONE for PreMultiplied and GL_SRC_ALPHA for Coverage Blending */
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 	if (gr->fan_debug) {
 		use_shader(gr, &gr->solid_shader);
