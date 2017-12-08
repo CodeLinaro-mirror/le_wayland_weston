@@ -84,9 +84,9 @@ DisplayError SdmDisplayBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) 
       uint32_t alignedHeight = 0;
       gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_HEIGHT, bo, &alignedHeight);
       alloc_buffer_info->aligned_height = alignedHeight;
-      uint32_t bo_size = 0;
+      size_t bo_size = 0;
       gbm_perform(GBM_PERFORM_GET_BO_SIZE, bo, &bo_size);
-      alloc_buffer_info->size = bo_size;
+      alloc_buffer_info->size = (uint32_t)bo_size;
       alloc_buffer_info->format = GetLayerBufferFormat(gbm_bo_get_format(bo));
 
       gbm_perform(GBM_PERFORM_GET_METADATA_ION_FD, bo, &metadata_fd);
