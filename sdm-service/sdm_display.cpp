@@ -277,11 +277,11 @@ DisplayError SdmDisplay::FreeLayerStack() {
 
 DisplayError SdmDisplay::FreeLayerGeometry(struct LayerGeometry *glayer) {
     if (glayer->dirty_regions.count)
-        delete[] glayer->dirty_regions.rects;
+        free(glayer->dirty_regions.rects);
     if (glayer->visible_regions.count)
-        delete[] glayer->visible_regions.rects;
+        free(glayer->visible_regions.rects);
 
-    delete glayer;
+    free(glayer);
 
     return kErrorNone;
 }
