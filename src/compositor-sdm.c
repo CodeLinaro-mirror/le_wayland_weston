@@ -825,8 +825,6 @@ drm_output_destroy(struct weston_output *output_base)
     if (output->backlight)
         backlight_destroy(output->backlight);
 
-    drmModeFreeProperty(output->dpms_prop);
-
     if (b->use_pixman) {
         drm_output_fini_pixman(output);
     } else {
@@ -1785,7 +1783,6 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
     setup_output_seat_constraint(b, &output->base, s);
     free(s);
 
-    output->dpms_prop = WESTON_DPMS_OFF;
     if (config == OUTPUT_CONFIG_OFF) {
         weston_log("Disabling output %s\n", output->base.name);
         drmModeSetCrtc(b->drm.fd, output->crtc_id,
