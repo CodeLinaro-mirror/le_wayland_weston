@@ -64,7 +64,8 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format, uint32_t ubwc_status) {
           layer_buffer_format = kFormatBGRX8888;
           break;
        case GBM_FORMAT_NV12:
-          layer_buffer_format = kFormatYCbCr420SemiPlanarVenus;
+          layer_buffer_format =
+            ubwc_status ? kFormatYCbCr420SPVenusUbwc: kFormatYCbCr420SemiPlanarVenus;
           break;
        case GBM_FORMAT_YCbCr_420_TP10_UBWC:
           layer_buffer_format = kFormatYCbCr420TP10Ubwc;
@@ -115,11 +116,12 @@ DisplayError SdmDisplayBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) 
       uint32_t alignedHeight = 0;
       gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_HEIGHT, bo, &alignedHeight);
       alloc_buffer_info->aligned_height = alignedHeight;
-      uint32_t bo_size = 0;
+      size_t bo_size = 0;
       gbm_perform(GBM_PERFORM_GET_BO_SIZE, bo, &bo_size);
       gbm_perform(GBM_PERFORM_GET_UBWC_STATUS, bo, &ubwc_status);
-      alloc_buffer_info->size = bo_size;
+      alloc_buffer_info->size = (uint32_t)bo_size;
       alloc_buffer_info->format = GetLayerBufferFormat(gbm_bo_get_format(bo), ubwc_status);
+
       gbm_perform(GBM_PERFORM_GET_METADATA_ION_FD, bo, &metadata_fd);
 
   } else {
@@ -197,7 +199,9 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
   case kFormatBGRA8888:                 *target = GBM_FORMAT_ARGB8888;             break;
   case kFormatBGRX8888:                 *target = GBM_FORMAT_XRGB8888;             break;
   case kFormatYCbCr420SemiPlanarVenus:  *target = GBM_FORMAT_NV12;                 break;
-  case kFormatYCbCr420SPVenusUbwc:      *target = GBM_FORMAT_NV12;                 break;
+  case kFormatYCbCr420SPVenusUbwc:      *target = GBM_FORMAT_NV12;
+                                        *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+                                        break;
   case kFormatRGBA8888Ubwc:             *target = GBM_FORMAT_ABGR8888;
                                         *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
                                                  GBM_BO_USAGE_HW_RENDERING_QTI;
@@ -286,6 +290,46 @@ bool SdmDisplayBufferAllocator::IsFormatVideo(uint32_t fmt)
    return is_video_present;
 }
 
+bool SdmDisplayBufferAllocator::IsVideoFormatLinear(uint32_t fmt, uint32_t ubwc_status)
+{
+   bool is_videofmt_linear = false;
+
+   if (!ubwc_status) {
+     switch (fmt) {
+      case GBM_FORMAT_NV12:
+      case GBM_FORMAT_P010:
+        is_videofmt_linear = true;
+        break;
+      default:
+        DLOGW("Unsupported format 0x%x\n", fmt);
+        is_videofmt_linear = false;
+        break;
+     }
+   }
+
+  return is_videofmt_linear;
+}
+
+bool SdmDisplayBufferAllocator::IsVideoFormatUBWC(uint32_t fmt, uint32_t ubwc_status)
+{
+   bool is_videofmt_ubwc = false;
+
+   if (ubwc_status) {
+     switch (fmt) {
+      case GBM_FORMAT_NV12:
+      case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+        is_videofmt_ubwc = true;
+        break;
+      default:
+        DLOGW("Unsupported format 0x%x\n", fmt);
+        is_videofmt_ubwc = false;
+        break;
+     }
+   }
+
+  return is_videofmt_ubwc;
+}
+
 DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInfo &buf_info,
                                                  uint32_t stride[4], uint32_t offset[4],
                                                  uint32_t *num_planes) {
@@ -293,6 +337,7 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     struct gbm_import_fd_data import_fd_data;
     uint32_t format1 = GBM_FORMAT_ARGB8888;
     uint64_t flags = 0;
+    uint32_t ubwc_status = 0;
     generic_buf_layout_t buf_layout;
 
     SetBufferInfo(buf_info.format, &format1, &flags);
@@ -330,15 +375,16 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     // for NV12 format
     *num_planes = 2;
     gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
+    gbm_perform(GBM_PERFORM_GET_UBWC_STATUS, bo, &ubwc_status);
 
-    if (format == GBM_FORMAT_NV12 || format == GBM_FORMAT_P010) {
+    if (IsVideoFormatLinear(format, ubwc_status)) {
       stride[0] = buf_layout.planes[0].v_increment;
       offset[0] = 0;
 
-      stride[1] = stride[0];//buf_layout.planes[1].v_increment;
+      stride[1] = stride[0];
       offset[1] = stride[0]*height;
     }
-    if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+    if (IsVideoFormatUBWC(format, ubwc_status)) {
       stride[0] = buf_layout.planes[0].v_increment;
       stride[1] = buf_layout.planes[1].v_increment;
       offset[0] = 0;

@@ -91,6 +91,16 @@ namespace sdm {
 #define SDM_DISPLAY_DEBUG 0
 #define SDM_DISPLAY_DUMP_LAYER_STACK 0
 
+#define SDM_DEAFULT_NULL_DISPLAY_WIDTH 1920
+#define SDM_DEAFULT_NULL_DISPLAY_HEIGHT 1080
+#define SDM_DEAFULT_NULL_DISPLAY_FPS 60
+#define SDM_DEAFULT_NULL_DISPLAY_X_DPI 25.4
+#define SDM_DEAFULT_NULL_DISPLAY_Y_DPI 25.4
+#define SDM_DEAFULT_NULL_DISPLAY_IS_YUV false
+
+#define MAX_PROP_STR_SIZE 64
+#define SDM_NULL_DISPLAY_RESOLUTON_PROP_NAME "weston.sdm.default.resolution"
+
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf,
                                          SdmDisplayBufferAllocator *buffer_allocator) {
     display_type_ = type;
@@ -122,7 +132,6 @@ DisplayError SdmDisplay::CreateDisplay() {
 
     if (error != kErrorNone) {
         DLOGE("Display creation failed. Error = %d", error);
-        CoreInterface::DestroyCore();
 
         return error;
     }
@@ -555,6 +564,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     uint32_t format = GBM_FORMAT_XBGR8888;
     struct linux_dmabuf_buffer *dmabuf;
     struct gbm_buffer *gbm_buf;
+    pixman_region32_t r;
 
     *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
                            (zalloc(sizeof *layer));
@@ -674,9 +684,14 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->flags.is_cursor = is_cursor;
     layer->flags.video_present = GetVideoPresenceByFormatFromGbm(format);
 
-    /* Get blending. Now Weston only support premultipled alpha */
-    /* TODO (user): update property alpha, blend_op */
-    layer->blending = SDM_BLENDING_PREMULTIPLIED;
+    /* compute whether this view has no blending */
+    pixman_region32_init_rect(&r, 0, 0, ev->surface->width, ev->surface->height);
+    pixman_region32_subtract(&r, &r, &ev->surface->opaque);
+
+    if (!pixman_region32_not_empty(&r) && (layer->plane_alpha == 0xFF))
+        layer->blending = SDM_BLENDING_NONE;
+    else
+        layer->blending = SDM_BLENDING_COVERAGE;
 
     // Video layers are always opaque
     if (layer->flags.video_present) {
@@ -1039,6 +1054,9 @@ LayerBlending SdmDisplay::GetSDMBlending(uint32_t source)
     case SDM_BLENDING_PREMULTIPLIED:
          blending = sdm::kBlendingPremultiplied;
          break;
+    case SDM_BLENDING_COVERAGE:
+         blending = sdm::kBlendingCoverage;
+         break;
     case SDM_BLENDING_NONE:
     default:
          blending = sdm::kBlendingOpaque;
@@ -1181,7 +1199,7 @@ void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view
     struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
     pixman_region32_t src_rect, dest_rect;
     pixman_box32_t *box, tbox;
-    wl_fixed_t sx1, sy1, sx2, sy2;
+    float sx1, sy1, sx2, sy2;
 
     /* dst rect */
     pixman_region32_init(&dest_rect);
@@ -1190,92 +1208,32 @@ void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view
     pixman_region32_translate(&dest_rect, -output->base.x, -output->base.y);
     box = pixman_region32_extents(&dest_rect);
 
-    {
-     enum wl_output_transform buffer_transform1 = WL_OUTPUT_TRANSFORM_NORMAL;
-
-     switch(output->base.transform) {
-         case 0: buffer_transform1 = WL_OUTPUT_TRANSFORM_NORMAL; break;
-         case 1: buffer_transform1 = WL_OUTPUT_TRANSFORM_90; break;
-         case 2: buffer_transform1 = WL_OUTPUT_TRANSFORM_180; break;
-         case 3: buffer_transform1 = WL_OUTPUT_TRANSFORM_270; break;
-         case 4: buffer_transform1 = WL_OUTPUT_TRANSFORM_FLIPPED; break;
-         case 5: buffer_transform1 = WL_OUTPUT_TRANSFORM_FLIPPED_90; break;
-         case 6: buffer_transform1 = WL_OUTPUT_TRANSFORM_FLIPPED_180; break;
-         case 7: buffer_transform1 = WL_OUTPUT_TRANSFORM_FLIPPED_270; break;
-         default: DLOGE("Invalid buffer transform not supported: %d", output->base.transform);
-            return;
-     }
-
-     tbox = weston_transformed_rect(output->base.width,
-                        output->base.height,
-                        buffer_transform1,
-                        output->base.current_scale,
-                        *box);
-    }
-
-    dst_ret->left = (float)tbox.x1;
-    dst_ret->top = (float)tbox.y1;
-    dst_ret->right = (float)tbox.x2;
-    dst_ret->bottom = (float)tbox.y2;
+    tbox = weston_transformed_rect(output->base.width,
+                                   output->base.height,
+                                   (wl_output_transform)output->base.transform,
+                                   output->base.current_scale,
+                                   *box);
+    dst_ret->left = tbox.x1;
+    dst_ret->right = tbox.x2;
+    dst_ret->top = tbox.y1;
+    dst_ret->bottom = tbox.y2;
     pixman_region32_fini(&dest_rect);
 
     /* src rect */
     pixman_region32_init(&src_rect);
     pixman_region32_intersect(&src_rect, &ev->transform.boundingbox,
-                  &output->base.region);
+                              &output->base.region);
     box = pixman_region32_extents(&src_rect);
 
-    weston_view_from_global_fixed(ev,
-             wl_fixed_from_int(box->x1),
-             wl_fixed_from_int(box->y1),
-             &sx1, &sy1);
-    weston_view_from_global_fixed(ev,
-             wl_fixed_from_int(box->x2),
-             wl_fixed_from_int(box->y2),
-             &sx2, &sy2);
-
-    if (sx1 < 0)
-     sx1 = 0;
-    if (sy1 < 0)
-     sy1 = 0;
-    if (sx2 > wl_fixed_from_int(ev->surface->width))
-     sx2 = wl_fixed_from_int(ev->surface->width);
-    if (sy2 > wl_fixed_from_int(ev->surface->height))
-     sy2 = wl_fixed_from_int(ev->surface->height);
-
-    tbox.x1 = sx1;
-    tbox.y1 = sy1;
-    tbox.x2 = sx2;
-    tbox.y2 = sy2;
-
-    {
-     enum wl_output_transform buffer_transform2 = WL_OUTPUT_TRANSFORM_NORMAL;
-
-     switch(viewport->buffer.transform) {
-         case 0: buffer_transform2 = WL_OUTPUT_TRANSFORM_NORMAL; break;
-         case 1: buffer_transform2 = WL_OUTPUT_TRANSFORM_90; break;
-         case 2: buffer_transform2 = WL_OUTPUT_TRANSFORM_180; break;
-         case 3: buffer_transform2 = WL_OUTPUT_TRANSFORM_270; break;
-         case 4: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED; break;
-         case 5: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_90; break;
-         case 6: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_180; break;
-         case 7: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_270; break;
-         default: DLOGE("Invalid buffer transform not supported: %d", viewport->buffer.transform);
-            return;
-     }
-
-     tbox = weston_transformed_rect(wl_fixed_from_int(ev->surface->width),
-              wl_fixed_from_int(ev->surface->height),
-              buffer_transform2,
-              viewport->buffer.scale,
-              tbox);
-    }
-
-    src_ret->left = (float)(tbox.x1 >> 8);
-    src_ret->top = (float)(tbox.y1 >> 8);
-    src_ret->right = (float)(tbox.x2 >> 8);
-    src_ret->bottom = (float)(tbox.y2 >> 8);
+    weston_view_from_global_float(ev, box->x1, box->y1, &sx1, &sy1);
+    weston_surface_to_buffer_float(ev->surface, sx1, sy1, &sx1, &sy1);
+    weston_view_from_global_float(ev, box->x2, box->y2, &sx2, &sy2);
+    weston_surface_to_buffer_float(ev->surface, sx2, sy2, &sx2, &sy2);
     pixman_region32_fini(&src_rect);
+    src_ret->left = sx1;
+    src_ret->top = sy1;
+    src_ret->right = sx2;
+    src_ret->bottom = sy2;
 }
 
 int SdmDisplay::ComputeDirtyRegion(struct weston_view *ev,
@@ -1474,6 +1432,11 @@ DisplayError SdmNullDisplay::Prepare(struct drm_output *output) {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::Commit(struct drm_output *output) {
+  /**
+   * TODO: We need to handle releasing the buffer references such that
+   * the video buffers/frames keep moving forward in time even though
+   * not displayed. This will be done at a later point of time.
+   */
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::SetDisplayState(DisplayState state) {
@@ -1481,13 +1444,54 @@ DisplayError SdmNullDisplay::SetDisplayState(DisplayState state) {
 }
 
 DisplayError SdmNullDisplay::SetVSyncState(bool enable, struct drm_output *output) {
+  /**
+   * TODO: drm_output_ needs to be re-initialized based on the preferred supported mode
+   *       of the plugged-in display. The recent Weston release contains better APIs
+   *       to handle this case. Hence this implementation will be improved based upon
+   *       the recent Weston release updates.
+   */
+  drm_output_ = output;
   return kErrorNone;
 }
 
 DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
+  uint32_t props_value[3] = {0};
+  char null_display_props[MAX_PROP_STR_SIZE] = {0};
+  char *prop = NULL, *saveptr = NULL;
+
+  // sdm.null.resolution format is width:height:fps
+  SdmDisplayDebugger::Get()->GetProperty(SDM_NULL_DISPLAY_RESOLUTON_PROP_NAME, null_display_props);
+
+  prop = strtok_r(null_display_props, ":", &saveptr);
+  for (int i =0; i<3 && prop != NULL; i++)
+  {
+    props_value[i] = UINT32(atoi(prop));
+    prop = strtok_r(NULL, ":", &saveptr);
+  }
+
+  if (props_value[0] == 0 || props_value[1] == 0) {
+    display_config->x_pixels = SDM_DEAFULT_NULL_DISPLAY_WIDTH;
+    display_config->y_pixels = SDM_DEAFULT_NULL_DISPLAY_HEIGHT;
+  } else {
+    display_config->x_pixels = props_value[0];
+    display_config->y_pixels = props_value[1];
+  }
+
+  if (props_value[2] == 0)
+    display_config->fps = SDM_DEAFULT_NULL_DISPLAY_FPS;
+  else
+    display_config->fps = props_value[2];
+
+  display_config->x_dpi = SDM_DEAFULT_NULL_DISPLAY_X_DPI;
+  display_config->y_dpi = SDM_DEAFULT_NULL_DISPLAY_Y_DPI;
+  display_config->vsync_period_ns = UINT32(1000000000/display_config->fps);
+  display_config->is_yuv = SDM_DEAFULT_NULL_DISPLAY_IS_YUV;
+
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
+  vblank_cb_   = vbcb;
+
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::EnablePllUpdate(int32_t enable) {

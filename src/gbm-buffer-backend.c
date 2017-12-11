@@ -266,11 +266,16 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
     buffer->flags  = flags;
 
     ret = weston_compositor_import_gbm_buffer(buffer->compositor, buffer);
-
+    if (ret == false) {
+      weston_log("gbm_buffer_backend_create_buffer:: import_gbm_buffer failed\n");
+    }
+    // gbm bo is imported to buffer from above function to use in below perform call
+    unsigned int secure_status = 0;
+    gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, buffer->bo, &secure_status);
     // Override return value if format is part of skip list.
     if ((format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
         (format == GBM_FORMAT_P010) ||
-        (format == GBM_FORMAT_NV12)) {
+        ((format == GBM_FORMAT_NV12) && secure_status)) {
       ret = true;
     }
 
