@@ -433,9 +433,6 @@ drm_output_repaint(struct weston_output *output_base,
     }
     assert(wl_list_empty(&output->plane_flip_list));
 
-    SetDisplayState(output->display_id, WESTON_DPMS_ON);
-    output->dpms = WESTON_DPMS_ON;
-
     SetVSyncState(output->display_id, ENABLE, output);
     if (output->skip_commit) {
 
@@ -1198,10 +1195,14 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
     struct drm_output *output = (struct drm_output *) output_base;
 
     weston_log("drm_set_dpms: Calling SDM to SetDisplaySatte.");
-    bool ret = SetDisplayState(output->display_id, level);
+    int ret = SetDisplayState(output->display_id, level);
 
-    if (ret)
-        output->dpms = level;
+    if (ret) {
+        weston_log("drm_set_dpms: Error! fail to set dpms level %d!", level);
+        return;
+    }
+
+    output->dpms = level;
 }
 
 static void
@@ -1826,7 +1827,6 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
     output->backlight = BACKLIGHT_RAW;
 
     weston_compositor_add_output(b->compositor, &output->base);
-    bool ret = SetDisplayState(display_id, WESTON_DPMS_ON);
     output->base.connection_internal = 1;
 
     loop = wl_display_get_event_loop(c->wl_display);
@@ -1874,7 +1874,7 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
     output->base.native_scale = output->base.current_scale;
 
     output->display_id = display_id;
-    SetDisplayState(display_id, WESTON_DPMS_ON);
+    drm_set_dpms(&output->base, WESTON_DPMS_ON);
     return 0;
 
 err_output:

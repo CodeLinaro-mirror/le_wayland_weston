@@ -205,7 +205,7 @@ int RegisterCbs(int display_id, sdm_cbs_t *cbs);
 
     @sa
 */
-bool SetDisplayState(int display_id, int power_mode);
+int SetDisplayState(int display_id, int power_mode);
 
 /*! @brief Method to enable VSync State, i.e. whether to generate callback
     on next frame.
