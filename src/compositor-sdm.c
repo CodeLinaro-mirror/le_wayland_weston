@@ -827,9 +827,6 @@ drm_output_destroy(struct weston_output *output_base)
 
     drmModeFreeProperty(output->dpms_prop);
 
-    /* This will destroy all displays also */
-    DestroyCore();
-
     if (b->use_pixman) {
         drm_output_fini_pixman(output);
     } else {
@@ -2035,6 +2032,9 @@ drm_destroy(struct weston_compositor *ec)
 
     weston_compositor_shutdown(ec);
     //TODO(user): Need to destroy the display device here
+
+    /* This will destroy all displays also */
+    DestroyCore();
 
     if (b->gbm)
         gbm_device_destroy(b->gbm);
