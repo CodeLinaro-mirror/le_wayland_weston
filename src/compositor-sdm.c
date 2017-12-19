@@ -662,6 +662,25 @@ create_sdm_layer(struct drm_output *output, struct weston_view *ev, pixman_regio
     return layer;
 }
 
+static bool
+is_skip_view(struct weston_view *ev, struct drm_output *output)
+{
+    struct weston_surface *es = ev->surface;
+    bool skip = false;
+
+    /* skip the view which is overlapped with multiple output */
+    if (ev->output_mask != (1u << output->base.id))
+        skip = true;
+
+    if (!es->buffer_ref.buffer) {
+        skip = true;
+    }  else if (wl_shm_buffer_get(es->buffer_ref.buffer->resource)) {
+        skip = true;
+    }
+
+    return skip;
+}
+
 static void
 drm_assign_planes(struct weston_output *output_base)
 {
@@ -732,13 +751,7 @@ drm_assign_planes(struct weston_output *output_base)
             continue;
         }
 
-        if (!es->buffer_ref.buffer) {
-            is_skip = true;
-        } else if (linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource)) {
-            is_skip = false;
-        }  else if (wl_shm_buffer_get(es->buffer_ref.buffer->resource)) {
-            is_skip = true;
-        }
+        is_skip = is_skip_view(ev, output);
 
         sdm_layer = create_sdm_layer(output, ev, &surface_overlap, is_cursor, is_skip);
         wl_list_insert(output->sdm_layer_list.prev, &sdm_layer->link);
