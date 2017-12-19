@@ -1153,6 +1153,7 @@ void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view
          case 6: buffer_transform1 = WL_OUTPUT_TRANSFORM_FLIPPED_180; break;
          case 7: buffer_transform1 = WL_OUTPUT_TRANSFORM_FLIPPED_270; break;
          default: DLOGE("Invalid buffer transform not supported: %d", output->base.transform);
+            pixman_region32_fini(&dest_rect);
             return;
      }
 
@@ -1211,6 +1212,7 @@ void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view
          case 6: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_180; break;
          case 7: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_270; break;
          default: DLOGE("Invalid buffer transform not supported: %d", viewport->buffer.transform);
+            pixman_region32_fini(&src_rect);
             return;
      }
 
@@ -1248,6 +1250,7 @@ int SdmDisplay::ComputeDirtyRegion(struct weston_view *ev,
                     (zalloc(n * sizeof(struct Rect)));
     if (dirty->rects == NULL) {
      DLOGE("out of memory for allocating dirty region\n");
+     pixman_region32_fini(&temp);
      return -1;
     }
     for (i = 0; i < n; i++) {
@@ -1295,6 +1298,7 @@ int SdmDisplay::GetVisibleRegion(struct drm_output *output, struct weston_view *
     visible->rects = reinterpret_cast<struct Rect *> (zalloc(n * sizeof(struct Rect)));
     if (visible->rects == NULL) {
      DLOGE("out of memory for allocating visible region\n");
+     pixman_region32_fini(&temp);
      return -1;
     }
     for (i = 0; i < n; i++) {

@@ -888,6 +888,7 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
         /* clear framebuffer with transparent pixels where this layer would be*/
          clear_view(view, output, damage);
       }
+      pixman_region32_fini(&r);
     }
   }
 }
