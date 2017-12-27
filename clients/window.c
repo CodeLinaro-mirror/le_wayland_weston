@@ -5354,7 +5354,7 @@ registry_handle_global(void *data, struct wl_registry *registry, uint32_t id,
 	struct display *d = data;
 	struct global *global;
 
-	global = xmalloc(sizeof *global);
+	global = xzalloc(sizeof *global);
 	global->name = id;
 	global->interface = strdup(interface);
 	global->version = version;
@@ -5548,6 +5548,7 @@ handle_display_data(struct task *task, uint32_t events)
 	struct epoll_event ep;
 	int ret;
 
+	memset(&ep, 0, sizeof(ep));
 	display->display_fd_events = events;
 
 	if (events & EPOLLERR || events & EPOLLHUP) {
@@ -5833,6 +5834,7 @@ display_watch_fd(struct display *display,
 {
 	struct epoll_event ep;
 
+	memset(&ep, 0, sizeof(ep));
 	ep.events = events;
 	ep.data.ptr = task;
 	epoll_ctl(display->epoll_fd, EPOLL_CTL_ADD, fd, &ep);
@@ -5851,6 +5853,7 @@ display_run(struct display *display)
 	struct epoll_event ep[16];
 	int i, count, ret;
 
+	memset(&ep, 0, sizeof(ep));
 	display->running = 1;
 	while (1) {
 		while (!wl_list_empty(&display->deferred_list)) {
