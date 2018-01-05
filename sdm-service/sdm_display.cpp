@@ -922,6 +922,12 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
         case SDM_BUFFER_FORMAT_RGBA_8888:
             format = sdm::kFormatRGBA8888;
             break;
+        case SDM_BUFFER_FORMAT_ARGB_8888:
+            format = sdm::kFormatARGB8888;
+            break;
+        case SDM_BUFFER_FORMAT_ABGR_8888:
+            format = sdm::kFormatABGR8888;
+            break;
         case SDM_BUFFER_FORMAT_RGBA_5551:
             format = sdm::kFormatRGBA5551;
             break;
@@ -1042,8 +1048,10 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
          ret = SDM_BUFFER_FORMAT_RGBX_8888;
          break;
     case GBM_FORMAT_BGRA8888:
-    case GBM_FORMAT_RGBA8888:
          ret = SDM_BUFFER_FORMAT_ARGB_8888;
+         break;
+    case GBM_FORMAT_RGBA8888:
+         ret = SDM_BUFFER_FORMAT_ABGR_8888;
          break;
     case GBM_FORMAT_ARGB4444:
     case GBM_FORMAT_ABGR4444:
