@@ -977,6 +977,9 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
         case SDM_BUFFER_FORMAT_YCbCr_422_I:
             format = sdm::kFormatYCbCr422H2V1Packed;
             break;
+        case SDM_BUFFER_FORMAT_CbYCrY_422_I:
+            format = sdm::kFormatCbYCrY422H2V1Packed;
+            break;
         default:
             DLOGE("Unsupported format %d\n", src_fmt);
             return sdm::kFormatInvalid;
@@ -1008,6 +1011,7 @@ bool SdmDisplay::GetVideoPresenceByFormatFromGbm(uint32_t fmt)
 
     switch (fmt) {
        case GBM_FORMAT_NV12:
+       case GBM_FORMAT_UYVY:
        case GBM_FORMAT_YCbCr_420_TP10_UBWC:
        case GBM_FORMAT_YCbCr_420_P010_UBWC:
             is_video_present = true;
@@ -1063,6 +1067,9 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
          break;
     case GBM_FORMAT_NV12:
          ret = SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS;
+         break;
+    case GBM_FORMAT_UYVY:
+         ret = SDM_BUFFER_FORMAT_CbYCrY_422_I;
          break;
     case GBM_FORMAT_ABGR2101010:
          ret = SDM_BUFFER_FORMAT_RGBA_2101010;

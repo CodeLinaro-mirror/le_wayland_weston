@@ -50,6 +50,7 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format) {
        case GBM_FORMAT_ARGB8888: layer_buffer_format = kFormatBGRA8888; break;
        case GBM_FORMAT_XRGB8888: layer_buffer_format = kFormatBGRX8888; break;
        case GBM_FORMAT_NV12: layer_buffer_format = kFormatYCbCr420SemiPlanarVenus; break;
+       case GBM_FORMAT_UYVY: layer_buffer_format = kFormatCbYCrY422H2V1Packed; break;
        case GBM_FORMAT_YCbCr_420_TP10_UBWC: layer_buffer_format = kFormatYCbCr420TP10Ubwc; break;
        case GBM_FORMAT_YCbCr_420_P010_UBWC: layer_buffer_format = kFormatYCbCr420P010Ubwc; break;
        default:
@@ -164,6 +165,7 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
   case kFormatBGRX8888:                 *target = GBM_FORMAT_XRGB8888;             break;
   case kFormatYCbCr420SemiPlanarVenus:  *target = GBM_FORMAT_NV12;                 break;
   case kFormatYCbCr420SPVenusUbwc:      *target = GBM_FORMAT_NV12;                 break;
+  case kFormatCbYCrY422H2V1Packed:      *target = GBM_FORMAT_UYVY;                 break;
   case kFormatRGBA8888Ubwc:             *target = GBM_FORMAT_ABGR8888;
                                         *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
                                                  GBM_BO_USAGE_HW_RENDERING_QTI;
@@ -233,6 +235,7 @@ bool SdmDisplayBufferAllocator::IsFormatVideo(uint32_t fmt)
 
    switch (fmt) {
       case GBM_FORMAT_NV12:
+      case GBM_FORMAT_UYVY:
       case GBM_FORMAT_YCbCr_420_TP10_UBWC:
            is_video_present = true;
            break;
@@ -249,14 +252,14 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
                                                  uint32_t *num_planes) {
     struct gbm_bo *bo;
     struct gbm_import_fd_data import_fd_data;
-    uint32_t format1 = GBM_FORMAT_ARGB8888;
+    uint32_t format = GBM_FORMAT_ARGB8888;
     uint64_t flags = 0;
     generic_buf_layout_t buf_layout;
 
-    SetBufferInfo(buf_info.format, &format1, &flags);
+    SetBufferInfo(buf_info.format, &format, &flags);
 
     import_fd_data.fd = buf_info.fd;
-    import_fd_data.format = format1;
+    import_fd_data.format = format;
     import_fd_data.width = buf_info.aligned_width;
     import_fd_data.height = buf_info.aligned_height;
 
@@ -267,40 +270,34 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
         return kErrorNone;
     }
 
-    uint32_t width, height;
-    uint32_t *fbid;
-    uint32_t fb_id, stride1, handle, size, format;
-    uint32_t fb_id1;
-    width = gbm_bo_get_width(bo);
-    height = gbm_bo_get_height(bo);
-    stride1 = gbm_bo_get_stride(bo);
-    handle = gbm_bo_get_handle(bo).u32;
-    format = gbm_bo_get_format(bo);
-
-    if (IsFormatVideo(format) == false) {
-      stride[0] = gbm_bo_get_stride(bo);
-      offset[0] = 0;
-      *num_planes++;
-      gbm_bo_destroy(bo);
-      return kErrorNone;
+    int ret = gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
+    if (ret == GBM_ERROR_NONE) {
+        *num_planes = buf_layout.num_planes;
+        for(int j=0; j< *num_planes; j++) {
+            offset[j] = buf_layout.planes[j].offset;
+            stride[j] = buf_layout.planes[j].v_increment;
+        }
+    } else {
+        DLOGE("Get Plane info fail");
+        gbm_bo_destroy(bo);
+        return kErrorParameters;
     }
 
-    // for NV12 format
-    *num_planes = 2;
-    gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
-
+    uint32_t alignedHeight = 0;
+    ret = gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_HEIGHT, bo, &alignedHeight);
+    if (ret != GBM_ERROR_NONE) {
+        DLOGE("Get aligned height fail");
+        gbm_bo_destroy(bo);
+        return kErrorParameters;
+    }
+    /*This is special for NV12 ubwc format, offset[0] is not 0 which get from gbm
+      if the buffer have ubwc flag*/
     if (format == GBM_FORMAT_NV12) {
-      stride[0] = buf_layout.planes[0].v_increment;
-      offset[0] = 0;
+        stride[0] = buf_layout.planes[0].v_increment;
+        offset[0] = 0;
 
-      stride[1] = stride[0];//buf_layout.planes[1].v_increment;
-      offset[1] = stride[0]*height;
-    }
-    if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
-      stride[0] = buf_layout.planes[0].v_increment;
-      stride[1] = buf_layout.planes[1].v_increment;
-      offset[0] = 0;
-      offset[1] = 0;
+        stride[1] = stride[0];//buf_layout.planes[1].v_increment;
+        offset[1] = stride[0]*alignedHeight;
     }
 
   gbm_bo_destroy(bo);
