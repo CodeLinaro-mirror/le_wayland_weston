@@ -652,9 +652,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                              layer->color_metadata.transfer == Transfer_HLG);
 
             // Set to true if incoming layer has HDR support and Display supports HDR functionality
-            // TODO: Currently disabling hdr feature support if secure flag is set. it will be
-            // removed after fixing the secure HDR playabck with ToneMapper.
-            if (!disable_hdr_handling_ && !layer->flags.secure_present)
+            if (!disable_hdr_handling_)
                 layer->flags.hdr_present = hdr_layer;
         }
     }
