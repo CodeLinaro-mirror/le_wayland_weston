@@ -442,6 +442,7 @@ drm_output_repaint(struct weston_output *output_base,
     output->dpms = WESTON_DPMS_ON;
 
     SetVSyncState(display_id, ENABLE, output);
+
     ret = Commit(display_id, output);
     if (ret) {
         weston_log("fail to commit to sdm display! err=%d\n", ret);
@@ -553,9 +554,6 @@ pageflip_handler(unsigned int frame, unsigned int sec, unsigned int usec,
     output->last_vblank.sec = sec;
     output->last_vblank.usec = usec;
 
-    if (!output->frame_pending)
-        return;
-
     write(output->pageflip_ev_fd, &v, sizeof v);
 }
 
@@ -572,12 +570,12 @@ on_pageflip(int fd, uint32_t mask, void *data)
 
     read(fd, &v, sizeof v);
 
+    drm_output_update_msc(output, output->last_vblank.frame);
 
     /* We don't set page_flip_pending on start_repaint_loop, in that case
      * we just want to page flip to the current buffer to get an accurate
      * timestamp */
     if (output->frame_pending) {
-        drm_output_update_msc(output, output->last_vblank.frame);
         drm_output_release_fb(output, output->current);
         output->current = output->next;
         output->next = NULL;
@@ -1958,8 +1956,7 @@ create_outputs(struct drm_backend *b, uint32_t option_connector,
     int x=0, y=0;
 
     if (create_output_for_connector(b, x, y, drm_device) < 0)
-        return -1;
-    }
+      return -1;
 
     return 0;
 }
@@ -2439,7 +2436,7 @@ drm_backend_create(struct weston_compositor *compositor,
     weston_log("CreateDisplay: %d successful\n", rc);
 
     /* Now register callbacks with SDM services */
-    sdm_cbs.vblank_cb = vblank_handler,
+    sdm_cbs.pageflip_cb = pageflip_handler,
     sdm_cbs.hotplug_cb = hotplug_handler,
     RegisterCbs(display_id, &sdm_cbs);
 

@@ -78,7 +78,7 @@ extern "C" {
 #define __CLASS__ "SdmDisplay"
 
 struct drm_output *drm_output_;
-vblank_cb_t vblank_cb_;
+
 int tone_mapper_disable = 0; /* (user): enable this flag once  */
                              /* To disable tone mapping functionality. */
 
@@ -129,7 +129,7 @@ DisplayError SdmDisplay::CreateDisplay() {
     struct DisplayHdrInfo display_hdr_info;
     struct DisplayHdcpProtocol display_hdcp_protocol;
 
-    error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
+    error = core_intf_->CreateDisplay(display_type_, sync_event_type_, this, &display_intf_);
 
     if (error != kErrorNone) {
         DLOGE("Display creation failed. Error = %d", error);
@@ -1498,8 +1498,8 @@ DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *d
 
   return kErrorNone;
 }
-DisplayError SdmNullDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
-  vblank_cb_   = vbcb;
+DisplayError SdmNullDisplay::RegisterCb(int display_id, pageflip_cb_t pflipcb) {
+  pageflip_cb_   = pflipcb; //to fix the private variable access
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::UpdateHPDClockState(uint32_t state) {

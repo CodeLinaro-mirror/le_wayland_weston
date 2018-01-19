@@ -82,6 +82,7 @@ class SdmDisplayInterface {
     virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
 
     static int GetDrmMasterFd();
+    pageflip_cb_t pageflip_cb_ = NULL;
 };
 
 class SdmNullDisplay : public SdmDisplayInterface {
@@ -210,7 +211,6 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     int disable_hdr_handling_ = 0;
     bool hdr_supported_ = false;
     uint32_t hdcp_version_ = 0;
-    pageflip_cb_t pageflip_cb_ = NULL;
 };
 
 class SdmDisplayProxy {
