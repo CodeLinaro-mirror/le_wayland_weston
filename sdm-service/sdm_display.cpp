@@ -438,14 +438,14 @@ DisplayError SdmDisplay::AllocateMemoryForLayerGeometry(struct \
      /* It's permissive the visible/dirty region can be NULL */
      num_visible_rects = glayer->visible_regions.count;
      for (uint32_t j = 0; j < num_visible_rects; j++) {
-          LayerRect *visible_rect = new LayerRect();
-          layer_stack_.layers.at(index)->visible_regions.push_back(*visible_rect);
+          LayerRect visible_rect {};
+          layer_stack_.layers.at(index)->visible_regions.push_back(visible_rect);
      }
 
      num_dirty_rects = glayer->dirty_regions.count;
      for (uint32_t j = 0; j < num_dirty_rects; j++) {
-          LayerRect *dirty_rect = new LayerRect();
-          layer_stack_.layers.at(index)->dirty_regions.push_back(*dirty_rect);
+          LayerRect dirty_rect {};
+          layer_stack_.layers.at(index)->dirty_regions.push_back(dirty_rect);
      }
     }
 
