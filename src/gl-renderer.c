@@ -129,6 +129,7 @@ struct egl_image {
 	struct linux_dmabuf_buffer *dmabuf;
 	/* Only used for gbmbuf imported buffer */
 	struct gbm_buffer *gbmbuf;
+	bool is_gbmbuf_destroyed;
 	struct wl_list link;
 };
 
@@ -304,7 +305,8 @@ egl_image_unref(struct egl_image *image)
 	if (image->dmabuf)
 		linux_dmabuf_buffer_set_user_data(image->dmabuf, NULL, NULL);
 
-	if (image->gbmbuf)
+	/* Don't touch image->gbmbuf if it's already destroyed, otherwise invalid memory access may cause unexpected crash!! */
+	if (!image->is_gbmbuf_destroyed && image->gbmbuf)
 		gbm_buffer_backend_set_user_data(image->gbmbuf, NULL, NULL);
 
 	gr->destroy_image(gr->egl_display, image->image);
@@ -1648,7 +1650,10 @@ static void
 gl_renderer_destroy_gbm_buffer(struct gbm_buffer *gbm_buf)
 {
 	struct egl_image *image = gbm_buf->user_data;
-	egl_image_unref(image);
+
+	/* Only set the destroyed flag for the image which is being used. */
+	if (egl_image_unref(image))
+		image->is_gbmbuf_destroyed = true;
 }
 
 static struct egl_image *
@@ -1732,6 +1737,7 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 
 	/* The cache owns one ref. The caller gets another. */
 	image->gbmbuf = gbmbuf;
+	image->is_gbmbuf_destroyed = false;
 	wl_list_insert(&gr->gbmbuf_images, &image->link);
 	gbm_buffer_backend_set_user_data(gbmbuf, egl_image_ref(image),
 									gl_renderer_destroy_gbm_buffer);
