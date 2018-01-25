@@ -112,19 +112,6 @@ gbm_wl_buffer_destroy(struct wl_client *client,
     GBM_PROTOCOL_LOG(LOG_DBG,"gbm_wl_buffer_destroy::Exited\n");
 }
 
-static void
-destroy_params(struct wl_resource *params_resource)
-{
-    struct gbm_buffer *buffer;
-
-    buffer = wl_resource_get_user_data(params_resource);
-
-    if (!buffer)
-        return;
-
-    gbm_buffer_destroy(buffer);
-}
-
 static const struct wl_buffer_interface gbm_buffer_implementation = {
     gbm_wl_buffer_destroy
 };
