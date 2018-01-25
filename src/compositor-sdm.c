@@ -1806,14 +1806,9 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
 
     config = OUTPUT_CONFIG_MODE;
 
-    current = drm_output_choose_initial_mode(output, config,
-                         width, height,
-                         &crtc_mode, &modeline);
-    if (!current) {
-        // TODO (user): To fix error case
-        // goto err_free;
-    }
     current = zalloc(sizeof *current);
+    if (current == NULL)
+        goto err_free;
     current->base.width   = display_config->x_pixels;
     current->base.height  = display_config->y_pixels;
     current->base.refresh = display_config->fps * 1000;
@@ -1822,9 +1817,8 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
 
     uint32_t mmWidth  = (display_config->x_pixels/display_config->x_dpi)*25.4;
     uint32_t mmHeight = (display_config->y_pixels/display_config->y_dpi)*25.4;
-    crtc_mode.hdisplay = display_config->x_pixels;
-    crtc_mode.vdisplay = display_config->y_pixels;
-    drm_output_add_mode(output, &crtc_mode);
+
+    wl_list_insert(output->base.mode_list.prev, &current->base.link);
     weston_output_init(&output->base, b->compositor, x, y, mmWidth, mmHeight, transform, scale);
 
     if (b->use_pixman) {
