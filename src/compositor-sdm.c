@@ -1212,6 +1212,26 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
         output->dpms = level;
 }
 
+
+static void
+drm_set_hpd(struct weston_output *output_base, enum hpd_enum state)
+{
+    struct drm_output *output = (struct drm_output *) output_base;
+    struct weston_compositor *ec = output_base->compositor;
+    struct drm_backend *b = (struct drm_backend *)ec->backend;
+
+    int ret = UpdateHPDClockState(display_id, state);
+
+    if (ret) {
+        weston_log("DRM: HPD: status update failed for %d\n",
+               display_id);
+        return;
+    }
+
+    output->hpd = state;
+    return;
+}
+
 static void
 drm_enable_ppm(struct weston_output *output_base, int32_t enable)
 {
@@ -1689,6 +1709,7 @@ hotplug_handler(int disp, bool connected, void *data)
 	output->base.repaint = drm_output_repaint;
 	output->base.assign_planes = drm_assign_planes;
 	output->base.set_dpms = drm_set_dpms;
+	output->base.set_hpd = drm_set_hpd;
 	output->base.switch_mode = drm_output_switch_mode;
 	output->base.enable_ppm = drm_enable_ppm;
 	output->base.set_ppm = drm_set_ppm;
@@ -1698,6 +1719,7 @@ hotplug_handler(int disp, bool connected, void *data)
 	output->base.assign_planes = NULL;
 	output->base.set_backlight = NULL;
 	output->base.set_dpms = NULL;
+	output->base.set_hpd = NULL;
 	output->base.switch_mode = NULL;
 	output->base.enable_ppm = NULL;
 	output->base.set_ppm = NULL;
@@ -1822,7 +1844,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     free(s);
 
     output->dpms_prop = zalloc(sizeof *output->dpms_prop);
-    output->dpms = WESTON_DPMS_OFF;
+
     if (config == OUTPUT_CONFIG_OFF) {
         weston_log("Disabling output %s\n", output->base.name);
         drmModeSetCrtc(b->drm.fd, output->crtc_id,
@@ -1901,6 +1923,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.destroy = drm_output_destroy;
     output->base.assign_planes = drm_assign_planes;
     output->base.set_dpms = drm_set_dpms;
+    output->base.set_hpd = drm_set_hpd;
     output->base.switch_mode = drm_output_switch_mode;
     output->base.enable_ppm = drm_enable_ppm;
     output->base.set_ppm = drm_set_ppm;
@@ -1936,6 +1959,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.native_scale = output->base.current_scale;
 
     SetDisplayState(display_id, WESTON_DPMS_ON);
+    output->dpms = WESTON_DPMS_ON;
     return 0;
 
 err_output:

@@ -1334,6 +1334,20 @@ const char *SdmDisplay::GetDisplayString() {
   }
 }
 
+DisplayError SdmDisplay::UpdateHPDClockState(uint32_t state)
+{
+  DisplayError error;
+
+  error = display_intf_->UpdateHPDClockState(state);
+  if (error != kErrorNone) {
+    DLOGE("%s HPD update failed. Error = %d",
+      (state == WESTON_HPD_ON) ? "enable" : "disable", error);
+    return error;
+  }
+
+  return kErrorNone;
+}
+
 DisplayError SdmDisplay::EnablePllUpdate(int32_t enable)
 {
   DisplayError error;
@@ -1491,6 +1505,10 @@ DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *d
 DisplayError SdmNullDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
   vblank_cb_   = vbcb;
 
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::UpdateHPDClockState(uint32_t state) {
+  DLOGI("Cannot Update HPD Clock to State %u", state);
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::EnablePllUpdate(int32_t enable) {
