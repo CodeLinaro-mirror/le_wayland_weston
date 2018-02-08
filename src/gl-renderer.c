@@ -1539,7 +1539,9 @@ gl_renderer_destroy_dmabuf(struct linux_dmabuf_buffer *dmabuf)
 {
 	struct egl_image *image = dmabuf->user_data;
 
-	egl_image_unref(image);
+	/* Only set image->dmabuf to NULL as the dma buffer will be destroyed later. */
+	if (egl_image_unref(image))
+		image->dmabuf = NULL;
 }
 
 static struct egl_image *
@@ -1648,7 +1650,10 @@ static void
 gl_renderer_destroy_gbm_buffer(struct gbm_buffer *gbm_buf)
 {
 	struct egl_image *image = gbm_buf->user_data;
-	egl_image_unref(image);
+
+	/* Only set image->gbmbuf to NULL as the gbm buffer will be destroyed later. */
+	if (egl_image_unref(image))
+		image->gbmbuf = NULL;
 }
 
 static struct egl_image *
