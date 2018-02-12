@@ -111,6 +111,7 @@ SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf,
 }
 
 SdmDisplay::~SdmDisplay() {
+    FreeLayerStack();
 }
 
 const char * SdmDisplay::FourccToString(uint32_t fourcc)
@@ -298,11 +299,11 @@ DisplayError SdmDisplay::FreeLayerStack() {
 
 DisplayError SdmDisplay::FreeLayerGeometry(struct LayerGeometry *glayer) {
     if (glayer->dirty_regions.count)
-        delete[] glayer->dirty_regions.rects;
+        free(glayer->dirty_regions.rects);
     if (glayer->visible_regions.count)
-        delete[] glayer->visible_regions.rects;
+        free(glayer->visible_regions.rects);
 
-    delete glayer;
+    free(glayer);
 
     return kErrorNone;
 }
@@ -459,14 +460,14 @@ DisplayError SdmDisplay::AllocateMemoryForLayerGeometry(struct \
      /* It's permissive the visible/dirty region can be NULL */
      num_visible_rects = glayer->visible_regions.count;
      for (uint32_t j = 0; j < num_visible_rects; j++) {
-          LayerRect *visible_rect = new LayerRect();
-          layer_stack_.layers.at(index)->visible_regions.push_back(*visible_rect);
+          LayerRect visible_rect {};
+          layer_stack_.layers.at(index)->visible_regions.push_back(visible_rect);
      }
 
      num_dirty_rects = glayer->dirty_regions.count;
      for (uint32_t j = 0; j < num_dirty_rects; j++) {
-          LayerRect *dirty_rect = new LayerRect();
-          layer_stack_.layers.at(index)->dirty_regions.push_back(*dirty_rect);
+          LayerRect dirty_rect {};
+          layer_stack_.layers.at(index)->dirty_regions.push_back(dirty_rect);
      }
     }
 
@@ -652,9 +653,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                              layer->color_metadata.transfer == Transfer_HLG);
 
             // Set to true if incoming layer has HDR support and Display supports HDR functionality
-            // TODO: Currently disabling hdr feature support if secure flag is set. it will be
-            // removed after fixing the secure HDR playabck with ToneMapper.
-            if (!disable_hdr_handling_ && !layer->flags.secure_present)
+            if (!disable_hdr_handling_)
                 layer->flags.hdr_present = hdr_layer;
         }
     }
