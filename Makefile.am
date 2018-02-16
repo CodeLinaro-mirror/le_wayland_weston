@@ -123,6 +123,8 @@ nodist_weston_SOURCES =					\
 	protocol/scaler-server-protocol.h		\
 	protocol/pll-protocol.c				\
 	protocol/pll-server-protocol.h			\
+	protocol/mediabox-platform-protocol.c		\
+	protocol/mediabox-platform-server-protocol.h	\
 	protocol/gbm-buffer-backend-protocol.c		\
 	protocol/gbm-buffer-backend-server-protocol.h	\
 	protocol/linux-dmabuf-protocol.c		\
@@ -470,6 +472,7 @@ demo_clients =					\
 	weston-stacking				\
 	weston-calibrator			\
 	weston-scaler				\
+	weston-mediabox-platform		\
 	weston-pll
 
 if INSTALL_DEMO_CLIENTS
@@ -640,6 +643,13 @@ nodist_weston_pll_SOURCES =			\
 weston_pll_LDADD = $(CLIENT_LIBS)
 weston_pll_CFLAGS = $(AM_CFLAGS) $(CLIENT_CFLAGS)
 
+weston_mediabox_platform_SOURCES = clients/mediabox-platform-test.c
+nodist_weston_mediabox_platform_SOURCES =		\
+	protocol/mediabox-platform-protocol.c		\
+	protocol/mediabox-platform-protocol.h
+weston_mediabox_platform_LDADD = $(CLIENT_LIBS)
+weston_mediabox_platform_CFLAGS = $(AM_CFLAGS) $(CLIENT_CFLAGS)
+
 if HAVE_CAIRO_GLESV2
 demo_clients += weston-nested weston-nested-client
 
@@ -794,6 +804,8 @@ BUILT_SOURCES +=					\
 	protocol/ivi-hmi-controller-client-protocol.h	\
 	protocol/ivi-application-protocol.c		\
 	protocol/ivi-application-client-protocol.h	\
+	protocol/mediabox-platform-client-protocol.h	\
+	protocol/mediabox-platform-protocol.c		\
 	protocol/pll-client-protocol.h			\
 	protocol/pll-protocol.c
 
@@ -1380,6 +1392,7 @@ EXTRA_DIST +=					\
 	protocol/ivi-hmi-controller.xml		\
 	protocol/linux-dmabuf.xml		\
 	protocol/pll.xml			\
+	protocol/mediabox-platform.xml		\
 	protocol/gbm-buffer-backend.xml
 
 #
