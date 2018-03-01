@@ -341,7 +341,7 @@ AC_ARG_ENABLE(simple-egl-clients,
               AS_HELP_STRING([--disable-simple-egl-clients],
                              [do not build the simple EGL clients]),,
               enable_simple_egl_clients="$enable_egl")
-enable_simple_egl_clients=yes
+enable_simple_egl_clients=no
 AM_CONDITIONAL(BUILD_SIMPLE_EGL_CLIENTS, test "x$enable_simple_egl_clients" = "xyes")
 if test x$enable_simple_egl_clients = xyes; then
   PKG_CHECK_MODULES(SIMPLE_EGL_CLIENT,
@@ -569,11 +569,18 @@ if test "x$have_lcms" = xyes; then
 fi
 AM_CONDITIONAL(HAVE_LCMS, [test "x$have_lcms" = xyes])
 
-AC_PATH_PROG([wayland_scanner], [wayland-scanner])
-if test x$wayland_scanner = x; then
-	PKG_CHECK_MODULES(WAYLAND_SCANNER, [wayland-scanner])
-	wayland_scanner=`$PKG_CONFIG --variable=wayland_scanner wayland-scanner`
+AC_ARG_WITH([wayland-scanner-path],
+ [AS_HELP_STRING([--with-wayland-scanner-path=${STAGING_BINDIR_NATIVE}/wayland-scanner],
+ [Path to wayland-scanner (by default the path from
+ 'pkg-config --variable=wayland_scanner wayland-scanner' is used)])],
+ [WAYLAND_SCANNER="$withval"],
+ [WAYLAND_SCANNER="auto"])
+if test x$WAYLAND_SCANNER = xauto; then
+ PKG_CHECK_MODULES([WAYLAND_SCANNER], [wayland-scanner],
+WAYLAND_SCANNER=`$PKG_CONFIG --variable=wayland_scanner wayland-scanner`,
+ WAYLAND_SCANNER=":")
 fi
+AC_SUBST(WAYLAND_SCANNER)
 
 AC_CONFIG_FILES([Makefile src/version.h src/weston.pc])
 

@@ -45,7 +45,7 @@
 #include "sdm_display_buffer_allocator.h"
 #include "sdm_display_buffer_sync_handler.h"
 #include "sdm_display_socket_handler.h"
-#include "sdm_display_tonemapper.h"
+//#include "sdm_display_tonemapper.h"
 #include "compositor-sdm-output.h"
 #include "drm_master.h"
 
@@ -202,7 +202,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     float max_luminance_ = 0.0;
     float max_average_luminance_ = 0.0;
     float min_luminance_ = 0.0;
-    SdmDisplayToneMapper *tone_mapper_ = NULL;
+    //SdmDisplayToneMapper *tone_mapper_ = NULL;
     int disable_hdr_handling_ = 0;
     bool hdr_supported_ = false;
     uint32_t hdcp_version_ = 0;

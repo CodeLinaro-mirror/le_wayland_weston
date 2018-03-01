@@ -65,7 +65,8 @@ bin_PROGRAMS += weston
 if ENABLE_DRM_COMPOSITOR
 COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
 COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
-COMPOSITOR_LIBS += -lsdmutils -lgpu_tonemapper -lhdr_tm -lsdmcore -lsdedrm
+COMPOSITOR_LIBS += -lsdmutils -lsdmcore -lsdedrm
+#COMPOSITOR_LIBS += -lgpu_tonemapper -lhdr_tm
 endif
 
 weston_LDFLAGS = -export-dynamic
@@ -290,7 +291,7 @@ drm_backend_la_SOURCES =			\
 	shared/timespec-util.h			\
 	src/libbacklight.c			\
 	src/libbacklight.h			\
-	sdm-service/sdm_display_tonemapper.cpp	\
+	#sdm-service/sdm_display_tonemapper.cpp	\
 	sdm-service/sdm_display.cpp		\
 	sdm-service/sdm_display_debugger.cpp	\
 	sdm-service/sdm_display_buffer_allocator.cpp \
@@ -1445,10 +1446,10 @@ $(DOCDIRS):
 doc: $(DOXYGEN_INDICES)
 
 protocol/%-protocol.c : $(top_srcdir)/protocol/%.xml
-	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(wayland_scanner) code < $< > $@
+	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(WAYLAND_SCANNER) code < $< > $@
 
 protocol/%-server-protocol.h : $(top_srcdir)/protocol/%.xml
-	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(wayland_scanner) server-header < $< > $@
+	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(WAYLAND_SCANNER) server-header < $< > $@
 
 protocol/%-client-protocol.h : $(top_srcdir)/protocol/%.xml
-	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(wayland_scanner) client-header < $< > $@
+	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(WAYLAND_SCANNER) client-header < $< > $@
