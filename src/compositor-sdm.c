@@ -614,6 +614,8 @@ on_pageflip(int fd, uint32_t mask, void *data)
         if (output->recorder)
             weston_output_schedule_repaint(&output->base);
     }
+
+    return 0;
 }
 
 static int

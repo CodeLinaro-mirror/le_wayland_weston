@@ -151,6 +151,8 @@ int GetDisplayInfos(void)
               error);
         return error;
     }
+
+    return 0;
 }
 
 char *GetConnectorName(uint32_t display_id)

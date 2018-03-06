@@ -466,8 +466,13 @@ DisplayError SdmDisplay::AddGeometryLayerToLayerStack(struct drm_output *output,
 int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
                         struct LayerGeometry **fb_glayer) {
     struct LayerGeometry *fb_layer;
+
     *fb_glayer = fb_layer = reinterpret_cast<struct LayerGeometry *> \
                               (zalloc(sizeof *fb_layer));
+    if (!fb_layer) {
+        DLOGE("out of memory for allocating fb layer\n");
+        return -1;
+    }
 
     fb_layer->width = output->base.current_mode->width;
     fb_layer->height = output->base.current_mode->height;
@@ -534,6 +539,11 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
 
     *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
                            (zalloc(sizeof *layer));
+    if (!layer) {
+        DLOGE("out of memory for allocating layer\n");
+        return -1;
+    }
+
     /* Prepare layer buffer information */
     layer->width = es->width;
     layer->height = es->height;
@@ -1507,6 +1517,8 @@ int SdmDisplayProxy::HandleHotplug(bool connected) {
       DLOGI("Display is already disconnected.");
     }
   }
+
+  return 0;
 }
 
 void *SdmDisplayProxy::UeventThread(void *context) {
