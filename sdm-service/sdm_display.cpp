@@ -145,9 +145,9 @@ DisplayError SdmDisplay::CreateDisplay() {
     SdmDisplayDebugger::Get()->GetProperty("sys.weston_disable_hdr_tm", &tone_mapper_disable);
     if (!tone_mapper_disable && !disable_hdr_handling_) {
         DLOGI("Tone Mapper Enabled");
-        //tone_mapper_ = new SdmDisplayToneMapper(buffer_allocator_);
+        tone_mapper_ = new SdmDisplayToneMapper(buffer_allocator_);
 
-        //if (!tone_mapper_)
+        if (!tone_mapper_)
             DLOGI("Failed to create tone_mapper instance");
     }
 
@@ -176,8 +176,8 @@ DisplayError SdmDisplay::DestroyDisplay() {
     error = core_intf_->DestroyDisplay(display_intf_);
     display_intf_ = NULL;
 
-   // delete tone_mapper_;
-    //tone_mapper_ = nullptr;
+    delete tone_mapper_;
+    tone_mapper_ = nullptr;
 
     return error;
 }
@@ -870,7 +870,7 @@ DisplayError SdmDisplay::PreCommit()
 
     if (layer_stack_.flags.hdr_present) {
         int status = -1;
-        /*if (tone_mapper_) {
+        if (tone_mapper_) {
             status = tone_mapper_->HandleToneMap(&layer_stack_);
             if (status != 0) {
                 DLOGE("Error handling HDR in ToneMapper, status code = %d", status);
@@ -882,7 +882,7 @@ DisplayError SdmDisplay::PreCommit()
         if (tone_mapper_)
             tone_mapper_->Terminate();
         else
-            DLOGD("ToneMap Terminate failed due to invalid tone_mapper_ instance"); */
+            DLOGD("ToneMap Terminate failed due to invalid tone_mapper_ instance");
     }
 
     return error;
@@ -891,11 +891,11 @@ DisplayError SdmDisplay::PreCommit()
 DisplayError SdmDisplay::PostCommit()
 {
     DisplayError error = kErrorNone;
-    /*
+
     if (tone_mapper_ && tone_mapper_->IsActive()) {
         tone_mapper_->PostCommit(&layer_stack_);
      }
-     */
+
     //Iterate through the layer buffer and close release fences
     for (uint32_t i = 0; i < layer_stack_.layers.size(); i++) {
         Layer *layer = layer_stack_.layers.at(i);
