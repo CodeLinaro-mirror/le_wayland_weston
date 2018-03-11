@@ -387,6 +387,7 @@ int get_drm_master_fd() {
 
     int fd = SdmDisplayInterface::GetDrmMasterFd();
 
+    SdmDisplayInterface::UseExternalGemHandle();
     #if SDM_DISPLAY_DEBUG
     DLOGD("fd is: %d \n", fd);
     #endif
