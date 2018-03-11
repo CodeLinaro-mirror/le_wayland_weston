@@ -362,6 +362,7 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
     layer_buffer->flags.secure = layer_geometry->flags.secure_present;
     layer_buffer->flags.video = layer_geometry->flags.video_present;
     layer_buffer->flags.hdr = layer_geometry->flags.hdr_present;
+    layer_buffer->flags.external_gem_handle = true;
 
     if (layer_buffer->flags.hdr) {
       layer_buffer->color_metadata = layer_geometry->color_metadata;
