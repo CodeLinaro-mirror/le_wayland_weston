@@ -746,8 +746,6 @@ drm_assign_planes(struct weston_output *output_base)
 
         /* Skip view that doesn't belong to the output, no need to increase overhead for SDM */
         if (!(ev->output_mask & (1u << output->base.id))) {
-            weston_view_move_to_plane(ev, primary);
-            ev->psf_flags = 0;
             pixman_region32_fini(&surface_overlap);
             pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
             continue;
