@@ -74,6 +74,7 @@ class SdmDisplayInterface {
     virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
     virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
     virtual DisplayError RegisterCb(int display_id, vblank_cb_t vbcb) = 0;
+    virtual DisplayError UpdateHPDClockState(uint32_t state) = 0;
     virtual DisplayError EnablePllUpdate(int32_t enable) = 0;
     virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
     virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
@@ -99,6 +100,7 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
+    DisplayError UpdateHPDClockState(uint32_t state);
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
@@ -124,6 +126,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
+    DisplayError UpdateHPDClockState(uint32_t state);
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
 
@@ -240,6 +243,9 @@ class SdmDisplayProxy {
       // TODO: move vblank_cb up?
       hotplug_cb_ = cbs->hotplug_cb;
       return display_intf_->RegisterCb(display_id, cbs->vblank_cb);
+    }
+    DisplayError UpdateHPDClockState(uint32_t state) {
+      return display_intf_->UpdateHPDClockState(state);
     }
     DisplayError EnablePllUpdate(int32_t enable) {
       return display_intf_->EnablePllUpdate(enable);

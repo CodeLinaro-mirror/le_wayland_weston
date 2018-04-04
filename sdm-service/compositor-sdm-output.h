@@ -158,6 +158,7 @@ struct drm_output {
        uint32_t format;
 
        enum dpms_enum dpms;
+       enum hpd_enum hpd;
 
        int frame_pending;
        int page_flip_pending;

@@ -211,6 +211,11 @@ enum dpms_enum {
 	WESTON_DPMS_OFF
 };
 
+enum hpd_enum {
+	WESTON_HPD_ON = 0,
+	WESTON_HPD_OFF = 1
+};
+
 struct weston_output {
 	uint32_t id;
 	char *name;
@@ -281,6 +286,7 @@ struct weston_output {
 	int32_t backlight_current;
 	void (*set_backlight)(struct weston_output *output, uint32_t value);
 	void (*set_dpms)(struct weston_output *output, enum dpms_enum level);
+	void (*set_hpd)(struct weston_output *output, enum hpd_enum level);
 
 	int connection_internal;
 	uint16_t gamma_size;
