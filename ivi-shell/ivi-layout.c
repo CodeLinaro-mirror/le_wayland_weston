@@ -553,7 +553,8 @@ calc_transformation_matrix(struct ivi_rectangle *source_rect,
 	weston_matrix_translate(m, -source_center_x, -source_center_y, 0.0f);
 
 	get_rotate_values(orientation, &vsin, &vcos);
-	weston_matrix_rotate_xy(m, vcos, vsin);
+	if(orientation > WL_OUTPUT_TRANSFORM_NORMAL)
+		weston_matrix_rotate_xy(m, vcos, vsin);
 
 	get_scale(orientation,
 		  dest_rect->width,
