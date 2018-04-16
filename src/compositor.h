@@ -574,6 +574,9 @@ struct weston_renderer {
 			       uint32_t width, uint32_t height);
 	void (*repaint_output)(struct weston_output *output,
 			       pixman_region32_t *output_damage);
+	void (*capture_screen)(struct weston_output *output,
+			       struct weston_buffer *buffer,
+			       pixman_region32_t *output_damage);
 	void (*flush_damage)(struct weston_surface *surface);
 	void (*attach)(struct weston_surface *es, struct weston_buffer *buffer);
 	void (*surface_set_color)(struct weston_surface *surface,
@@ -867,6 +870,9 @@ struct weston_view {
 
 	/* Per-surface Presentation feedback flags, controlled by backend. */
 	uint32_t psf_flags;
+
+	/* Indicate if this view is used for screen capture. */
+	bool is_capture_view;
 };
 
 struct weston_surface_state {

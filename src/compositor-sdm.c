@@ -76,6 +76,7 @@
 #include "presentation_timing-server-protocol.h"
 #include "linux-dmabuf.h"
 #include "gbm-buffer-backend.h"
+#include "screen-capture.h"
 #include "../sdm-service/sdm_display_connect.h"
 #include "../sdm-service/compositor-sdm-output.h"
 #include <pthread.h>
@@ -415,8 +416,8 @@ drm_waitvblank_pipe(struct drm_output *output)
 static void destroy_sdm_layer(struct sdm_layer *layer);
 
 static int
-drm_output_repaint(struct weston_output *output_base,
-           pixman_region32_t *damage)
+output_repaint(struct weston_output *output_base,
+           pixman_region32_t *damage, bool is_virtual_output)
 {
     struct drm_output *output = (struct drm_output *) output_base;
     struct drm_backend *backend =
@@ -428,7 +429,7 @@ drm_output_repaint(struct weston_output *output_base,
     if (output->destroy_pending)
         return -1;
 
-    if (!output->next) {
+    if (!is_virtual_output && !output->next) {
         drm_output_render(output, damage);
     }
     assert(wl_list_empty(&output->plane_flip_list));
@@ -441,10 +442,13 @@ drm_output_repaint(struct weston_output *output_base,
 
     if (ret) {
         weston_log("fail to commit to sdm display! err=%d\n", ret);
-        /* This is workaround for IVI shell. If two consecutive frames commit no
-         * surfaces, repaint skip the commit, we need to do finish frame here.
-         */
-        drm_output_release_fb(output, output->current);
+
+        if (!is_virtual_output) {
+            /* This is workaround for IVI shell. If two consecutive frames commit no
+             * surfaces, repaint skip the commit, we need to do finish frame here.
+             */
+            drm_output_release_fb(output, output->current);
+        }
         output->current = output->next;
         output->next = NULL;
         output->frame_pending = 0;
@@ -456,10 +460,56 @@ drm_output_repaint(struct weston_output *output_base,
         assert(wl_list_empty(&output->commited_layer_list));
         wl_list_insert_list(&output->commited_layer_list, &output->sdm_layer_list);
         wl_list_init(&output->sdm_layer_list);
-        wl_event_source_timer_update(output->finish_frame_timer, 16);
+        if (!is_virtual_output)
+            wl_event_source_timer_update(output->finish_frame_timer, 16);
     } else {
         output->frame_pending = 1;
     }
+
+    return 0;
+}
+
+static void
+do_screen_capture(struct screen_capture *screen_cap,
+                         pixman_region32_t *damage)
+{
+    struct drm_backend *backend = screen_cap->compositor->backend;
+    struct screen_capture_buffer *cap_buf = screen_cap->next;
+
+    /*
+     * Decrease the attached refcnt after increasing composition refcnt to
+     * avoid releasing buffer in advance
+     */
+    weston_buffer_reference(&screen_cap->buf_ref, cap_buf->buffer);
+    weston_buffer_reference(&cap_buf->buf_ref, NULL);
+
+    if (screen_cap->fallback_gpu) {
+        screen_cap->compositor->renderer->capture_screen(screen_cap->virtual_output,
+                                                         cap_buf->buffer,
+                                                         damage);
+        /* Release the buffer once GPU composition is completed */
+        weston_buffer_reference(&screen_cap->buf_ref, NULL);
+        free(cap_buf);
+        screen_cap->next = NULL;
+        screen_cap->view = NULL;
+    } else {
+        output_repaint(screen_cap->virtual_output, damage, true);
+    }
+}
+
+static int
+drm_output_repaint(struct weston_output *output_base,
+           pixman_region32_t *damage)
+{
+    struct drm_backend *backend =
+        (struct drm_backend *)output_base->compositor->backend;
+    struct screen_capture *screen_cap = backend->screen_cap;
+
+    output_repaint(output_base, damage, false);
+
+    /* Do output repaint for virtual output. */
+    if (is_capture_ready(screen_cap, output_base) && screen_cap->next)
+        do_screen_capture(screen_cap, damage);
 
     return 0;
 }
@@ -691,7 +741,16 @@ is_skip_view(struct weston_view *ev, struct drm_output *output)
 }
 
 static void
-drm_assign_planes(struct weston_output *output_base)
+prepare_virtual_output(struct drm_output *virtual_output, struct weston_output *output_base)
+{
+    virtual_output->base = *output_base;
+
+    /* clear the list which is established by the original output */
+    wl_list_init(&virtual_output->sdm_layer_list);
+}
+
+static int
+assign_planes(struct weston_output *output_base, bool is_virtual_output)
 {
     struct drm_backend *b =
         (struct drm_backend *)output_base->compositor->backend;
@@ -701,6 +760,8 @@ drm_assign_planes(struct weston_output *output_base)
     struct weston_plane *primary, *next_plane;
     struct sdm_layer *sdm_layer, *next_sdm_layer;
     output->view_count = 0;
+    bool has_GPU_composition = false;
+
     assert(wl_list_empty(&output->sdm_layer_list));
 
     /*
@@ -730,6 +791,7 @@ drm_assign_planes(struct weston_output *output_base)
         bool is_cursor = false;
         bool is_skip = false;
         struct weston_surface *es = ev->surface;
+        struct gbm_buffer *gbm_buf = NULL;
 
         /* Test whether this buffer can ever go into a plane:
          * non-shm, or small enough to be a cursor.
@@ -739,13 +801,19 @@ drm_assign_planes(struct weston_output *output_base)
          * renderer and since the pixman renderer keeps a reference
          * to the buffer anyway, there is no side effects.
          */
-        if (b->use_pixman ||
-            (es->buffer_ref.buffer &&
-            (!wl_shm_buffer_get(es->buffer_ref.buffer->resource) ||
-             (ev->surface->width <= 64 && ev->surface->height <= 64))))
-            es->keep_buffer = true;
-        else
-            es->keep_buffer = false;
+        if (!is_virtual_output) {
+            if (b->use_pixman ||
+                (es->buffer_ref.buffer &&
+                (!wl_shm_buffer_get(es->buffer_ref.buffer->resource) ||
+                 (ev->surface->width <= 64 && ev->surface->height <= 64))))
+                es->keep_buffer = true;
+            else
+                es->keep_buffer = false;
+        }
+
+        /* Skip the screen capture view as it's not used for display */
+        if (is_screen_capture_view(ev))
+            continue;
 
         pixman_region32_init(&surface_overlap);
         pixman_region32_intersect(&surface_overlap, &overlap,
@@ -780,19 +848,81 @@ drm_assign_planes(struct weston_output *output_base)
         ev = sdm_layer->view;
         /* Move to primary plane if Strategy set it to GPU composition */
         if (sdm_layer->composition_type == SDM_COMPOSITION_GPU) {
-            weston_view_move_to_plane(ev, next_plane);
-            ev->psf_flags = 0;
+            if (!is_virtual_output) {
+                weston_view_move_to_plane(ev, next_plane);
+                ev->psf_flags = 0;
+            }
+
             destroy_sdm_layer(sdm_layer);
+            has_GPU_composition = true;
         } else {
-            /* Composed by Display Hardware directly */
-            /* ToDo(User): handle scenarios if SDE composition is not possible */
-            ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
-            /* Set the view's plane back to NULL so that it is not composed by GPU */
-            sdm_layer->view->plane = NULL;
+            if (!is_virtual_output) {
+                /* Composed by Display Hardware directly */
+                /* ToDo(User): handle scenarios if SDE composition is not possible */
+                ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
+                /* Forget the view as it might be destroyed at anytime */
+                sdm_layer->view = NULL;
+            }
+        }
+    }
+
+err_out:
+    /*
+     * Display WB2 composition requires all views must be overlay. Remove all views once
+     * any view goes through GPU composition.
+     */
+    if (is_virtual_output && has_GPU_composition) {
+        /* fallback to gpu composition if no layer*/
+        wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
+            destroy_sdm_layer(sdm_layer);
         }
     }
 
     pixman_region32_fini(&overlap);
+
+    return has_GPU_composition;
+}
+
+static void
+drm_assign_planes(struct weston_output *output_base)
+{
+    struct drm_backend *b =
+        (struct drm_backend *)output_base->compositor->backend;
+    struct screen_capture *screen_cap = b->screen_cap;
+    bool has_GPU_composition = false;
+
+    /* Do assign planes for normal output */
+    has_GPU_composition = assign_planes(output_base, false);
+
+    /*
+     * Do assign planes for virtual output. If GPU composition already happens,
+     * no need to check if display WB2 composition can work again as the HW pipe
+     * resource is already stressed.
+     * If the last attached buffer has not been consumed yet, skip this commit
+     * until it's consumed to guarantee each client buffer has content update.
+     */
+    if (is_capture_ready(screen_cap, output_base) &&
+        !wl_list_empty(&screen_cap->attached_buf_list) &&
+        !screen_cap->next) {
+        /* Pick the first entry in the attached list */
+        screen_cap->next = container_of(screen_cap->attached_buf_list.next,
+                                   struct screen_capture_buffer, link);
+        wl_list_remove(&screen_cap->next->link);
+
+        if (!has_GPU_composition) {
+            struct screen_capture_buffer *cap_buf = NULL;
+            struct drm_output *virtual_output = (struct drm_output *)screen_cap->virtual_output;
+
+            /* Some settings of mirror output may be changed here, need to update them
+             * to virtual output as they will be used by SDM and GPU composition. */
+            prepare_virtual_output(virtual_output, output_base);
+
+            /* TODO: Update output buffer */
+            screen_cap->fallback_gpu = assign_planes(virtual_output, true);
+        } else {
+            screen_cap->fallback_gpu = true;
+        }
+    }
 
     return;
 }
@@ -1762,7 +1892,7 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
     /* TODO (user): To get make, model, serial no. from SDM interface */
     output->base.name = GetConnectorName(display_id);
     output->base.make = "unknown";
-    output->base.model = "unknown";
+    output->base.model = strdup(output->base.name);
     output->base.serial_number = "unknown";
     wl_list_init(&output->base.mode_list);
     /* TODO (user): remove following line of code: */
@@ -2506,7 +2636,9 @@ drm_backend_create(struct weston_compositor *compositor,
                    "support failed.\n");
     }
 
-
+    if (screen_capture_setup(compositor) < 0)
+        weston_log("Error: initializing creen_capture_setup "
+               "support failed.\n");
     compositor->backend = &b->base;
 
     return b;

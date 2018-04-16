@@ -98,6 +98,8 @@ weston_SOURCES =					\
 	src/linux-dmabuf.h				\
 	src/gbm-buffer-backend.c			\
 	src/gbm-buffer-backend.h			\
+	src/screen-capture.c				\
+	src/screen-capture.h				\
 	shared/helpers.h				\
 	shared/matrix.c					\
 	shared/matrix.h					\
@@ -125,6 +127,8 @@ nodist_weston_SOURCES =					\
 	protocol/pll-server-protocol.h			\
 	protocol/gbm-buffer-backend-protocol.c		\
 	protocol/gbm-buffer-backend-server-protocol.h	\
+	protocol/screen-capture-protocol.c		\
+	protocol/screen-capture-server-protocol.h	\
 	protocol/linux-dmabuf-protocol.c		\
 	protocol/linux-dmabuf-server-protocol.h
 
@@ -526,6 +530,7 @@ weston_presentation_shm_LDADD = $(SIMPLE_CLIENT_LIBS) libshared.la -lm
 weston_multi_resource_SOURCES = clients/multi-resource.c
 weston_multi_resource_CFLAGS = $(AM_CFLAGS) $(SIMPLE_CLIENT_CFLAGS)
 weston_multi_resource_LDADD = $(SIMPLE_CLIENT_LIBS) libshared.la -lrt -lm
+
 endif
 
 if BUILD_SIMPLE_EGL_CLIENTS
@@ -794,7 +799,11 @@ BUILT_SOURCES +=					\
 	protocol/ivi-application-protocol.c		\
 	protocol/ivi-application-client-protocol.h	\
 	protocol/pll-client-protocol.h			\
-	protocol/pll-protocol.c
+	protocol/pll-protocol.c				\
+	protocol/gbm-buffer-backend-client-protocol.h	\
+	protocol/gbm-buffer-backend-protocol.c		\
+	protocol/screen-capture-client-protocol.h	\
+	protocol/screen-capture-protocol.c
 
 westondatadir = $(datadir)/weston
 dist_westondata_DATA =				\
@@ -1379,7 +1388,8 @@ EXTRA_DIST +=					\
 	protocol/ivi-hmi-controller.xml		\
 	protocol/linux-dmabuf.xml		\
 	protocol/pll.xml			\
-	protocol/gbm-buffer-backend.xml
+	protocol/gbm-buffer-backend.xml		\
+	protocol/screen-capture.xml
 
 #
 # manual test modules in tests subdirectory
