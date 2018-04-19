@@ -81,6 +81,7 @@ class SdmDisplayInterface {
     virtual struct drm_output * GetOutput() = 0;
 
     static int GetDrmMasterFd();
+    static void UseExternalGemHandle();
 };
 
 class SdmNullDisplay : public SdmDisplayInterface {

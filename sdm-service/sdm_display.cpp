@@ -96,6 +96,13 @@ int SdmDisplayInterface::GetDrmMasterFd() {
   return fd;
 }
 
+void SdmDisplayInterface::UseExternalGemHandle() {
+  DRMMaster *master = nullptr;
+  int ret = DRMMaster::GetInstance(&master);
+
+  master->UseExternalGemHandle();
+}
+
 SdmDisplay::SdmDisplay(DisplayOrder order, DisplayType type, CoreInterface *core_intf) {
     display_order_ = order;
     display_type_ = type;
