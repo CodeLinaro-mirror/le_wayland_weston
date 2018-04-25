@@ -668,7 +668,15 @@ static bool
 is_skip_view(struct weston_view *ev, struct drm_output *output)
 {
     struct weston_surface *es = ev->surface;
+    struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
     bool skip = false;
+
+    /* Don't support hw rotate now */
+    if (viewport->buffer.transform != output->base.transform)
+        return true;
+
+    if (!drm_view_transform_supported(ev))
+        return true;
 
     /* skip the view which is overlapped with multiple output */
     if (ev->output_mask != (1u << output->base.id))
