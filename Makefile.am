@@ -71,6 +71,8 @@ endif
 if ENABLE_FBDEV_COMPOSITOR
 COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
 COMPOSITOR_CFLAGS += -DCOMPILE_WITH_FBDEV -DENABLE_EGL $(AM_CPPFLAGS)
+COMPOSITOR_LIBS += -lsdmutils -lsdmcore
+COMPOSITOR_CFLAGS += -DUSE_SDM
 endif
 
 weston_LDFLAGS = -export-dynamic
@@ -417,7 +419,13 @@ fbdev_backend_la_CFLAGS =			\
 fbdev_backend_la_SOURCES =			\
 	src/compositor-fbdev.c			\
 	shared/helpers.h			\
-	$(INPUT_BACKEND_SOURCES)
+	$(INPUT_BACKEND_SOURCES)		\
+	sdm-service_fb/sdm_display.cpp		\
+	sdm-service_fb/sdm_display_debugger.cpp	\
+	sdm-service_fb/sdm_display_buffer_allocator.cpp \
+	sdm-service_fb/sdm_display_buffer_sync_handler.cpp \
+	sdm-service_fb/sdm_display_socket_handler.cpp \
+	sdm-service_fb/sdm_display_connect.cpp
 endif
 
 if ENABLE_RDP_COMPOSITOR

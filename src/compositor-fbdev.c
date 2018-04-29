@@ -39,7 +39,10 @@
 #include <unistd.h>
 #include <linux/fb.h>
 #include <linux/input.h>
-
+#ifdef USE_SDM
+#include <stdint.h>
+#include <linux/msm_mdp.h>
+#endif
 #include <libudev.h>
 
 #ifdef USE_GBM
@@ -121,6 +124,11 @@ static void surface_acquire_buffer(struct fbdev_output *output);
 static void surface_release_buffer(struct fbdev_output *output);
 static void surface_create(struct fbdev_output *output, struct fbdev_backend *backend);
 static void create_buff_alloc_device(int fb_fd, struct fbdev_backend * backend);
+
+#ifdef USE_SDM
+int display_id = -1;
+int line_length = -1;
+#endif
 
 struct gl_renderer_interface *gl_renderer;
 
@@ -219,18 +227,47 @@ fbdev_output_display(struct fbdev_output *output)
 	}
 }
 
+#ifdef USE_SDM
+static int
+get_output_fd(struct fbdev_output *output)
+{
+	struct msmfb_metadata metadata;
+	int fd = open(output->device, O_RDWR | O_CLOEXEC);
+	if (fd > 0) {
+		weston_log("%s(%d): FB opened \n",__func__,__LINE__);
+    }
+	memset(&metadata, 0 , sizeof(metadata));
+	metadata.op = metadata_op_get_ion_fd;
+	if (ioctl(fd, MSMFB_METADATA_GET, &metadata) == -1) {
+		weston_log("%s(%d): MSMFB_METADATA_GET ioctl failed \n",__func__,__LINE__);
+		return -1;
+	}
+	if(metadata.data.fbmem_ionfd < 0) {
+		weston_log("%s(%d): Invalid ion fd handle %d\n",__func__,__LINE__, metadata.data.fbmem_ionfd);
+		return -1;
+  }
+	close(fd);
+	return metadata.data.fbmem_ionfd;
+}
+#endif
+
 static int
 fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage)
 {
 	struct fbdev_output *output = to_fbdev_output(base);
 	struct fbdev_backend *fbb = output->backend;
 	struct weston_compositor *ec = fbb->compositor;
-
+	static int fd = -1;
 	if (fbb->use_pixman) {
 		fbdev_output_repaint_pixman(base,damage);
+		if(fd < 0) {
+			fd = get_output_fd(output);
+		}
 	} else {
 		ec->renderer->repaint_output(base, damage);
 		surface_acquire_buffer(output);
+		fd = output->buf_alloc.compositor_bo->ion_fd;
+
 		/* Update the damage region. */
 		pixman_region32_subtract(&ec->primary_plane.damage,
 	                         &ec->primary_plane.damage, damage);
@@ -238,7 +275,16 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage)
 		wl_event_source_timer_update(output->finish_frame_timer,
 	                             1000000 / output->mode.refresh);
 	}
+
+#ifdef USE_SDM
+	int ret = 0;
+	ret = Commit(display_id, fd);
+	if (ret) {
+		weston_log("fail to commit to sdm display! err=%d\n", ret);
+	}
+#else
 	fbdev_output_display(output);
+#endif
 
 	return 0;
 }
@@ -379,6 +425,9 @@ fbdev_query_screen_info(struct fbdev_output *output, int fd,
 
 	info->buffer_length = fixinfo.smem_len;
 	info->line_length = fixinfo.line_length;
+#ifdef USE_SDM
+	line_length = fixinfo.line_length;
+#endif
 	strncpy(info->id, fixinfo.id, sizeof(info->id));
 
 	info->pixel_format = calculate_pixman_format(&varinfo, &fixinfo);
@@ -615,9 +664,7 @@ fbdev_output_create(struct fbdev_backend *backend,
 		setenv("HYBRIS_EGLPLATFORM", "wayland", 1);
 		surface_create(output, backend);
 		void *surface = NULL;
-#ifdef USE_GBM
 		surface = output->buf_alloc.surface;
-#endif
 		if (gl_renderer->output_create(&output->base,
 					       (EGLNativeWindowType)surface, NULL,
 					       gl_renderer->opaque_attribs,
@@ -938,6 +985,18 @@ fbdev_backend_create(struct weston_compositor *compositor, int *argc, char *argv
 	if (fbdev_output_create(backend, param->device) < 0)
 		goto out_launcher;
 
+#ifdef USE_SDM
+    /* begin SDM initialization */
+    int rc = CreateCore();
+    rc = GetFirstDisplayType(&display_id);
+    weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
+    /* and create default display */
+    rc = CreateDisplay(display_id);
+    weston_log("CreateDisplay: ret = %d \n", rc);
+    SetLineLength(line_length);
+#endif
+
+
 	udev_input_init(&backend->input, compositor, backend->udev, seat_id);
 
 	compositor->backend = &backend->base;
@@ -1008,7 +1067,7 @@ static void
 surface_release_buffer(struct fbdev_output *output)
 {
 #ifdef USE_GBM
-gbm_surface_release_buffer(output->buf_alloc.surface,output->buf_alloc.compositor_bo);
+	gbm_surface_release_buffer(output->buf_alloc.surface,output->buf_alloc.compositor_bo);
 #endif
 }
 
