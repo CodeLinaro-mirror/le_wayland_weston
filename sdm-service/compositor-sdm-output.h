@@ -158,6 +158,7 @@ struct drm_output {
        uint32_t format;
 
        enum dpms_enum dpms;
+       enum hpd_enum hpd;
 
        int frame_pending;
        int page_flip_pending;
@@ -190,8 +191,8 @@ struct drm_output {
 
        struct wl_event_source *finish_frame_timer;
 
-       int vblank_ev_fd;
-       struct wl_event_source *vblank_ev_source;
+       int pageflip_ev_fd;
+       struct wl_event_source *pageflip_ev_source;
        struct {
            unsigned int frame;
            unsigned int sec;

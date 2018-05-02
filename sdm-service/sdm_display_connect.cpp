@@ -452,6 +452,11 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
     return kErrorNone;
 }
 
+int UpdateHPDClockState(int display_id, uint state)
+{
+    return display_[display_id]->UpdateHPDClockState(state);
+}
+
 int EnablePllUpdate(int display_id, int enable)
 {
     return display_[display_id]->EnablePllUpdate(enable);

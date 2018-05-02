@@ -245,6 +245,20 @@ int SetVSyncState(int display_id, bool enable, struct drm_output *output);
 */
 int get_drm_master_fd();
 
+/*! @brief Method for updating HPD clock state.
+
+    @details enable or disable HPD clock.
+
+    @param[in] display_id \link int \endlink
+
+    @param[in] state \link uint \endlink
+
+    @return \link int \endlink
+
+    @sa
+*/
+int UpdateHPDClockState(int display_id, uint state);
+
 /*! @brief Method for enable PLL update function.
 
     @details enable or disable PLL update function.
