@@ -179,6 +179,24 @@ fbdev_output_repaint_pixman(struct weston_output *base, pixman_region32_t *damag
 	                             1000000 / output->mode.refresh);
 }
 
+static void
+fbdev_output_display(struct fbdev_output *output)
+{
+	int fd = open(output->device, O_RDWR | O_CLOEXEC);
+	struct fb_var_screeninfo varinfo;
+	if (ioctl(fd, FBIOGET_VSCREENINFO, &varinfo) < 0) {
+		weston_log("FBIOGET_VSCREENINFO failure \n ");
+	}
+	varinfo.grayscale=0;
+	varinfo.yres_virtual = output->fb_info.y_resolution;
+	varinfo.yoffset = 0;
+	varinfo.bits_per_pixel = 32;
+	if (ioctl(fd,  FBIOPUT_VSCREENINFO, &varinfo) < 0) {
+		weston_log("FBIOPUT_VSCREENINFO failure \n ");
+	}
+	close(fd);
+}
+
 static int
 fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage)
 {
@@ -197,6 +215,7 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage)
 		wl_event_source_timer_update(output->finish_frame_timer,
 	                             1000000 / output->mode.refresh);
 	}
+	fbdev_output_display(output);
 
 	return 0;
 }
@@ -269,7 +288,7 @@ calculate_pixman_format(struct fb_var_screeninfo *vinfo,
 
 	/* Work out the format type from the offsets. We only support RGBA and
 	 * ARGB at the moment. */
-	type = PIXMAN_TYPE_OTHER;
+	type = PIXMAN_TYPE_ARGB;
 
 	if ((vinfo->transp.offset >= vinfo->red.offset ||
 	     vinfo->transp.length == 0) &&

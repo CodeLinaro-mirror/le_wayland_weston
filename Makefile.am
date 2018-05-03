@@ -49,7 +49,6 @@ AM_CPPFLAGS = 					\
 	-I$(top_builddir)/tests			\
 	-I$(top_srcdir)/shared			\
 	-I$(top_builddir)/protocol		\
-	-I$(top_srcdir)/sdm-service		\
 	-DDATADIR='"$(datadir)"'		\
 	-DMODULEDIR='"$(moduledir)"'		\
 	-DLIBEXECDIR='"$(libexecdir)"'		\
@@ -67,6 +66,11 @@ COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
 COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
 COMPOSITOR_LIBS += -lsdmutils -lsdmcore -lsdedrm
 COMPOSITOR_LIBS += -lgpu_tonemapper -lhdr_tm
+endif
+
+if ENABLE_FBDEV_COMPOSITOR
+COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
+COMPOSITOR_CFLAGS += -DCOMPILE_WITH_FBDEV -DENABLE_EGL $(AM_CPPFLAGS)
 endif
 
 weston_LDFLAGS = -export-dynamic
@@ -146,7 +150,7 @@ libsession_helper_la_SOURCES =			\
 	src/launcher-util.h
 libsession_helper_la_CFLAGS = $(AM_CFLAGS) $(LIBDRM_CFLAGS) $(PIXMAN_CFLAGS) $(COMPOSITOR_CFLAGS)
 
-libsession_helper_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service --std=c++11 -std=c++11 \
+libsession_helper_la_CPPFLAGS = -Wundef -Wno-trigraphs --std=c++11 -std=c++11 \
 	$(COMPOSITOR_CFLAGS)			\
 	$(EGL_CFLAGS)				\
 	$(DRM_COMPOSITOR_CFLAGS)		\
@@ -264,6 +268,8 @@ INPUT_BACKEND_SOURCES =				\
 	shared/helpers.h
 
 if ENABLE_DRM_COMPOSITOR
+AM_CPPFLAGS += -I$(top_srcdir)/sdm-service
+libsession_helper_la_CPPFLAGS += -I$(top_src_dir)/sdm-service
 module_LTLIBRARIES += drm-backend.la
 drm_backend_la_LDFLAGS = -module -avoid-version
 drm_backend_la_LIBADD =				\
