@@ -442,6 +442,7 @@ drm_output_repaint(struct weston_output *output_base,
     output->dpms = WESTON_DPMS_ON;
 
     SetVSyncState(display_id, ENABLE, output);
+
     ret = Commit(display_id, output);
     if (ret) {
         weston_log("fail to commit to sdm display! err=%d\n", ret);
@@ -540,7 +541,10 @@ drm_output_update_msc(struct drm_output *output, unsigned int seq)
 static void destroy_sdm_layer(struct sdm_layer *layer);
 
 static void
-vblank_handler(unsigned int frame, unsigned int sec, unsigned int usec,
+drm_output_destroy(struct weston_output *output_base);
+
+static void
+pageflip_handler(unsigned int frame, unsigned int sec, unsigned int usec,
            void *data)
 {
     struct drm_output *output = (struct drm_output *) data;
@@ -550,80 +554,48 @@ vblank_handler(unsigned int frame, unsigned int sec, unsigned int usec,
     output->last_vblank.sec = sec;
     output->last_vblank.usec = usec;
 
-    if (!output->frame_pending)
-        return;
-
-    write(output->vblank_ev_fd, &v, sizeof v);
+    write(output->pageflip_ev_fd, &v, sizeof v);
 }
 
 static int
-on_vblank(int fd, uint32_t mask, void *data)
-{
-   struct drm_output *output = (struct drm_output *) data;
-   struct timespec ts;
-   uint64_t v;
-   uint32_t flags = PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
-                    PRESENTATION_FEEDBACK_KIND_VSYNC |
-                    PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
-   struct sdm_layer *sdm_layer, *next_sdm_layer;
-
-   read(fd, &v, sizeof v);
-
-   if (output->frame_pending) {
-       drm_output_update_msc(output, output->last_vblank.frame);
-       drm_output_release_fb(output, output->current);
-       output->current = output->next;
-       output->next = NULL;
-       output->frame_pending = 0;
-
-       wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->commited_layer_list, link) {
-           destroy_sdm_layer(sdm_layer);
-       }
-
-       assert(wl_list_empty(&output->commited_layer_list));
-       wl_list_insert_list(&output->commited_layer_list, &output->sdm_layer_list);
-       wl_list_init(&output->sdm_layer_list);
-       ts.tv_sec = output->last_vblank.sec;
-       ts.tv_nsec = output->last_vblank.usec * 1000;
-       weston_output_finish_frame(&output->base, &ts, flags);
-   }
-
-   return 1;
-}
-
-
-static void
-drm_output_destroy(struct weston_output *output_base);
-
-/* TODO (user): Need to remove page_flip_handler */
-static void
-page_flip_handler(int fd, unsigned int frame,
-          unsigned int sec, unsigned int usec, void *data)
+on_pageflip(int fd, uint32_t mask, void *data)
 {
     struct drm_output *output = (struct drm_output *) data;
     struct timespec ts;
+    uint64_t v;
     uint32_t flags = PRESENTATION_FEEDBACK_KIND_VSYNC |
              PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
              PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
+    struct sdm_layer *sdm_layer, *next_sdm_layer;
 
-    drm_output_update_msc(output, frame);
+    read(fd, &v, sizeof v);
+
+    drm_output_update_msc(output, output->last_vblank.frame);
 
     /* We don't set page_flip_pending on start_repaint_loop, in that case
      * we just want to page flip to the current buffer to get an accurate
      * timestamp */
-    if (output->page_flip_pending) {
+    if (output->frame_pending) {
         drm_output_release_fb(output, output->current);
         output->current = output->next;
         output->next = NULL;
-    }
+        output->frame_pending = 0;
 
-    output->page_flip_pending = 0;
+        wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->commited_layer_list, link) {
+            destroy_sdm_layer(sdm_layer);
+        }
+
+        assert(wl_list_empty(&output->commited_layer_list));
+        wl_list_insert_list(&output->commited_layer_list, &output->sdm_layer_list);
+        wl_list_init(&output->sdm_layer_list);
+    }
 
     if (output->destroy_pending)
         drm_output_destroy(&output->base);
     else if (!output->frame_pending) {
-        ts.tv_sec = sec;
-        ts.tv_nsec = usec * 1000;
+        ts.tv_sec = output->last_vblank.sec;
+        ts.tv_nsec = output->last_vblank.usec * 1000;
+
         weston_output_finish_frame(&output->base, &ts, flags);
 
         /* We can't call this from frame_notify, because the output's
@@ -783,32 +755,33 @@ drm_assign_planes(struct weston_output *output_base)
 }
 
 static int
-drm_output_enable_vblank(struct drm_output *output)
+drm_output_enable_pageflip(struct drm_output *output)
 {
      struct wl_event_loop *loop;
 
-     output->vblank_ev_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-     if (output->vblank_ev_fd < 0)
+     output->pageflip_ev_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+     if (output->pageflip_ev_fd < 0)
+
         return -1;
 
      loop = wl_display_get_event_loop(output->base.compositor->wl_display);
-     output->vblank_ev_source = wl_event_loop_add_fd(loop, output->vblank_ev_fd,
-                                                     WL_EVENT_READABLE, on_vblank, output);
+
+     output->pageflip_ev_source = wl_event_loop_add_fd(loop, output->pageflip_ev_fd,
+                                                     WL_EVENT_READABLE, on_pageflip, output);
 
      return 0;
 }
 
-static void
-drm_output_disable_vblank(struct drm_output *output)
+drm_output_disable_pageflip(struct drm_output *output)
 {
-       if (output->vblank_ev_source != NULL) {
-               wl_event_source_remove(output->vblank_ev_source);
-               output->vblank_ev_source = NULL;
+       if (output->pageflip_ev_source != NULL) {
+               wl_event_source_remove(output->pageflip_ev_source);
+               output->pageflip_ev_source = NULL;
        }
 
-       if (output->vblank_ev_fd != -1) {
-               close(output->vblank_ev_fd);
-               output->vblank_ev_fd = -1;
+       if (output->pageflip_ev_fd != -1) {
+               close(output->pageflip_ev_fd);
+               output->pageflip_ev_fd = -1;
        }
 }
 
@@ -840,7 +813,7 @@ drm_output_destroy(struct weston_output *output_base)
         gbm_surface_destroy(output->surface);
     }
 
-    drm_output_disable_vblank(output);
+    drm_output_disable_pageflip(output);
 
     weston_plane_release(&output->fb_plane);
     weston_plane_release(&output->cursor_plane);
@@ -1210,6 +1183,26 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 
         if (ret)
         output->dpms = level;
+}
+
+
+static void
+drm_set_hpd(struct weston_output *output_base, enum hpd_enum state)
+{
+    struct drm_output *output = (struct drm_output *) output_base;
+    struct weston_compositor *ec = output_base->compositor;
+    struct drm_backend *b = (struct drm_backend *)ec->backend;
+
+    int ret = UpdateHPDClockState(display_id, state);
+
+    if (ret) {
+        weston_log("DRM: HPD: status update failed for %d\n",
+               display_id);
+        return;
+    }
+
+    output->hpd = state;
+    return;
 }
 
 static void
@@ -1689,6 +1682,7 @@ hotplug_handler(int disp, bool connected, void *data)
 	output->base.repaint = drm_output_repaint;
 	output->base.assign_planes = drm_assign_planes;
 	output->base.set_dpms = drm_set_dpms;
+	output->base.set_hpd = drm_set_hpd;
 	output->base.switch_mode = drm_output_switch_mode;
 	output->base.enable_ppm = drm_enable_ppm;
 	output->base.set_ppm = drm_set_ppm;
@@ -1698,6 +1692,7 @@ hotplug_handler(int disp, bool connected, void *data)
 	output->base.assign_planes = NULL;
 	output->base.set_backlight = NULL;
 	output->base.set_dpms = NULL;
+	output->base.set_hpd = NULL;
 	output->base.switch_mode = NULL;
 	output->base.enable_ppm = NULL;
 	output->base.set_ppm = NULL;
@@ -1822,7 +1817,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     free(s);
 
     output->dpms_prop = zalloc(sizeof *output->dpms_prop);
-    output->dpms = WESTON_DPMS_OFF;
+
     if (config == OUTPUT_CONFIG_OFF) {
         weston_log("Disabling output %s\n", output->base.name);
         drmModeSetCrtc(b->drm.fd, output->crtc_id,
@@ -1901,6 +1896,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.destroy = drm_output_destroy;
     output->base.assign_planes = drm_assign_planes;
     output->base.set_dpms = drm_set_dpms;
+    output->base.set_hpd = drm_set_hpd;
     output->base.switch_mode = drm_output_switch_mode;
     output->base.enable_ppm = drm_enable_ppm;
     output->base.set_ppm = drm_set_ppm;
@@ -1915,8 +1911,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     weston_compositor_stack_plane(b->compositor, &output->fb_plane,
                       &b->compositor->primary_plane);
 
-    if (drm_output_enable_vblank(output)) {
-        weston_log("Failed to create vblank event\n");
+    if (drm_output_enable_pageflip(output)) {
+        weston_log("Failed to create pageflip event\n");
         goto err_output;
     }
 
@@ -1936,6 +1932,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.native_scale = output->base.current_scale;
 
     SetDisplayState(display_id, WESTON_DPMS_ON);
+    output->dpms = WESTON_DPMS_ON;
     return 0;
 
 err_output:
@@ -1957,8 +1954,9 @@ create_outputs(struct drm_backend *b, uint32_t option_connector,
            struct udev_device *drm_device)
 {
     int x=0, y=0;
+
     if (create_output_for_connector(b, x, y, drm_device) < 0)
-        return -1;
+      return -1;
 
     return 0;
 }
@@ -2438,7 +2436,7 @@ drm_backend_create(struct weston_compositor *compositor,
     weston_log("CreateDisplay: %d successful\n", rc);
 
     /* Now register callbacks with SDM services */
-    sdm_cbs.vblank_cb = vblank_handler,
+    sdm_cbs.pageflip_cb = pageflip_handler,
     sdm_cbs.hotplug_cb = hotplug_handler,
     RegisterCbs(display_id, &sdm_cbs);
 

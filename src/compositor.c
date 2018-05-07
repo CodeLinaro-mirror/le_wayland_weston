@@ -56,6 +56,7 @@
 #include "compositor.h"
 #include "scaler-server-protocol.h"
 #include "pll-server-protocol.h"
+#include "mediabox-platform-server-protocol.h"
 #include "presentation_timing-server-protocol.h"
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
@@ -4494,6 +4495,51 @@ bind_pll(struct wl_client *client,
 				       data, NULL);
 }
 
+
+static void
+mediabox_platform_destroy(struct wl_client *client,
+	       struct wl_resource *resource)
+{
+	wl_resource_destroy(resource);
+}
+
+static void
+mediabox_platform_set_hpd(struct wl_client *client,
+		    struct wl_resource *mediabox_platform,
+		    uint32_t state)
+{
+	struct weston_compositor *compositor = wl_resource_get_user_data(mediabox_platform);
+	struct weston_output *output, *next;
+
+	wl_list_for_each_safe(output, next, &compositor->output_list, link) {
+		if (output->set_hpd)
+			output->set_hpd(output, state);
+		else
+			weston_log("no suitable set_hpd ops available for state %u.\n", state);
+	}
+}
+
+static const struct wl_mediabox_platform_interface mediabox_platform_interface = {
+	mediabox_platform_destroy,
+	mediabox_platform_set_hpd
+};
+
+static void
+bind_mediabox_platform(struct wl_client *client,
+	    void *data, uint32_t version, uint32_t id)
+{
+	struct wl_resource *resource;
+
+	resource = wl_resource_create(client, &wl_mediabox_platform_interface, 1, id);
+	if (resource == NULL) {
+		wl_client_post_no_memory(client);
+		return;
+	}
+
+	wl_resource_set_implementation(resource, &mediabox_platform_interface,
+				       data, NULL);
+}
+
 static void
 destroy_presentation_feedback(struct wl_resource *feedback_resource)
 {
@@ -4682,6 +4728,10 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 
 	if (!wl_global_create(ec->wl_display, &wl_pll_interface, 1,
 			      ec, bind_pll))
+		goto fail;
+
+	if (!wl_global_create(ec->wl_display, &wl_mediabox_platform_interface, 1,
+			      ec, bind_mediabox_platform))
 		goto fail;
 
 	wl_list_init(&ec->view_list);
