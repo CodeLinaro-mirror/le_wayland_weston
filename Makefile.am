@@ -242,6 +242,26 @@ gl_renderer_la_SOURCES =			\
 	shared/helpers.h
 endif
 
+if  ENABLE_FBDEV_COMPOSITOR
+FBDEV_COMPOSITOR_CFLAGS += -DENABLE_EGL	-DADRENO_WAYLAND_PLATFORM
+FBDEV_COMPOSITOR_CFLAGS += -DUSE_GBM
+module_LTLIBRARIES += gl-renderer.la
+gl_renderer_la_LDFLAGS = -module -avoid-version
+gl_renderer_la_LIBADD = $(COMPOSITOR_LIBS) $(EGL_LIBS)
+gl_renderer_la_CFLAGS =				\
+	$(COMPOSITOR_CFLAGS)			\
+	$(FBDEV_COMPOSITOR_CFLAGS)		\
+	$(EGL_CFLAGS)				\
+	$(GL_RENDERER_CFLAGS)			\
+	$(AM_CFLAGS)
+gl_renderer_la_SOURCES =			\
+	src/gl-renderer.h			\
+	src/gl-renderer.c			\
+	src/vertex-clipping.c			\
+	src/vertex-clipping.h			\
+	shared/helpers.h
+endif
+
 if ENABLE_X11_COMPOSITOR
 module_LTLIBRARIES += x11-backend.la
 x11_backend_la_LDFLAGS = -module -avoid-version

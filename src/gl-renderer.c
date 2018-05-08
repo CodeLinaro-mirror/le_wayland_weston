@@ -58,7 +58,9 @@
 #include <float.h>
 #include <assert.h>
 #include <linux/input.h>
+#ifndef COMPILE_WITH_FBDEV
 #include <drm_fourcc.h>
+#endif
 
 #include "gl-renderer.h"
 #include "vertex-clipping.h"
@@ -1816,7 +1818,7 @@ choose_texture_target(struct linux_dmabuf_buffer *dmabuf)
 {
 	if (dmabuf->n_planes > 1)
 		return GL_TEXTURE_EXTERNAL_OES;
-
+#ifndef COMPILE_WITH_FBDEV
 	switch (dmabuf->format & ~DRM_FORMAT_BIG_ENDIAN) {
 	case DRM_FORMAT_YUYV:
 	case DRM_FORMAT_YVYU:
@@ -1827,6 +1829,9 @@ choose_texture_target(struct linux_dmabuf_buffer *dmabuf)
 	default:
 		return GL_TEXTURE_2D;
 	}
+#else
+	return GL_TEXTURE_2D;
+#endif
 }
 
 static GLenum
@@ -1835,6 +1840,7 @@ choose_texture_gbm_buf_target(struct gbm_buffer *gbmbuf)
 	if (gbmbuf->num_planes > 1)
 		return GL_TEXTURE_EXTERNAL_OES;
 
+#ifndef COMPILE_WITH_FBDEV
 	switch (gbmbuf->format & ~DRM_FORMAT_BIG_ENDIAN) {
 	case DRM_FORMAT_YUYV:
 	case DRM_FORMAT_YVYU:
@@ -1845,6 +1851,9 @@ choose_texture_gbm_buf_target(struct gbm_buffer *gbmbuf)
 	default:
 		 return GL_TEXTURE_2D;
 	}
+#else
+	return GL_TEXTURE_2D;
+#endif
 }
 
 static void
