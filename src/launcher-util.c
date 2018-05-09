@@ -436,12 +436,13 @@ weston_launcher_connect(struct weston_compositor *compositor, int tty,
 					  seat_id, tty, sync_drm);
 		if (r < 0) {
 			launcher->logind = NULL;
-			if (geteuid() == 0) {
-				if (setup_tty(launcher, tty) == -1) {
-					free(launcher);
-					return NULL;
-				}
-			} else {
+#ifndef ENABLE_SYS_UID
+			if (geteuid() != 0) {
+				free(launcher);
+				return NULL;
+			}
+#endif
+			if (setup_tty(launcher, tty) == -1) {
 				free(launcher);
 				return NULL;
 			}
