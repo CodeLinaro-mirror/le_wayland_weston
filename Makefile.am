@@ -62,7 +62,7 @@ CLEANFILES = weston.ini				\
 
 bin_PROGRAMS += weston
 if ENABLE_DRM_COMPOSITOR
-COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
+COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno -ldl
 COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
 COMPOSITOR_LIBS += -lsdmutils -lsdmcore -lsdedrm
 COMPOSITOR_LIBS += -lgpu_tonemapper -lhdr_tm
