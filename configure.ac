@@ -175,6 +175,13 @@ if test x$enable_x11_compositor = xyes; then
 fi
 
 
+AC_ARG_ENABLE(sys-uid, [  --enable-sys-uid],,
+	          enable_sys_uid=no)
+if test x$enable_sys_uid = xyes; then
+	AC_DEFINE(ENABLE_SYS_UID, [1], [Allow regular users to launch Weston])
+fi
+
+
 AC_ARG_ENABLE(drm-compositor, [  --enable-drm-compositor],,
 	      enable_drm_compositor=yes)
 AM_CONDITIONAL(ENABLE_DRM_COMPOSITOR, test x$enable_drm_compositor = xyes)
