@@ -106,6 +106,7 @@
       <entry name="y_invert" value="1" summary="contents are y-inverted"/>
       <entry name="interlaced" value="2" summary="content is interlaced"/>
       <entry name="bottom_first" value="4" summary="bottom field first"/>
+      <entry name="early_display" value="8" summary="used by early display"/>
     </enum>
 
     <request name="create">
