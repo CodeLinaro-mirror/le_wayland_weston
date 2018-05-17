@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -200,6 +200,8 @@ struct drm_output {
        } last_vblank;
        // Indicate whether allocation of framebuffer is UBWC or not
        int framebuffer_ubwc;
-       // Indicate whether commit should be skipped or not.
-       bool skip_commit;
+       // Indicate whether commit layers or not
+       bool layer_none_commit;
+       // Indicate previous frame whether commit layers or not, record previous layer_none_commit
+       bool prev_layer_none_commit;
 };
