@@ -1460,6 +1460,9 @@ int
 weston_log_continue(const char *fmt, ...)
 	__attribute__ ((format (printf, 1, 2)));
 
+void
+weston_place_marker(const char *name);
+
 enum {
 	TTY_ENTER_VT,
 	TTY_LEAVE_VT

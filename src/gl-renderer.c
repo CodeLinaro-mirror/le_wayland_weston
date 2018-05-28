@@ -3123,6 +3123,8 @@ gl_renderer_create(struct weston_compositor *ec, EGLenum platform,
 		goto fail_with_error;
 	}
 
+	weston_place_marker("W - eglInitialize");
+
 	if (egl_choose_config(gr, attribs, visual_id,
 			      n_ids, &gr->egl_config) < 0) {
 		weston_log("failed to choose EGL config\n");

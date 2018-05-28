@@ -672,6 +672,7 @@ int main(int argc, char *argv[])
 		{ WESTON_OPTION_STRING, "config", 'c', &config_file },
 	};
 
+	weston_place_marker("W - weston main");
 	parse_options(core_options, ARRAY_LENGTH(core_options), &argc, argv);
 
 	if (help)
@@ -779,6 +780,7 @@ int main(int argc, char *argv[])
 	} else if (weston_create_listening_socket(display, socket_name)) {
 		goto out;
 	}
+	weston_place_marker("W - listening socket");
 
 	if (!shell)
 		weston_config_section_get_string(section, "shell", &shell,
@@ -815,6 +817,7 @@ int main(int argc, char *argv[])
 
 	weston_compositor_wake(ec);
 
+	weston_place_marker("W - wl_display_run");
 	wl_display_run(display);
 
 	/* Allow for setting return exit code after

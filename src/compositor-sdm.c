@@ -423,6 +423,7 @@ output_repaint(struct weston_output *output_base,
     struct drm_backend *backend =
         (struct drm_backend *)output->base.compositor->backend;
     struct drm_mode *mode;
+    static bool commit = false;
     int ret = -1;
     struct sdm_layer *sdm_layer, *next_sdm_layer;
 
@@ -437,8 +438,14 @@ output_repaint(struct weston_output *output_base,
     SetVSyncState(output->display_id, ENABLE, output);
     if (output->prev_layer_none_commit && output->layer_none_commit)
         weston_log("skip commit if two consecutive frames have no layers\n");
-    else
+    else {
         ret = Commit(output->display_id, output);
+
+        if (!commit) {
+            commit = true;
+            weston_place_marker("W - first commit submitted");
+        }
+    }
 
     if (ret) {
         weston_log("fail to commit to sdm display! err=%d\n", ret);
@@ -1108,6 +1115,7 @@ init_drm(struct drm_backend *b, struct udev_device *device)
             udev_device_get_devnode(device));
         return -1;
     }
+    weston_place_marker("W - weston_launcher_open");
 
     weston_log("using %s\n", filename);
 
