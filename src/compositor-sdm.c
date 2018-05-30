@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -434,17 +434,16 @@ drm_output_repaint(struct weston_output *output_base,
     assert(wl_list_empty(&output->plane_flip_list));
 
     SetVSyncState(output->display_id, ENABLE, output);
-    if (output->skip_commit) {
-
-        output->skip_commit = false;
-    } else {
+    if (output->prev_layer_none_commit && output->layer_none_commit)
+        weston_log("skip commit if two consecutive frames have no layers\n");
+    else
         ret = Commit(output->display_id, output);
-    }
+
     if (ret) {
         weston_log("fail to commit to sdm display! err=%d\n", ret);
-        /* This is workaround for IVI shell. Since there is no surface created
-         * when the first commit happens, SDM Prepare will report non-app error
-         * then Commit will fail here.*/
+        /* This is workaround for IVI shell. If two consecutive frames commit no
+         * surfaces, repaint skip the commit, we need to do finish frame here.
+         */
         drm_output_release_fb(output, output->current);
         output->current = output->next;
         output->next = NULL;
@@ -1891,6 +1890,8 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
     output->base.native_scale = output->base.current_scale;
 
     output->display_id = display_id;
+    output->prev_layer_none_commit = true;
+    output->layer_none_commit = true;
     drm_set_dpms(&output->base, WESTON_DPMS_ON);
     return 0;
 
