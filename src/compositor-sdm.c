@@ -775,6 +775,7 @@ drm_assign_planes(struct weston_output *output_base)
 
     output->view_count++;
     int error = Prepare(output->display_id, output);
+    output_base->need_gpu_composition = false;
     wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
         next_plane = primary;
         ev = sdm_layer->view;
@@ -783,6 +784,7 @@ drm_assign_planes(struct weston_output *output_base)
             weston_view_move_to_plane(ev, next_plane);
             ev->psf_flags = 0;
             destroy_sdm_layer(sdm_layer);
+            output_base->need_gpu_composition = true;
         } else {
             /* Composed by Display Hardware directly */
             /* ToDo(User): handle scenarios if SDE composition is not possible */
