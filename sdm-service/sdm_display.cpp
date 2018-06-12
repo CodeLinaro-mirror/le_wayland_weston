@@ -705,6 +705,7 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     struct LayerGeometry *glayer = NULL;
     uint32_t gpu_target_index = GET_GPU_TARGET_SLOT(output->view_count);
     uint32_t index = 0;
+    LayerBufferFlags layerBufferFlags;
 
     if (shutdown_pending_) {
     return kErrorShutDown;
@@ -726,10 +727,7 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
                 return kErrorUndefined;
             }
 
-            // Pass the wl_resource handle from sdm layer to layer stack
-            // to use it for egl image creation in tone mapping
-            layer_stack_.layers.at(index)->userdata = sdm_layer->view->surface->resource;
-            error = AddGeometryLayerToLayerStack(output, index++, glayer, sdm_layer->is_skip);
+            error = AddGeometryLayerToLayerStack(output, index, glayer, sdm_layer->is_skip);
             if (error) {
                 DLOGE("failed add Geometry Layer to LayerStack.");
                 FreeLayerGeometry(glayer);
@@ -737,6 +735,14 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
             }
             FreeLayerGeometry(glayer);
 
+            // Pass the wl_resource handle from sdm layer to layer stack
+            // to use it for egl image creation in tone mapping
+            layerBufferFlags = layer_stack_.layers.at(index)->input_buffer.flags;
+            if (layerBufferFlags.video && layerBufferFlags.hdr)
+                layer_stack_.layers.at(index)->userdata =
+                           sdm_layer->view->surface->buffer_ref.buffer->resource;
+
+            index++;
             if (sdm_layer->is_skip)
                 layer_stack_.flags.skip_present = true;
         }
