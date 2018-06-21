@@ -257,6 +257,9 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
     // Override return value if format is part of skip list.
     if ((format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
         (format == GBM_FORMAT_UYVY) ||
+        (format == GBM_FORMAT_VYUY) ||
+        (format == GBM_FORMAT_YUYV) ||
+        (format == GBM_FORMAT_YVYU) ||
         (format == GBM_FORMAT_NV12)) {
       ret = true;
     }
