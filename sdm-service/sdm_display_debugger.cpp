@@ -82,28 +82,37 @@ void SdmDisplayDebugger::Verbose(DebugTag tag, const char *format, ...) {
 }
 
 DisplayError SdmDisplayDebugger::GetProperty(const char *property_name, int *value) {
+/* mask the following code first */
+#ifdef ENABLE_PROPERTY_SERVICE
   char property[PROPERTY_VALUE_MAX];
 
   if (property_get(property_name, property, NULL) > 0) {
     *value = atoi(property);
     return kErrorNone;
   }
+#endif
 
   return kErrorNotSupported;
 }
 
 DisplayError SdmDisplayDebugger::GetProperty(const char *property_name, char *value) {
+/* mask the following code first */
+#ifdef ENABLE_PROPERTY_SERVICE
   if (property_get(property_name, value, NULL) > 0) {
     return kErrorNone;
   }
+#endif
 
   return kErrorNotSupported;
 }
 
 DisplayError SdmDisplayDebugger::SetProperty(const char *property_name, const char *value) {
+/* mask the following code first */
+#ifdef ENABLE_PROPERTY_SERVICE
   if (property_set(property_name, value) == 0) {
     return kErrorNone;
   }
+#endif
 
   return kErrorNotSupported;
 }
