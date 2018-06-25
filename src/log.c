@@ -143,7 +143,8 @@ weston_log_continue(const char *fmt, ...)
 	return l;
 }
 
-void weston_place_marker(const char *name)
+WL_EXPORT void
+weston_place_marker(const char *name)
 {
 	int fd = open("/sys/kernel/debug/bootkpi/kpi_values",O_WRONLY);
 
