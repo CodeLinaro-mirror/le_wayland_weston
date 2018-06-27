@@ -100,7 +100,7 @@ struct drm_backend {
        struct gbm_device *gbm;
        struct wl_listener session_listener;
        uint32_t format;
-       int no_addfb2;
+       int no_addfb3;
        int use_pixman;
        uint32_t prev_state;
        struct udev_input input;
