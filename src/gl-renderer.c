@@ -1156,6 +1156,12 @@ gl_renderer_repaint_output(struct weston_output *output,
 	if (use_output(output) < 0)
 		return;
 
+	/* Clear all unknown regions */
+	if (output->need_gpu_composition)
+	{
+	    glClearColor(0,0,0,0);
+	    glClear(GL_COLOR_BUFFER_BIT);
+	}
 	/* Calculate the viewport */
 	glViewport(go->borders[GL_RENDERER_BORDER_LEFT].width,
 		   go->borders[GL_RENDERER_BORDER_BOTTOM].height,

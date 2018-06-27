@@ -900,6 +900,7 @@ drm_assign_planes(struct weston_output *output_base)
 
     /* Do assign planes for normal output */
     has_GPU_composition = assign_planes(output_base, false);
+    output_base->need_gpu_composition = has_GPU_composition;
 
     /*
      * Do assign planes for virtual output. If GPU composition already happens,
