@@ -1076,7 +1076,7 @@ surface_create(struct fbdev_output *output, struct fbdev_backend *backend)
 {
 #ifdef USE_GBM
 	output->buf_alloc.surface = gbm_surface_create(backend->buffer_alloc_dev, output->mode.width, output->mode.height,
-													GBM_FORMAT_ARGB8888,
+													GBM_FORMAT_ABGR8888,
 													GBM_BO_USE_SCANOUT |GBM_BO_USE_RENDERING);
 #endif
 }
