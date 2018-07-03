@@ -50,6 +50,7 @@ AM_CPPFLAGS = 					\
 	-I$(top_srcdir)/shared			\
 	-I$(top_builddir)/protocol		\
 	-I$(top_srcdir)/sdm-service		\
+	-I$(top_srcdir)/drm-service		\
 	-DDATADIR='"$(datadir)"'		\
 	-DMODULEDIR='"$(moduledir)"'		\
 	-DLIBEXECDIR='"$(libexecdir)"'		\
@@ -63,16 +64,15 @@ CLEANFILES = weston.ini				\
 
 bin_PROGRAMS += weston
 if ENABLE_DRM_COMPOSITOR
-COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
+COMPOSITOR_LIBS += -lgbm -ldrmutils -lsdedrm
 COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
-COMPOSITOR_LIBS += -lsdmutils -lhdr_tm -lsdmcore -lsdedrm
 endif
 
 weston_LDFLAGS = -export-dynamic
 weston_CPPFLAGS = $(AM_CPPFLAGS) -DIN_WESTON
 weston_CFLAGS = $(AM_CFLAGS) $(COMPOSITOR_CFLAGS) $(LIBUNWIND_CFLAGS)
 weston_LDADD = $(COMPOSITOR_LIBS) $(LIBUNWIND_LIBS) \
-	$(DLOPEN_LIBS) -lm libshared.la  -lgbm -lEGL_adreno -lGLESv2_adreno
+	$(DLOPEN_LIBS) -lm libshared.la
 
 weston_SOURCES =					\
 	src/git-version.h				\
@@ -149,7 +149,7 @@ libsession_helper_la_SOURCES =			\
 	src/launcher-util.h
 libsession_helper_la_CFLAGS = $(AM_CFLAGS) $(LIBDRM_CFLAGS) $(PIXMAN_CFLAGS) $(COMPOSITOR_CFLAGS)
 
-libsession_helper_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service --std=c++11 -std=c++11 \
+libsession_helper_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service -I$(top_src_dir)/drm-service --std=c++11 -std=c++11 \
 	$(COMPOSITOR_CFLAGS)			\
 	$(EGL_CFLAGS)				\
 	$(DRM_COMPOSITOR_CFLAGS)		\
@@ -241,6 +241,29 @@ gl_renderer_la_SOURCES =			\
 	shared/helpers.h
 endif
 
+if  ENABLE_DRM_COMPOSITOR
+module_LTLIBRARIES += sdm-service.la
+sdm_service_la_LDFLAGS = -module -avoid-version
+sdm_service_la_LIBADD = $(COMPOSITOR_LIBS)
+sdm_service_la_LIBADD += -lsdmutils -lhdr_tm -lsdmcore
+sdm_service_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service  --std=c++11 -std=c++11 \
+	$(COMPOSITOR_CFLAGS)                   \
+	$(DRM_COMPOSITOR_CFLAGS)               \
+	$(AM_CFLAGS)
+sdm_service_la_CFLAGS =                        \
+	$(COMPOSITOR_CFLAGS)                   \
+	$(DRM_COMPOSITOR_CFLAGS)               \
+	$(AM_CFLAGS)
+sdm_service_la_SOURCES =                       \
+	sdm-service/sdm_display.cpp            \
+	sdm-service/sdm_display_debugger.cpp   \
+	sdm-service/sdm_display_buffer_allocator.cpp \
+	sdm-service/sdm_display_buffer_sync_handler.cpp \
+	sdm-service/sdm_display_socket_handler.cpp \
+	sdm-service/sdm_display_connect.cpp \
+	sdm-service/uevent.c
+endif
+
 if ENABLE_X11_COMPOSITOR
 module_LTLIBRARIES += x11-backend.la
 x11_backend_la_LDFLAGS = -module -avoid-version
@@ -276,7 +299,7 @@ drm_backend_la_LIBADD =				\
 	libshared.la -lrt			\
 	libsession-helper.la		
 
-drm_backend_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service --std=c++11 -std=c++11 \
+drm_backend_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service -I$(top_src_dir)/drm-service --std=c++11 -std=c++11 \
 	$(COMPOSITOR_CFLAGS)			\
 	$(EGL_CFLAGS)				\
 	$(DRM_COMPOSITOR_CFLAGS)		\
@@ -294,13 +317,9 @@ drm_backend_la_SOURCES =			\
 	shared/timespec-util.h			\
 	src/libbacklight.c			\
 	src/libbacklight.h			\
-	sdm-service/sdm_display.cpp		\
-	sdm-service/sdm_display_debugger.cpp	\
-	sdm-service/sdm_display_buffer_allocator.cpp \
-	sdm-service/sdm_display_buffer_sync_handler.cpp \
-	sdm-service/sdm_display_socket_handler.cpp \
-	sdm-service/sdm_display_connect.cpp \
-	sdm-service/uevent.c
+	drm-service/drm_display.h 		\
+	drm-service/drm_display.cpp             \
+	src/early-renderer.c
 
 if ENABLE_VAAPI_RECORDER
 drm_backend_la_SOURCES += src/vaapi-recorder.c src/vaapi-recorder.h

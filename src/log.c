@@ -146,7 +146,7 @@ weston_log_continue(const char *fmt, ...)
 WL_EXPORT void
 weston_place_marker(const char *name)
 {
-	int fd = open("/sys/kernel/debug/bootkpi/kpi_values",O_WRONLY);
+	int fd = open("/debug/bootkpi/kpi_values",O_WRONLY);
 
 	if (fd > 0) {
 		write(fd, name, strlen(name));

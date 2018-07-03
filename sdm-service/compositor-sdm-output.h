@@ -87,7 +87,6 @@ struct drm_backend {
        struct weston_compositor *compositor;
 
        struct udev *udev;
-       struct wl_event_source *drm_source;
 
        struct udev_monitor *udev_monitor;
        struct wl_event_source *udev_drm_source;
@@ -111,6 +110,12 @@ struct drm_backend {
        uint32_t min_width, max_width;
        uint32_t min_height, max_height;
 
+       /* Flag to indicate whether sdm service is ready */
+       bool sdm_repaint;
+       /* Timer to finish full initialization of backend */
+       struct wl_event_source *finish_full_init;
+       struct wl_event_source *input_init;
+
        /* Screen capture data */
        struct screen_capture *screen_cap;
 };
@@ -131,6 +136,21 @@ struct sdm_layer {
        struct gbm_bo *bo;
        uint32_t composition_type; /* type: enum SDM_COMPOSITION_XXXXX */
        pixman_region32_t overlap;
+};
+
+/*
+* In early stage, sdm are not ready, create early layer
+* instead of sdm layer for display
+*/
+struct early_layer {
+       struct wl_list link; /* drm_output::early_layer_list */
+       struct weston_view *view;
+       struct gbm_bo *bo;
+       struct weston_buffer_reference buffer_ref;
+       uint32_t fb_id;
+       uint32_t pipe_id;
+       bool yuv_required; /* whether need a yuv pipe*/
+       uint32_t z_order;
 };
 
 struct drm_output;
@@ -192,9 +212,19 @@ struct drm_output {
        struct wl_list plane_flip_list; /* drm_plane::flip_link */
        struct wl_list sdm_layer_list;  /* sdm_layer::link      */
        struct wl_list commited_layer_list;  /* sdm_layer::link */
-
+       struct wl_list early_layer_list; /* early_layer::link*/
+       struct wl_list commited_early_list;
        struct wl_event_source *finish_frame_timer;
 
+       bool early_display_enable; /* whether hw display enabled in early stage */
+
+       /*
+       * File descriptor referring to a sync fence object
+       * which will be signaled when submitted commit
+       * is finished.
+       */
+       int retire_fence_fd;
+       struct wl_event_source *retire_fence_source;
        int pageflip_ev_fd;
        struct wl_event_source *pageflip_ev_source;
        struct {

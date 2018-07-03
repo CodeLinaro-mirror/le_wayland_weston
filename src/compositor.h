@@ -906,6 +906,11 @@ struct weston_surface_state {
 	struct weston_buffer_viewport buffer_viewport;
 };
 
+struct surface_color {
+	bool is_pended;
+	float red, blue, green, alpha;
+};
+
 struct weston_surface {
 	struct wl_resource *resource;
 	struct wl_signal destroy_signal; /* callback argument: this surface */
@@ -988,6 +993,11 @@ struct weston_surface {
 	 */
 	const char *role_name;
 
+	/*
+	* Early renderer does not support setting surface color, so,
+	* store color and set surface color after switching to gl renderer
+	*/
+	struct surface_color surf_color;
 	struct weston_timeline_object timeline;
 };
 
