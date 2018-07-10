@@ -97,6 +97,10 @@
 #define GBM_BO_USE_CURSOR GBM_BO_USE_CURSOR_64X64
 #endif
 
+#ifndef DRM_FORMAT_MOD_QCOM_COMPRESSED
+#define DRM_FORMAT_MOD_QCOM_COMPRESSED fourcc_mod_code(QCOM, 1)
+#endif
+
 static int option_current_mode = 0;
 enum {
         DISABLE,
@@ -235,12 +239,17 @@ drm_fb_destroy_dumb(struct drm_fb *fb)
 }
 
 static struct drm_fb *
-drm_fb_get_from_bo(struct gbm_bo *bo,
-           struct drm_backend *backend, uint32_t format)
+drm_fb_get_from_bo(struct drm_output *output, struct gbm_bo *bo,
+           struct drm_backend *backend)
 {
     struct drm_fb *fb = gbm_bo_get_user_data(bo);
+    uint32_t format = output->format;
     uint32_t width, height;
-    uint32_t handles[4], pitches[4], offsets[4];
+    uint32_t handles[4] = {0};
+    uint32_t pitches[4] = {0};
+    uint32_t offsets[4] = {0};
+    uint64_t modifier[4] = {0};
+    uint32_t flags = 0;
     int ret;
 
     if (fb)
@@ -261,17 +270,23 @@ drm_fb_get_from_bo(struct gbm_bo *bo,
     fb->ion_fd = gbm_bo_get_fd(bo);
     ret = -1;
 
-    if (format && !backend->no_addfb2) {
+    if (format && !backend->no_addfb3) {
         handles[0] = fb->handle;
         pitches[0] = fb->stride;
         offsets[0] = 0;
 
-        ret = drmModeAddFB2(backend->drm.fd, width, height,
-                    format, handles, pitches, offsets,
-                    &fb->fb_id, 0);
+        if (output->framebuffer_ubwc) {
+            flags = DRM_MODE_FB_MODIFIERS;
+            modifier[0] = DRM_FORMAT_MOD_QCOM_COMPRESSED;
+        }
+
+        ret = drmModeAddFB3(backend->drm.fd, width, height,
+                    format, handles, pitches, offsets, modifier,
+                    &fb->fb_id, flags);
+
         if (ret) {
-            weston_log("addfb2 failed: %m\n");
-            backend->no_addfb2 = 1;
+            weston_log("addfb3 failed: %m\n");
+            backend->no_addfb3 = 1;
         }
     }
 
@@ -337,7 +352,7 @@ drm_output_render_gl(struct drm_output *output, pixman_region32_t *damage)
         return;
     }
 
-    output->next = drm_fb_get_from_bo(bo, b, output->format);
+    output->next = drm_fb_get_from_bo(output, bo, b);
     if (!output->next) {
         weston_log("failed to get drm_fb for bo\n");
         gbm_surface_release_buffer(output->surface, bo);
