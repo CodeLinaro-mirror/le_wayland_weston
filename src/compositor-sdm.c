@@ -849,7 +849,12 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
      */
 
     output->view_count++;
-    int error = Prepare(output->display_id, output);
+    /*
+     * repaint virtual output by gpu now, no need to do Prepare here
+     * all sdm layers' composition_type keep default value SDM_COMPOSITION_GPU
+     */
+    if(!is_virtual_output)
+       Prepare(output->display_id, output);
     wl_list_for_each_safe(sdm_layer, next_sdm_layer, &output->sdm_layer_list, link) {
         next_plane = primary;
         ev = sdm_layer->view;
@@ -868,7 +873,7 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
                 /* ToDo(User): handle scenarios if SDE composition is not possible */
                 ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
                 /* Forget the view as it might be destroyed at anytime */
-                sdm_layer->view = NULL;
+                sdm_layer->view->plane = NULL;
             }
         }
     }
