@@ -97,8 +97,12 @@
 #define GBM_BO_USE_CURSOR GBM_BO_USE_CURSOR_64X64
 #endif
 
-#ifndef DRM_FORMAT_MOD_QCOM_COMPRESSED
-#define DRM_FORMAT_MOD_QCOM_COMPRESSED fourcc_mod_code(QCOM, 1)
+#ifndef DRM_FORMAT_MOD_VENDOR_QTI
+#define DRM_FORMAT_MOD_VENDOR_QTI    0x05
+#endif
+
+#ifndef DRM_FORMAT_MOD_QTI_COMPRESSED
+#define DRM_FORMAT_MOD_QTI_COMPRESSED fourcc_mod_code(QTI, 1)
 #endif
 
 static int option_current_mode = 0;
@@ -277,7 +281,7 @@ drm_fb_get_from_bo(struct drm_output *output, struct gbm_bo *bo,
 
         if (output->framebuffer_ubwc) {
             flags = DRM_MODE_FB_MODIFIERS;
-            modifier[0] = DRM_FORMAT_MOD_QCOM_COMPRESSED;
+            modifier[0] = DRM_FORMAT_MOD_QTI_COMPRESSED;
         }
 
         ret = drmModeAddFB3(backend->drm.fd, width, height,
