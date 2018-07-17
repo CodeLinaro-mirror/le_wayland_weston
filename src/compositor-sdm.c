@@ -452,9 +452,8 @@ output_repaint(struct weston_output *output_base,
     if (!is_virtual_output && !output->next) {
         drm_output_render(output, damage);
     }
-    assert(wl_list_empty(&output->plane_flip_list));
-
-    SetVSyncState(output->display_id, ENABLE, output);
+    if (!is_virtual_output)
+        SetVSyncState(output->display_id, ENABLE, output);
     if (output->prev_layer_none_commit && output->layer_none_commit)
         weston_log("skip commit if two consecutive frames have no layers\n");
     else {
@@ -492,7 +491,7 @@ output_repaint(struct weston_output *output_base,
         output->frame_pending = 1;
     }
 
-    return 0;
+    return ret;
 }
 
 static void
@@ -501,6 +500,7 @@ do_screen_capture(struct screen_capture *screen_cap,
 {
     struct drm_backend *backend = screen_cap->compositor->backend;
     struct screen_capture_buffer *cap_buf = screen_cap->next;
+    int ret = -1;
 
     /*
      * Decrease the attached refcnt after increasing composition refcnt to
@@ -519,7 +519,17 @@ do_screen_capture(struct screen_capture *screen_cap,
         screen_cap->next = NULL;
         screen_cap->view = NULL;
     } else {
-        output_repaint(screen_cap->virtual_output, damage, true);
+        ret = output_repaint(screen_cap->virtual_output, damage, true);
+        /*
+         * if overlay fall back fail, currently only null commit can go this path,
+         * just release the capture buffer here
+         */
+        if(ret) {
+           weston_buffer_reference(&screen_cap->buf_ref, NULL);
+           free(cap_buf);
+           screen_cap->next = NULL;
+           screen_cap->view = NULL;
+        }
     }
 }
 
@@ -1928,9 +1938,6 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
     output->base.model = strdup(output->base.name);
     output->base.serial_number = "unknown";
     wl_list_init(&output->base.mode_list);
-    /* TODO (user): remove following line of code: */
-    /* TODO (user): wl_list_init(&output->plane_flip_list) */
-    wl_list_init(&output->plane_flip_list);
     wl_list_init(&output->sdm_layer_list);
     wl_list_init(&output->commited_layer_list);
 

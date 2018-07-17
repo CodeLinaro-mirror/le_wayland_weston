@@ -54,6 +54,12 @@ screen_capture_create_virtual_display(struct weston_output *mirror_output)
 
     /* If mirror output can be pluggable in future, update output->base in drm_assign_planes */
     output->base = *mirror_output;
+    /* Initialize virtual output */
+    output->prev_layer_none_commit = true;
+    output->layer_none_commit = true;
+    wl_list_init(&output->sdm_layer_list);
+    wl_list_init(&output->commited_layer_list);
+
     return output;
 
 err:
