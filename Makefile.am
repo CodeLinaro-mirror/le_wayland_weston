@@ -40,7 +40,7 @@ tests/weston-ivi.ini : $(srcdir)/ivi-shell/weston.ini.in
 all-local : weston.ini ivi-shell/weston.ini
 
 AM_CFLAGS = $(GCC_CFLAGS) -DENABLE_EGL
-SIMPLE_EGL_CLIENT_LIBS +=  -lgbm -lEGL_adreno -lGLESv2_adreno -lwaylandegl
+SIMPLE_EGL_CLIENT_LIBS +=  -lgbm -lEGL_adreno -lGLESv2_adreno -lwaylandegl -lwayland-client
 
 AM_CPPFLAGS = 					\
 	-I$(top_srcdir)/src			\
