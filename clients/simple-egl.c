@@ -23,6 +23,7 @@
 
 #include "config.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,26 +42,15 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
-#include "xdg-shell-client-protocol.h"
+#include "xdg-shell-unstable-v6-client-protocol.h"
 #include <sys/types.h>
 #include <unistd.h>
-#include "protocol/ivi-application-client-protocol.h"
+#include "ivi-application-client-protocol.h"
 #define IVI_SURFACE_ID 9000
 
+#include "shared/helpers.h"
 #include "shared/platform.h"
-
-#ifndef EGL_EXT_swap_buffers_with_damage
-#define EGL_EXT_swap_buffers_with_damage 1
-typedef EGLBoolean (EGLAPIENTRYP PFNEGLSWAPBUFFERSWITHDAMAGEEXTPROC)(EGLDisplay dpy, EGLSurface surface, EGLint *rects, EGLint n_rects);
-#endif
-
-#ifndef EGL_EXT_buffer_age
-#define EGL_EXT_buffer_age 1
-#define EGL_BUFFER_AGE_EXT			0x313D
-#endif
-
-static uint8_t bg_red_=0, bg_green_=0, bg_blue_=0, bg_alpha_= 127;
-static int fg_red_=-1, fg_green_=-1, fg_blue_=-1;
+#include "weston-egl-ext.h"
 
 struct window;
 struct seat;
@@ -69,7 +59,7 @@ struct display {
 	struct wl_display *display;
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
-	struct xdg_shell *shell;
+	struct zxdg_shell_v6 *shell;
 	struct wl_seat *seat;
 	struct wl_pointer *pointer;
 	struct wl_touch *touch;
@@ -105,11 +95,13 @@ struct window {
 	uint32_t benchmark_time, frames;
 	struct wl_egl_window *native;
 	struct wl_surface *surface;
-	struct xdg_surface *xdg_surface;
+	struct zxdg_surface_v6 *xdg_surface;
+	struct zxdg_toplevel_v6 *xdg_toplevel;
 	struct ivi_surface *ivi_surface;
 	EGLSurface egl_surface;
 	struct wl_callback *callback;
-	int fullscreen, opaque, buffer_size, frame_sync;
+	int fullscreen, opaque, buffer_size, frame_sync, delay;
+	bool wait_for_configure;
 };
 
 static const char *vert_shader_text =
@@ -131,21 +123,22 @@ static const char *frag_shader_text =
 
 static int running = 1;
 
-static int32_t
-clamp(int32_t val, int32_t min, int32_t max)
-{
-	if (val < min)
-		return min;
-
-	if (max < val)
-		return max;
-
-	return val;
-}
-
 static void
 init_egl(struct display *display, struct window *window)
 {
+	static const struct {
+		char *extension, *entrypoint;
+	} swap_damage_ext_to_entrypoint[] = {
+		{
+			.extension = "EGL_EXT_swap_buffers_with_damage",
+			.entrypoint = "eglSwapBuffersWithDamageEXT",
+		},
+		{
+			.extension = "EGL_KHR_swap_buffers_with_damage",
+			.entrypoint = "eglSwapBuffersWithDamageKHR",
+		},
+	};
+
 	static const EGLint context_attribs[] = {
 		EGL_CONTEXT_CLIENT_VERSION, 2,
 		EGL_NONE
@@ -212,14 +205,21 @@ init_egl(struct display *display, struct window *window)
 	display->swap_buffers_with_damage = NULL;
 	extensions = eglQueryString(display->egl.dpy, EGL_EXTENSIONS);
 	if (extensions &&
-	    strstr(extensions, "EGL_EXT_swap_buffers_with_damage") &&
-	    strstr(extensions, "EGL_EXT_buffer_age"))
-		display->swap_buffers_with_damage =
-			(PFNEGLSWAPBUFFERSWITHDAMAGEEXTPROC)
-			eglGetProcAddress("eglSwapBuffersWithDamageEXT");
+	    weston_check_egl_extension(extensions, "EGL_EXT_buffer_age")) {
+		for (i = 0; i < (int) ARRAY_LENGTH(swap_damage_ext_to_entrypoint); i++) {
+			if (weston_check_egl_extension(extensions,
+						       swap_damage_ext_to_entrypoint[i].extension)) {
+				/* The EXTPROC is identical to the KHR one */
+				display->swap_buffers_with_damage =
+					(PFNEGLSWAPBUFFERSWITHDAMAGEEXTPROC)
+					eglGetProcAddress(swap_damage_ext_to_entrypoint[i].entrypoint);
+				break;
+			}
+		}
+	}
 
 	if (display->swap_buffers_with_damage)
-		printf("has EGL_EXT_buffer_age and EGL_EXT_swap_buffers_with_damage\n");
+		printf("has EGL_EXT_buffer_age and %s\n", swap_damage_ext_to_entrypoint[i].extension);
 
 }
 
@@ -294,9 +294,24 @@ init_gl(struct window *window)
 }
 
 static void
-handle_surface_configure(void *data, struct xdg_surface *surface,
-			 int32_t width, int32_t height,
-			 struct wl_array *states, uint32_t serial)
+handle_surface_configure(void *data, struct zxdg_surface_v6 *surface,
+			 uint32_t serial)
+{
+	struct window *window = data;
+
+	zxdg_surface_v6_ack_configure(surface, serial);
+
+	window->wait_for_configure = false;
+}
+
+static const struct zxdg_surface_v6_listener xdg_surface_listener = {
+	handle_surface_configure
+};
+
+static void
+handle_toplevel_configure(void *data, struct zxdg_toplevel_v6 *toplevel,
+			  int32_t width, int32_t height,
+			  struct wl_array *states)
 {
 	struct window *window = data;
 	uint32_t *p;
@@ -305,7 +320,7 @@ handle_surface_configure(void *data, struct xdg_surface *surface,
 	wl_array_for_each(p, states) {
 		uint32_t state = *p;
 		switch (state) {
-		case XDG_SURFACE_STATE_FULLSCREEN:
+		case ZXDG_TOPLEVEL_V6_STATE_FULLSCREEN:
 			window->fullscreen = 1;
 			break;
 		}
@@ -326,19 +341,17 @@ handle_surface_configure(void *data, struct xdg_surface *surface,
 		wl_egl_window_resize(window->native,
 				     window->geometry.width,
 				     window->geometry.height, 0, 0);
-
-	xdg_surface_ack_configure(surface, serial);
 }
 
 static void
-handle_surface_delete(void *data, struct xdg_surface *xdg_surface)
+handle_toplevel_close(void *data, struct zxdg_toplevel_v6 *xdg_toplevel)
 {
 	running = 0;
 }
 
-static const struct xdg_surface_listener xdg_surface_listener = {
-	handle_surface_configure,
-	handle_surface_delete,
+static const struct zxdg_toplevel_v6_listener xdg_toplevel_listener = {
+	handle_toplevel_configure,
+	handle_toplevel_close,
 };
 
 static void
@@ -363,13 +376,20 @@ static const struct ivi_surface_listener ivi_surface_listener = {
 static void
 create_xdg_surface(struct window *window, struct display *display)
 {
-	window->xdg_surface = xdg_shell_get_xdg_surface(display->shell,
-							window->surface);
+	window->xdg_surface = zxdg_shell_v6_get_xdg_surface(display->shell,
+							    window->surface);
+	zxdg_surface_v6_add_listener(window->xdg_surface,
+				     &xdg_surface_listener, window);
 
-	xdg_surface_add_listener(window->xdg_surface,
-				 &xdg_surface_listener, window);
+	window->xdg_toplevel =
+		zxdg_surface_v6_get_toplevel(window->xdg_surface);
+	zxdg_toplevel_v6_add_listener(window->xdg_toplevel,
+				      &xdg_toplevel_listener, window);
 
-	xdg_surface_set_title(window->xdg_surface, "simple-egl");
+	zxdg_toplevel_v6_set_title(window->xdg_toplevel, "simple-egl");
+
+	window->wait_for_configure = true;
+	wl_surface_commit(window->surface);
 }
 
 static void
@@ -426,7 +446,7 @@ create_surface(struct window *window)
 		return;
 
 	if (window->fullscreen)
-		xdg_surface_set_fullscreen(window->xdg_surface, NULL);
+		zxdg_toplevel_v6_set_fullscreen(window->xdg_toplevel, NULL);
 }
 
 static void
@@ -437,11 +457,14 @@ destroy_surface(struct window *window)
 	eglMakeCurrent(window->display->egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE,
 		       EGL_NO_CONTEXT);
 
-	eglDestroySurface(window->display->egl.dpy, window->egl_surface);
+	weston_platform_destroy_egl_surface(window->display->egl.dpy,
+					    window->egl_surface);
 	wl_egl_window_destroy(window->native);
 
+	if (window->xdg_toplevel)
+		zxdg_toplevel_v6_destroy(window->xdg_toplevel);
 	if (window->xdg_surface)
-		xdg_surface_destroy(window->xdg_surface);
+		zxdg_surface_v6_destroy(window->xdg_surface);
 	if (window->display->ivi_application)
 		ivi_surface_destroy(window->ivi_surface);
 	wl_surface_destroy(window->surface);
@@ -460,7 +483,7 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 		{  0.5, -0.5 },
 		{  0,    0.5 }
 	};
-	static GLfloat colors[3][3] = {
+	static const GLfloat colors[3][3] = {
 		{ 1, 0, 0 },
 		{ 0, 1, 0 },
 		{ 0, 0, 1 }
@@ -477,30 +500,6 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 	EGLint rect[4];
 	EGLint buffer_age = 0;
 	struct timeval tv;
-
-	if ((fg_red_ !=-1) || (fg_green_ !=-1) || (fg_blue_ !=-1 ))
-	{
-		memset(colors, 0, 9*sizeof(colors[0][0]));
-
-		if (fg_red_ !=-1 )
-		{
-			colors[0][0] = fg_red_/255.0;
-			colors[1][0] = colors[0][0];
-			colors[2][0] = colors[0][0];
-		}
-		if (fg_green_ !=-1 )
-		{
-			colors[0][1] = fg_green_/255.0;
-			colors[1][1] = colors[0][1];
-			colors[2][1] = colors[0][1];
-		}
-		if (fg_blue_ !=-1 )
-		{
-			colors[0][2] = fg_blue_/255.0;
-			colors[1][2] = colors[0][2];
-			colors[2][2] = colors[0][2];
-		}
-	}
 
 	assert(window->callback == callback);
 	window->callback = NULL;
@@ -536,7 +535,7 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 	glUniformMatrix4fv(window->gl.rotation_uniform, 1, GL_FALSE,
 			   (GLfloat *) rotation);
 
-	glClearColor(bg_red_/255.0, bg_green_/255.0, bg_blue_/255.0, bg_alpha_/255.0);
+	glClearColor(0.0, 0.0, 0.0, 0.5);
 	glClear(GL_COLOR_BUFFER_BIT);
 
 	glVertexAttribPointer(window->gl.pos, 2, GL_FLOAT, GL_FALSE, 0, verts);
@@ -548,6 +547,8 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 
 	glDisableVertexAttribArray(window->gl.pos);
 	glDisableVertexAttribArray(window->gl.col);
+
+	usleep(window->delay);
 
 	if (window->opaque || window->fullscreen) {
 		region = wl_compositor_create_region(window->display->compositor);
@@ -621,12 +622,12 @@ pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 {
 	struct display *display = data;
 
-	if (!display->window->xdg_surface)
+	if (!display->window->xdg_toplevel)
 		return;
 
 	if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_PRESSED)
-		xdg_surface_move(display->window->xdg_surface,
-						 display->seat, serial);
+		zxdg_toplevel_v6_move(display->window->xdg_toplevel,
+				      display->seat, serial);
 }
 
 static void
@@ -653,7 +654,7 @@ touch_handle_down(void *data, struct wl_touch *wl_touch,
 	if (!d->shell)
 		return;
 
-	xdg_surface_move(d->window->xdg_surface, d->seat, serial);
+	zxdg_toplevel_v6_move(d->window->xdg_toplevel, d->seat, serial);
 }
 
 static void
@@ -717,9 +718,10 @@ keyboard_handle_key(void *data, struct wl_keyboard *keyboard,
 
 	if (key == KEY_F11 && state) {
 		if (d->window->fullscreen)
-			xdg_surface_unset_fullscreen(d->window->xdg_surface);
+			zxdg_toplevel_v6_unset_fullscreen(d->window->xdg_toplevel);
 		else
-			xdg_surface_set_fullscreen(d->window->xdg_surface, NULL);
+			zxdg_toplevel_v6_set_fullscreen(d->window->xdg_toplevel,
+							NULL);
 	} else if (key == KEY_ESC && state)
 		running = 0;
 }
@@ -777,20 +779,14 @@ static const struct wl_seat_listener seat_listener = {
 };
 
 static void
-xdg_shell_ping(void *data, struct xdg_shell *shell, uint32_t serial)
+xdg_shell_ping(void *data, struct zxdg_shell_v6 *shell, uint32_t serial)
 {
-	xdg_shell_pong(shell, serial);
+	zxdg_shell_v6_pong(shell, serial);
 }
 
-static const struct xdg_shell_listener xdg_shell_listener = {
+static const struct zxdg_shell_v6_listener xdg_shell_listener = {
 	xdg_shell_ping,
 };
-
-#define XDG_VERSION 5 /* The version of xdg-shell that we implement */
-#ifdef static_assert
-static_assert(XDG_VERSION == XDG_SHELL_VERSION_CURRENT,
-	      "Interface version doesn't match implementation version");
-#endif
 
 static void
 registry_handle_global(void *data, struct wl_registry *registry,
@@ -801,12 +797,12 @@ registry_handle_global(void *data, struct wl_registry *registry,
 	if (strcmp(interface, "wl_compositor") == 0) {
 		d->compositor =
 			wl_registry_bind(registry, name,
-					 &wl_compositor_interface, 1);
-	} else if (strcmp(interface, "xdg_shell") == 0) {
+					 &wl_compositor_interface,
+					 MIN(version, 4));
+	} else if (strcmp(interface, "zxdg_shell_v6") == 0) {
 		d->shell = wl_registry_bind(registry, name,
-					    &xdg_shell_interface, 1);
-		xdg_shell_add_listener(d->shell, &xdg_shell_listener, d);
-		xdg_shell_use_unstable_version(d->shell, XDG_VERSION);
+					    &zxdg_shell_v6_interface, 1);
+		zxdg_shell_v6_add_listener(d->shell, &xdg_shell_listener, d);
 	} else if (strcmp(interface, "wl_seat") == 0) {
 		d->seat = wl_registry_bind(registry, name,
 					   &wl_seat_interface, 1);
@@ -853,16 +849,7 @@ static void
 usage(int error_code)
 {
 	fprintf(stderr, "Usage: simple-egl [OPTIONS]\n\n"
-		"  --width _num_ \tSets the width to integer _num_\n"
-		"  --height _num_ \tSets the height to integer _num_\n"
-		"  --bg-gray _num_ \tSets all background RGB channels to integer _num_\n"
-		"  --bg-red _num_ \tSets the background red channel to integer _num_\n"
-		"  --bg-green _num_ \tSets the background green channel to integer _num_\n"
-		"  --bg-blue _num_ \tSets the background blue channel to integer _num_\n"
-		"  --bg-alpha _num_ \tSets the background alpha channel to integer _num_\n"
-		"  --fg-red _num_ \tSets the solid foreground red component to integer _num_\n"
-		"  --fg-green _num_ \tSets the solid foreground green component to integer _num_\n"
-		"  --fg-blue _num_ \tSets the solid foreground blue component to integer _num_\n"
+		"  -d <us>\tBuffer swap delay in microseconds\n"
 		"  -f\tRun in fullscreen mode\n"
 		"  -o\tCreate an opaque surface\n"
 		"  -s\tUse a 16 bpp EGL config\n"
@@ -887,36 +874,15 @@ main(int argc, char **argv)
 	window.window_size = window.geometry;
 	window.buffer_size = 32;
 	window.frame_sync = 1;
+	window.delay = 0;
 
 	for (i = 1; i < argc; i++) {
-		if (strcmp("-f", argv[i]) == 0)
+		if (strcmp("-d", argv[i]) == 0 && i+1 < argc)
+			window.delay = atoi(argv[++i]);
+		else if (strcmp("-f", argv[i]) == 0)
 			window.fullscreen = 1;
 		else if (strcmp("-o", argv[i]) == 0)
 			window.opaque = 1;
-		else if (strcmp("--width", argv[i]) == 0)
-			window.geometry.width = atoi(argv[++i]);
-		else if (strcmp("--height", argv[i]) == 0)
-			window.geometry.height = atoi(argv[++i]);
-		else if (strcmp("--bg-gray", argv[i]) == 0)
-		{
-			bg_red_= clamp(atoi(argv[++i]), 0, 255);
-			bg_green_= bg_red_;
-			bg_blue_= bg_red_;
-		}
-		else if (strcmp("--bg-red", argv[i]) == 0)
-			bg_red_= clamp(atoi(argv[++i]), 0, 255);
-		else if (strcmp("--bg-green", argv[i]) == 0)
-			bg_green_= clamp(atoi(argv[++i]), 0, 255);
-		else if (strcmp("--bg-blue", argv[i]) == 0)
-			bg_blue_= clamp(atoi(argv[++i]), 0, 255);
-		else if (strcmp("--bg-alpha", argv[i]) == 0)
-			bg_alpha_= clamp(atoi(argv[++i]), 0, 255);
-		else if (strcmp("--fg-red", argv[i]) == 0)
-			fg_red_= clamp(atoi(argv[++i]), 0, 255);
-		else if (strcmp("--fg-green", argv[i]) == 0)
-			fg_green_= clamp(atoi(argv[++i]), 0, 255);
-		else if (strcmp("--fg-blue", argv[i]) == 0)
-			fg_blue_= clamp(atoi(argv[++i]), 0, 255);
 		else if (strcmp("-s", argv[i]) == 0)
 			window.buffer_size = 16;
 		else if (strcmp("-b", argv[i]) == 0)
@@ -934,7 +900,7 @@ main(int argc, char **argv)
 	wl_registry_add_listener(display.registry,
 				 &registry_listener, &display);
 
-	wl_display_dispatch(display.display);
+	wl_display_roundtrip(display.display);
 
 	init_egl(&display, &window);
 	create_surface(&window);
@@ -953,8 +919,12 @@ main(int argc, char **argv)
 	 * wl_display_dispatch_pending() to handle any events that got
 	 * queued up as a side effect. */
 	while (running && ret != -1) {
-		wl_display_dispatch_pending(display.display);
-		redraw(&window, NULL, 0);
+		if (window.wait_for_configure) {
+			wl_display_dispatch(display.display);
+		} else {
+			wl_display_dispatch_pending(display.display);
+			redraw(&window, NULL, 0);
+		}
 	}
 
 	fprintf(stderr, "simple-egl exiting\n");
@@ -967,7 +937,7 @@ main(int argc, char **argv)
 		wl_cursor_theme_destroy(display.cursor_theme);
 
 	if (display.shell)
-		xdg_shell_destroy(display.shell);
+		zxdg_shell_v6_destroy(display.shell);
 
 	if (display.ivi_application)
 		ivi_application_destroy(display.ivi_application);

@@ -54,6 +54,7 @@ protocol/*.[ch]
 weston-calibrator
 weston-clickdot
 weston-cliptest
+weston-confine
 weston-dnd
 weston-editor
 weston-eventdemo
@@ -66,7 +67,8 @@ weston-nested-client
 weston-presentation-shm
 weston-resizor
 weston-scaler
-weston-simple-dmabuf
+weston-simple-dmabuf-intel
+weston-simple-dmabuf-v4l
 weston-simple-egl
 weston-simple-shm
 weston-simple-touch
@@ -87,8 +89,6 @@ weston-tablet-shell
 weston-terminal
 weston-multi-resource
 weston-simple-im
-git-version.h
-version.h
 weston
 weston-launch
 spring-tool
@@ -102,6 +102,9 @@ setbacklight
 weston.1
 weston-drm.7
 weston.ini.5
+
+/libweston/git-version.h
+/libweston/version.h
 
 /tests/weston-ivi.ini
 internal-screenshot-00.png

@@ -23,8 +23,9 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#include <config.h>
+#include "config.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,8 +38,9 @@
 
 #include <wayland-client.h>
 #include "shared/helpers.h"
+#include "shared/zalloc.h"
 #include "shared/os-compatibility.h"
-#include "presentation_timing-client-protocol.h"
+#include "presentation-time-client-protocol.h"
 
 #define CLIENT_WL_OUTPUT_VERSION 1
 
@@ -69,7 +71,7 @@ struct display {
 	struct wl_shm *shm;
 	uint32_t formats;
 
-	struct presentation *presentation;
+	struct wp_presentation *presentation;
 	clockid_t clk_id;
 
 	struct wl_list output_list; /* struct output::link */
@@ -78,7 +80,7 @@ struct display {
 struct feedback {
 	struct window *window;
 	unsigned frame_no;
-	struct presentation_feedback *feedback;
+	struct wp_presentation_feedback *feedback;
 	struct timespec commit;
 	struct timespec target;
 	uint32_t frame_stamp;
@@ -214,7 +216,7 @@ create_window(struct display *display, int width, int height,
 		 "presentation-shm: %s [Delay %i msecs]", run_mode_name[mode],
 		 commit_delay_msecs);
 
-	window = calloc(1, sizeof *window);
+	window = zalloc(sizeof *window);
 	if (!window)
 		return NULL;
 
@@ -253,7 +255,7 @@ static void
 destroy_feedback(struct feedback *feedback)
 {
 	if (feedback->feedback)
-		presentation_feedback_destroy(feedback->feedback);
+		wp_presentation_feedback_destroy(feedback->feedback);
 
 	wl_list_remove(&feedback->link);
 	free(feedback);
@@ -346,7 +348,7 @@ paint_pixels(void *image, int width, int height, uint32_t phase)
 
 static void
 feedback_sync_output(void *data,
-		     struct presentation_feedback *presentation_feedback,
+		     struct wp_presentation_feedback *presentation_feedback,
 		     struct wl_output *output)
 {
 	/* not interested */
@@ -359,10 +361,10 @@ pflags_to_str(uint32_t flags, char *str, unsigned len)
 		uint32_t flag;
 		char sym;
 	} desc[] = {
-		{ PRESENTATION_FEEDBACK_KIND_VSYNC, 's' },
-		{ PRESENTATION_FEEDBACK_KIND_HW_CLOCK, 'c' },
-		{ PRESENTATION_FEEDBACK_KIND_HW_COMPLETION, 'e' },
-		{ PRESENTATION_FEEDBACK_KIND_ZERO_COPY, 'z' },
+		{ WP_PRESENTATION_FEEDBACK_KIND_VSYNC, 's' },
+		{ WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK, 'c' },
+		{ WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION, 'e' },
+		{ WP_PRESENTATION_FEEDBACK_KIND_ZERO_COPY, 'z' },
 	};
 	unsigned i;
 
@@ -402,7 +404,7 @@ timespec_diff_to_usec(const struct timespec *a, const struct timespec *b)
 
 static void
 feedback_presented(void *data,
-		   struct presentation_feedback *presentation_feedback,
+		   struct wp_presentation_feedback *presentation_feedback,
 		   uint32_t tv_sec_hi,
 		   uint32_t tv_sec_lo,
 		   uint32_t tv_nsec,
@@ -458,7 +460,7 @@ feedback_presented(void *data,
 
 static void
 feedback_discarded(void *data,
-		   struct presentation_feedback *presentation_feedback)
+		   struct wp_presentation_feedback *presentation_feedback)
 {
 	struct feedback *feedback = data;
 
@@ -467,7 +469,7 @@ feedback_discarded(void *data,
 	destroy_feedback(feedback);
 }
 
-static const struct presentation_feedback_listener feedback_listener = {
+static const struct wp_presentation_feedback_listener feedback_listener = {
 	feedback_sync_output,
 	feedback_presented,
 	feedback_discarded
@@ -494,7 +496,7 @@ static void
 window_create_feedback(struct window *window, uint32_t frame_stamp)
 {
 	static unsigned seq;
-	struct presentation *pres = window->display->presentation;
+	struct wp_presentation *pres = window->display->presentation;
 	struct feedback *feedback;
 
 	seq++;
@@ -502,14 +504,14 @@ window_create_feedback(struct window *window, uint32_t frame_stamp)
 	if (!pres)
 		return;
 
-	feedback = calloc(1, sizeof *feedback);
+	feedback = zalloc(sizeof *feedback);
 	if (!feedback)
 		return;
 
 	feedback->window = window;
-	feedback->feedback = presentation_feedback(pres, window->surface);
-	presentation_feedback_add_listener(feedback->feedback,
-					   &feedback_listener, feedback);
+	feedback->feedback = wp_presentation_feedback(pres, window->surface);
+	wp_presentation_feedback_add_listener(feedback->feedback,
+					      &feedback_listener, feedback);
 
 	feedback->frame_no = seq;
 
@@ -561,21 +563,22 @@ static const struct wl_callback_listener frame_listener_mode_feedback = {
 	redraw_mode_feedback
 };
 
-static const struct presentation_feedback_listener feedkick_listener;
+static const struct wp_presentation_feedback_listener feedkick_listener;
 
 static void
 window_feedkick(struct window *window)
 {
-	struct presentation *pres = window->display->presentation;
-	struct presentation_feedback *fback;
+	struct wp_presentation *pres = window->display->presentation;
+	struct wp_presentation_feedback *fback;
 
-	fback = presentation_feedback(pres, window->surface);
-	presentation_feedback_add_listener(fback, &feedkick_listener, window);
+	fback = wp_presentation_feedback(pres, window->surface);
+	wp_presentation_feedback_add_listener(fback, &feedkick_listener,
+					      window);
 }
 
 static void
 feedkick_presented(void *data,
-		   struct presentation_feedback *presentation_feedback,
+		   struct wp_presentation_feedback *presentation_feedback,
 		   uint32_t tv_sec_hi,
 		   uint32_t tv_sec_lo,
 		   uint32_t tv_nsec,
@@ -586,7 +589,7 @@ feedkick_presented(void *data,
 {
 	struct window *window = data;
 
-	presentation_feedback_destroy(presentation_feedback);
+	wp_presentation_feedback_destroy(presentation_feedback);
 	window->refresh_nsec = refresh_nsec;
 
 	switch (window->mode) {
@@ -604,11 +607,11 @@ feedkick_presented(void *data,
 
 static void
 feedkick_discarded(void *data,
-		   struct presentation_feedback *presentation_feedback)
+		   struct wp_presentation_feedback *presentation_feedback)
 {
 	struct window *window = data;
 
-	presentation_feedback_destroy(presentation_feedback);
+	wp_presentation_feedback_destroy(presentation_feedback);
 
 	switch (window->mode) {
 	case RUN_MODE_PRESENT:
@@ -623,7 +626,7 @@ feedkick_discarded(void *data,
 	}
 }
 
-static const struct presentation_feedback_listener feedkick_listener = {
+static const struct wp_presentation_feedback_listener feedkick_listener = {
 	feedback_sync_output,
 	feedkick_presented,
 	feedkick_discarded
@@ -679,7 +682,7 @@ display_add_output(struct display *d, uint32_t name, uint32_t version)
 {
 	struct output *o;
 
-	o = calloc(1, sizeof(*o));
+	o = zalloc(sizeof(*o));
 	assert(o);
 
 	o->output = wl_registry_bind(d->registry, name,
@@ -689,7 +692,7 @@ display_add_output(struct display *d, uint32_t name, uint32_t version)
 }
 
 static void
-presentation_clock_id(void *data, struct presentation *presentation,
+presentation_clock_id(void *data, struct wp_presentation *presentation,
 		      uint32_t clk_id)
 {
 	struct display *d = data;
@@ -697,7 +700,7 @@ presentation_clock_id(void *data, struct presentation *presentation,
 	d->clk_id = clk_id;
 }
 
-static const struct presentation_listener presentation_listener = {
+static const struct wp_presentation_listener presentation_listener = {
 	presentation_clock_id
 };
 
@@ -732,12 +735,12 @@ registry_handle_global(void *data, struct wl_registry *registry,
 		wl_shm_add_listener(d->shm, &shm_listener, d);
 	} else if (strcmp(interface, "wl_output") == 0) {
 		display_add_output(d, name, version);
-	} else if (strcmp(interface, "presentation") == 0) {
+	} else if (strcmp(interface, wp_presentation_interface.name) == 0) {
 		d->presentation =
 			wl_registry_bind(registry,
-					 name, &presentation_interface, 1);
-		presentation_add_listener(d->presentation,
-					  &presentation_listener, d);
+					 name, &wp_presentation_interface, 1);
+		wp_presentation_add_listener(d->presentation,
+					     &presentation_listener, d);
 	}
 }
 

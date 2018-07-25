@@ -25,18 +25,21 @@
 
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <assert.h>
+#include <ctype.h>
 
 #include <wayland-client.h>
 
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
-#include "presentation_timing-client-protocol.h"
-
-#define CLIENT_WL_OUTPUT_VERSION 3
+#include "shared/xalloc.h"
+#include "shared/zalloc.h"
+#include "presentation-time-client-protocol.h"
 
 typedef void (*print_info_t)(void *info);
 typedef void (*destroy_info_t)(void *info);
@@ -65,8 +68,11 @@ struct output_info {
 
 	struct wl_output *output;
 
+	int32_t version;
+
 	struct {
 		int32_t x, y;
+		int32_t scale;
 		int32_t physical_width, physical_height;
 		enum wl_output_subpixel subpixel;
 		enum wl_output_transform output_transform;
@@ -75,15 +81,6 @@ struct output_info {
 	} geometry;
 
 	struct wl_list modes;
-
-	struct {
-		uint32_t version;
-		uint32_t interface_type;
-	} hdcp_protocol;
-
-	struct {
-		uint32_t hdr_supported;
-	} hdr_info;
 };
 
 struct shm_format {
@@ -113,7 +110,7 @@ struct seat_info {
 
 struct presentation_info {
 	struct global_info global;
-	struct presentation *presentation;
+	struct wp_presentation *presentation;
 
 	clockid_t clk_id;
 };
@@ -125,35 +122,6 @@ struct weston_info {
 	struct wl_list infos;
 	bool roundtrip_needed;
 };
-
-static void *
-fail_on_null(void *p)
-{
-	if (p == NULL) {
-		fprintf(stderr, "%s: out of memory\n", program_invocation_short_name);
-		exit(EXIT_FAILURE);
-	}
-
-	return p;
-}
-
-static void *
-xmalloc(size_t s)
-{
-	return fail_on_null(malloc(s));
-}
-
-static void *
-xzalloc(size_t s)
-{
-	return fail_on_null(calloc(1, s));
-}
-
-static char *
-xstrdup(const char *s)
-{
-	return fail_on_null(strdup(s));
-}
 
 static void
 print_global_info(void *data)
@@ -183,8 +151,6 @@ print_output_info(void *data)
 	struct output_mode *mode;
 	const char *subpixel_orientation;
 	const char *transform;
-	const char *hdcp_version;
-	const char *hdcp_interface_type;
 
 	print_global_info(data);
 
@@ -246,57 +212,12 @@ print_output_info(void *data)
 		break;
 	}
 
-	switch (output->hdcp_protocol.version) {
-	case WL_OUTPUT_HDCP_VERSION_UNKNOWN:
-		hdcp_version = "unknown";
-		break;
-	case WL_OUTPUT_HDCP_VERSION_NONE:
-		hdcp_version = "none";
-		break;
-	case WL_OUTPUT_HDCP_VERSION_1_4:
-		hdcp_version = "1.4";
-		break;
-	case WL_OUTPUT_HDCP_VERSION_2_2:
-		hdcp_version = "2.2";
-		break;
-	default:
-		fprintf(stderr, "unknown hdcp protocol version %u\n",
-			output->hdcp_protocol.version);
-		hdcp_version = "unexpected value";
-		break;
-	}
-
-	switch (output->hdcp_protocol.interface_type) {
-	case WL_OUTPUT_HDCP_INTERFACE_TYPE_UNKNOWN:
-		hdcp_interface_type = "unknown";
-		break;
-	case WL_OUTPUT_HDCP_INTERFACE_TYPE_NONE:
-		hdcp_interface_type = "none";
-		break;
-	case WL_OUTPUT_HDCP_INTERFACE_TYPE_INDEPENDENT:
-		hdcp_interface_type = "independent";
-		break;
-	case WL_OUTPUT_HDCP_INTERFACE_TYPE_HDMI:
-		hdcp_interface_type = "HDMI";
-		break;
-	case WL_OUTPUT_HDCP_INTERFACE_TYPE_MHL:
-		hdcp_interface_type = "MHL";
-		break;
-	case WL_OUTPUT_HDCP_INTERFACE_TYPE_DVI:
-		hdcp_interface_type = "DVI";
-		break;
-	case WL_OUTPUT_HDCP_INTERFACE_TYPE_DP:
-		hdcp_interface_type = "DP";
-		break;
-	default:
-		fprintf(stderr, "unknown hdcp interface type %u\n",
-			output->hdcp_protocol.interface_type);
-		hdcp_interface_type = "unexpected value";
-		break;
-	}
-
-	printf("\tx: %d, y: %d,\n",
+	printf("\tx: %d, y: %d,",
 	       output->geometry.x, output->geometry.y);
+	if (output->version >= 2)
+		printf(" scale: %d,", output->geometry.scale);
+	printf("\n");
+
 	printf("\tphysical_width: %d mm, physical_height: %d mm,\n",
 	       output->geometry.physical_width,
 	       output->geometry.physical_height);
@@ -308,7 +229,7 @@ print_output_info(void *data)
 	wl_list_for_each(mode, &output->modes, link) {
 		printf("\tmode:\n");
 
-		printf("\t\twidth: %d px, height: %d px, refresh: %.f Hz,\n",
+		printf("\t\twidth: %d px, height: %d px, refresh: %.3f Hz,\n",
 		       mode->width, mode->height,
 		       (float) mode->refresh / 1000);
 
@@ -319,18 +240,35 @@ print_output_info(void *data)
 			printf(" preferred");
 		printf("\n");
 	}
+}
 
-	printf("\thdcp_type: %s, hdcp_interface: %s,\n",
-	       hdcp_version, hdcp_interface_type);
+static char
+bits2graph(uint32_t value, unsigned bitoffset)
+{
+	int c = (value >> bitoffset) & 0xff;
 
-	printf("\thdr_supported: %s\n",
-	       (output->hdr_info.hdr_supported ==
-	            WL_OUTPUT_HDR_SUPPORTED_TRUE) ? "Yes" : "No");
+	if (isgraph(c) || isspace(c))
+		return c;
+
+	return '?';
+}
+
+static void
+fourcc2str(uint32_t format, char *str, int len)
+{
+	int i;
+
+	assert(len >= 5);
+
+	for (i = 0; i < 4; i++)
+		str[i] = bits2graph(format, i * 8);
+	str[i] = '\0';
 }
 
 static void
 print_shm_info(void *data)
 {
+	char str[5];
 	struct shm_info *shm = data;
 	struct shm_format *format;
 
@@ -350,7 +288,8 @@ print_shm_info(void *data)
 			printf(" RGB565");
 			break;
 		default:
-			printf(" unknown(%08x)", format->format);
+			fourcc2str(format->format, str, sizeof(str));
+			printf(" '%s'(0x%08x)", str, format->format);
 			break;
 		}
 
@@ -589,33 +528,20 @@ output_handle_mode(void *data, struct wl_output *wl_output,
 }
 
 static void
-output_handle_done(void *data,      struct wl_output *wl_output)
+output_handle_done(void *data, struct wl_output *wl_output)
 {
+	/* don't bother waiting for this; there's no good reason a
+	 * compositor will wait more than one roundtrip before sending
+	 * these initial events. */
 }
 
 static void
-output_handle_scale(void *data,      struct wl_output *wl_output,
-                    int32_t scale)
+output_handle_scale(void *data, struct wl_output *wl_output,
+		    int32_t scale)
 {
-}
+	struct output_info *output = data;
 
-static void
-output_handle_hdcp(void *data, struct wl_output *wl_output,
-		   uint32_t version, uint32_t interface_type)
-{
-	struct output_info *output = (struct output_info *)data;
-
-	output->hdcp_protocol.version = version;
-	output->hdcp_protocol.interface_type = interface_type;
-}
-
-static void
-output_handle_hdr(void *data, struct wl_output *wl_output,
-		 uint32_t is_supported)
-{
-	struct output_info *output = (struct output_info *)data;
-
-	output->hdr_info.hdr_supported = is_supported;
+	output->geometry.scale = scale;
 }
 
 static const struct wl_output_listener output_listener = {
@@ -623,8 +549,6 @@ static const struct wl_output_listener output_listener = {
 	output_handle_mode,
 	output_handle_done,
 	output_handle_scale,
-	output_handle_hdcp,
-	output_handle_hdr
 };
 
 static void
@@ -655,10 +579,12 @@ add_output_info(struct weston_info *info, uint32_t id, uint32_t version)
 	output->global.print = print_output_info;
 	output->global.destroy = destroy_output_info;
 
+	output->version = MIN(version, 2);
+	output->geometry.scale = 1;
 	wl_list_init(&output->modes);
 
 	output->output = wl_registry_bind(info->registry, id,
-					  &wl_output_interface, CLIENT_WL_OUTPUT_VERSION);
+					  &wl_output_interface, output->version);
 	wl_output_add_listener(output->output, &output_listener,
 			       output);
 
@@ -670,7 +596,7 @@ destroy_presentation_info(void *info)
 {
 	struct presentation_info *prinfo = info;
 
-	presentation_destroy(prinfo->presentation);
+	wp_presentation_destroy(prinfo->presentation);
 }
 
 static const char *
@@ -682,7 +608,9 @@ clock_name(clockid_t clk_id)
 		[CLOCK_MONOTONIC_RAW] =		"CLOCK_MONOTONIC_RAW",
 		[CLOCK_REALTIME_COARSE] =	"CLOCK_REALTIME_COARSE",
 		[CLOCK_MONOTONIC_COARSE] =	"CLOCK_MONOTONIC_COARSE",
+#ifdef CLOCK_BOOTTIME
 		[CLOCK_BOOTTIME] =		"CLOCK_BOOTTIME",
+#endif
 	};
 
 	if (clk_id < 0 || (unsigned)clk_id >= ARRAY_LENGTH(names))
@@ -703,7 +631,7 @@ print_presentation_info(void *info)
 }
 
 static void
-presentation_handle_clock_id(void *data, struct presentation *presentation,
+presentation_handle_clock_id(void *data, struct wp_presentation *presentation,
 			     uint32_t clk_id)
 {
 	struct presentation_info *prinfo = data;
@@ -711,7 +639,7 @@ presentation_handle_clock_id(void *data, struct presentation *presentation,
 	prinfo->clk_id = clk_id;
 }
 
-static const struct presentation_listener presentation_listener = {
+static const struct wp_presentation_listener presentation_listener = {
 	presentation_handle_clock_id
 };
 
@@ -720,15 +648,16 @@ add_presentation_info(struct weston_info *info, uint32_t id, uint32_t version)
 {
 	struct presentation_info *prinfo = xzalloc(sizeof *prinfo);
 
-	init_global_info(info, &prinfo->global, id, "presentation", version);
+	init_global_info(info, &prinfo->global, id,
+			 wp_presentation_interface.name, version);
 	prinfo->global.print = print_presentation_info;
 	prinfo->global.destroy = destroy_presentation_info;
 
 	prinfo->clk_id = -1;
 	prinfo->presentation = wl_registry_bind(info->registry, id,
-						&presentation_interface, 1);
-	presentation_add_listener(prinfo->presentation, &presentation_listener,
-				  prinfo);
+						&wp_presentation_interface, 1);
+	wp_presentation_add_listener(prinfo->presentation,
+				     &presentation_listener, prinfo);
 
 	info->roundtrip_needed = true;
 }
@@ -761,7 +690,7 @@ global_handler(void *data, struct wl_registry *registry, uint32_t id,
 		add_shm_info(info, id, version);
 	else if (!strcmp(interface, "wl_output"))
 		add_output_info(info, id, version);
-	else if (!strcmp(interface, "presentation"))
+	else if (!strcmp(interface, wp_presentation_interface.name))
 		add_presentation_info(info, id, version);
 	else
 		add_global_info(info, id, interface, version);
