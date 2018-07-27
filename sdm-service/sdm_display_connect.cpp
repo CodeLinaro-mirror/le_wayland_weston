@@ -47,6 +47,22 @@ SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
 SdmDisplayProxy *display_[kDisplayMax] = {0};
 
+static inline
+DisplayError SdmValidateDisplayId(int display_id)
+{
+    if (display_id >= kDisplayMax || display_id < 0) {
+        DLOGE("Display id(%d) out of range.", display_id);
+        return kErrorParameters;
+    }
+
+    if (!display_[display_id]) {
+        DLOGE("function failed. Display(%d) not created yet.",
+              display_id);
+        return kErrorNotSupported;
+    }
+    return kErrorNone;
+}
+
 int CreateCore()
 {
     DisplayError error = kErrorNone;
@@ -268,22 +284,18 @@ int DestroyDisplay(int display_id)
     return kErrorNone;
 }
 
-bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_config)
+bool GetDisplayConfiguration(int display_id, uint32_t *index,
+                                    struct DisplayConfigInfo *display_config)
 {
     DisplayError error = kErrorNone;
 
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
+    error = SdmValidateDisplayId(display_id);
+    if (kErrorNone != error) {
+        DLOGE("Display Id (%d) validation failed with error = %d", display_id, error);
         return FAIL;
     }
 
-    if (!display_[display_id]) {
-        DLOGE("function failed. Display(%d) not created yet.", display_id);
-        return FAIL;
-    }
-
-    error = display_[display_id]->GetDisplayConfiguration(display_config);
-
+    error = display_[display_id]->GetDisplayConfiguration(index, display_config);
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
         return FAIL;
@@ -291,6 +303,53 @@ bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_c
 
     #if SDM_DISPLAY_DEBUG
     DLOGD("function successful.");
+    #endif
+
+    return SUCCESS;
+}
+
+bool GetDisplayConfigurationOfIndex(int display_id, uint32_t index,
+                                            struct DisplayConfigInfo *display_config)
+{
+    DisplayError error = kErrorNone;
+
+    error = SdmValidateDisplayId(display_id);
+    if (kErrorNone != error) {
+        DLOGE("Display Id (%d) validation failed with error = %d", display_id, error);
+        return FAIL;
+    }
+
+    error = display_[display_id]->GetDisplayConfiguration(index, display_config);
+    if (error != kErrorNone) {
+        DLOGE("function failed with error = %d", error);
+        return FAIL;
+    }
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGD("function successful.");
+    #endif
+
+    return SUCCESS;
+}
+
+bool GetNumDisplayAttributes(int display_id, uint32_t *count)
+{
+    DisplayError error = kErrorNone;
+
+    error = SdmValidateDisplayId(display_id);
+    if (kErrorNone != error) {
+        DLOGE("Display Id (%d) validation failed with error = %d", display_id, error);
+        return FAIL;
+    }
+
+    error = display_[display_id]->GetNumDisplayAttributes(count);
+    if (error != kErrorNone) {
+        DLOGE("function failed with error = %d", error);
+        return FAIL;
+    }
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGE("function successful.");
     #endif
 
     return SUCCESS;
@@ -450,6 +509,52 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
     #endif
 
     return kErrorNone;
+}
+
+bool SetActiveConfigIndex(int display_id, uint32_t index)
+{
+    DisplayError error = kErrorNone;
+
+    error = SdmValidateDisplayId(display_id);
+    if (kErrorNone != error) {
+        DLOGE("Display Id (%d) validation failed with error = %d", display_id, error);
+        return FAIL;
+    }
+
+    error = display_[display_id]->SetActiveConfig(index);
+    if (error != kErrorNone) {
+        DLOGE("Set Active Config failed with error = %d", error);
+        return FAIL;
+    }
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGD("function successful.");
+    #endif
+
+    return SUCCESS;
+}
+
+bool SetActiveConfig(int display_id, struct DisplayConfigInfo *variable_info)
+{
+    DisplayError error = kErrorNone;
+
+    error = SdmValidateDisplayId(display_id);
+    if (kErrorNone != error) {
+        DLOGE("Display Id (%d) validation failed with error = %d", display_id, error);
+        return FAIL;
+    }
+
+    error = display_[display_id]->SetActiveConfig(variable_info);
+    if (error != kErrorNone) {
+        DLOGE("Set Active Config failed with error = %d", error);
+        return FAIL;
+    }
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGD("function successful.");
+    #endif
+
+    return SUCCESS;
 }
 
 int UpdateHPDClockState(int display_id, uint state)

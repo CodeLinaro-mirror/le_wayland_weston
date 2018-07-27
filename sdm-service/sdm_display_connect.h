@@ -152,18 +152,51 @@ int Prepare(int display_id, struct drm_output *output);
 */
 int Commit(int display_id, struct drm_output *output);
 
-/*! @brief Method to obtain display property for a display_id requested.
+/*! @brief Method to obtain active index and display property for a display_id requested.
+
     @details Client shall use this method to display properties of requested
     display id.
 
     @param[in] display_id \link int \endlink
-    @param[in] display_config \link struct DisplayConfigInfo \endlink
+    @param[out] index \link uint \endlink
+    @param[out] display_config \link struct DisplayConfigInfo \endlink
 
-    @return \link DisplayError \endlink
+    @return \link bool \endlink
 
     @sa
 */
-bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_config);
+bool GetDisplayConfiguration(int display_id, uint32_t *index,
+                                    struct DisplayConfigInfo *display_config);
+
+/*! @brief Method to obtain display property for a display_id requested based on index.
+
+    @details Client shall use this method to obtain display property of the requested
+    display id and property index.
+
+    @param[in] display_id \link int \endlink
+    @param[in] index \link uint \endlink
+    @param[out] display_config \link struct DisplayConfigInfo \endlink
+
+    @return \link bool \endlink
+
+    @sa
+*/
+bool GetDisplayConfigurationOfIndex(int display_id, uint32_t index,
+                                             struct DisplayConfigInfo *display_config);
+
+/*! @brief Method to obtain number of display properties for a display_id requested.
+
+    @details Client shall use this method to obtain the number of display properties
+    of the requested display id.
+
+    @param[in] display_id \link int \endlink
+    @param[out] count \link struct unit \endlink
+
+    @return \link bool \endlink
+
+    @sa
+*/
+bool GetNumDisplayAttributes(int display_id, uint32_t *count);
 
 /*! @brief Method to obtain display's HDR information parameters for requested display_id.
     @details Client shall use this method to obtain display's HDR capability parameters
@@ -234,6 +267,32 @@ bool SetDisplayState(int display_id, int power_mode);
     @sa
 */
 int SetVSyncState(int display_id, bool enable, struct drm_output *output);
+
+/*! @brief Method to set active config, i.e. mode index.
+
+    @details Client shall use this method for setting active config mode index.
+
+    @param[in] display_id \link int \endlink
+    @param[in] index \link uint \endlink
+
+    @return \link bool \endlink
+
+    @sa
+*/
+bool SetActiveConfigIndex(int display_id, uint32_t index);
+
+/*! @brief Method to set active config info, i.e. mode info.
+
+    @details Client shall use this method for setting active config info.
+
+    @param[in] display_id \link int \endlink
+    @param[in] variable_info \link DisplayConfigInfo \endlink
+
+    @return \link bool \endlink
+
+    @sa
+*/
+bool SetActiveConfig(int display_id, struct DisplayConfigInfo *variable_info);
 
 /*! @brief Method for obtaining master fd.
 

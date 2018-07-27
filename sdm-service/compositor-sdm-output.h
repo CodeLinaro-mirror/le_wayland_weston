@@ -156,6 +156,10 @@ struct drm_output {
        struct drm_edid edid;
        drmModePropertyPtr dpms_prop;
        uint32_t format;
+       uint32_t current_mode_index;
+       uint32_t next_mode_index;
+       struct DisplayConfigInfo display_config;
+       uint32_t new_mode_attributes;
 
        enum dpms_enum dpms;
        enum hpd_enum hpd;
