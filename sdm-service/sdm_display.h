@@ -72,7 +72,13 @@ class SdmDisplayInterface {
     virtual DisplayError Commit(struct drm_output *output) = 0;
     virtual DisplayError SetDisplayState(DisplayState state) = 0;
     virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
-    virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
+    virtual DisplayError SetActiveConfig(uint32_t index) = 0;
+    virtual DisplayError SetActiveConfig(struct DisplayConfigInfo *variable_info) = 0;
+    virtual DisplayError GetNumDisplayAttributes(uint32_t *count) = 0;
+    virtual DisplayError GetDisplayConfiguration(uint32_t *index,
+                                                 struct DisplayConfigInfo *display_config) = 0;
+    virtual DisplayError GetDisplayConfiguration(uint32_t index,
+                                                 struct DisplayConfigInfo *display_config) = 0;
     virtual DisplayError RegisterCb(int display_id, pageflip_cb_t pflipcb) = 0;
     virtual DisplayError UpdateHPDClockState(uint32_t state) = 0;
     virtual DisplayError EnablePllUpdate(int32_t enable) = 0;
@@ -99,7 +105,13 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError Commit(struct drm_output *output);
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
-    DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
+    DisplayError SetActiveConfig(uint32_t index);
+    DisplayError SetActiveConfig(struct DisplayConfigInfo *variable_info);
+    DisplayError GetNumDisplayAttributes(uint32_t *count);
+    DisplayError GetDisplayConfiguration(uint32_t *index,
+                                         struct DisplayConfigInfo *display_config);
+    DisplayError GetDisplayConfiguration(uint32_t index,
+                                         struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, pageflip_cb_t pflipcb);
     DisplayError UpdateHPDClockState(uint32_t state);
     DisplayError EnablePllUpdate(int32_t enable);
@@ -125,7 +137,13 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError Commit(struct drm_output *output);
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
-    DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
+    DisplayError SetActiveConfig(uint32_t index);
+    DisplayError SetActiveConfig(struct DisplayConfigInfo *variable_info);
+    DisplayError GetNumDisplayAttributes(uint32_t *count);
+    DisplayError GetDisplayConfiguration(uint32_t *index,
+                                         struct DisplayConfigInfo *display_config);
+    DisplayError GetDisplayConfiguration(uint32_t index,
+                                         struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, pageflip_cb_t pflipcb);
     DisplayError UpdateHPDClockState(uint32_t state);
     DisplayError EnablePllUpdate(int32_t enable);
@@ -238,8 +256,22 @@ class SdmDisplayProxy {
     DisplayError SetVSyncState(bool enable, struct drm_output *output) {
       return display_intf_->SetVSyncState(enable, output);
     }
-    DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
-      return display_intf_->GetDisplayConfiguration(display_config);
+    DisplayError SetActiveConfig(uint32_t index) {
+      return display_intf_->SetActiveConfig(index);
+    }
+    DisplayError SetActiveConfig(struct DisplayConfigInfo *variable_info) {
+      return display_intf_->SetActiveConfig(variable_info);
+    }
+    DisplayError GetNumDisplayAttributes(uint32_t *count) {
+      return display_intf_->GetNumDisplayAttributes(count);
+    }
+    DisplayError GetDisplayConfiguration(uint32_t *index,
+                                         struct DisplayConfigInfo *display_config) {
+      return display_intf_->GetDisplayConfiguration(index, display_config);
+    }
+    DisplayError GetDisplayConfiguration(uint32_t index,
+                                         struct DisplayConfigInfo *display_config) {
+      return display_intf_->GetDisplayConfiguration(index, display_config);
     }
     DisplayError RegisterCbs(int display_id, sdm_cbs_t *cbs) {
       hotplug_cb_ = cbs->hotplug_cb;

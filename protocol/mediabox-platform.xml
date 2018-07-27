@@ -58,5 +58,37 @@
       <entry name="on" value="0"/>
       <entry name="off" value="1"/>
     </enum>
+
+    <request name="set_mode_index">
+      <description summary="Set Active Config/Mode Index">
+        Sets the active config based on the index.
+      </description>
+
+      <arg name="index" type="uint"/>
+    </request>
+
+    <request name="set_mode_attributes">
+      <description summary="Set Active Config/Mode Attributes">
+        Sets the active config based on the attributes.
+      </description>
+
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+      <arg name="fps" type="uint"/>
+      <arg name="aspect_ratio" type="int"/>
+    </request>
+
+    <enum name="mode_picture_aspect_ratio">
+      <description summary="Picture Aspect Ratio of the mode">
+        This enumeration describes the mode picture aspect ratio values.
+      </description>
+      <entry name="mode_pic_ar_ignore" value="-1"
+             summary="selects the first matched mode ignoring the aspect ratio"/>
+      <entry name="mode_pic_ar_none" value="0" summary="0 is used for non-CEA modes"/>
+      <entry name="mode_pic_ar_4_3" value="1" summary="picture aspect ratio 4:3"/>
+      <entry name="mode_pic_ar_16_9" value="2" summary="picture aspect ratio 16:9"/>
+      <entry name="mode_pic_ar_64_27" value="3" summary="picture aspect ratio 64:27"/>
+      <entry name="mode_pic_ar_256_135" value="4" summary="picture aspect ratio 256:135"/>
+    </enum>
   </interface>
 </protocol>

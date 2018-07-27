@@ -661,9 +661,32 @@ drm_assign_planes(struct weston_output *output_base)
     pixman_region32_t overlap, surface_overlap;
     struct weston_plane *primary, *next_plane;
     struct sdm_layer *sdm_layer, *next_sdm_layer;
+    bool ret = false;
     output->view_count = 0;
     assert(wl_list_empty(&output->sdm_layer_list));
 
+    if (output->new_mode_attributes == 1) {
+        ret = SetActiveConfig(display_id, &output->display_config);
+        if (ret) {
+            output->base.width = output->base.current_mode->width;
+            output->base.height = output->base.current_mode->height;
+        } else {
+            weston_log("%s: fail to set mode for sdm display! err=%d\n", __func__, ret);
+        }
+        output->new_mode_attributes = 0;
+    } else if (output->current_mode_index != output->next_mode_index) {
+        ret = SetActiveConfigIndex(display_id, output->next_mode_index);
+        if (ret) {
+            output->current_mode_index = output->next_mode_index;
+            output->base.width = output->base.current_mode->width;
+            output->base.height = output->base.current_mode->height;
+        } else {
+            weston_log("%s: fail to set mode for sdm display! err=%d\n", __func__, ret);
+            GetDisplayConfiguration(display_id, &output->current_mode_index,
+                                    &output->display_config);
+            output->next_mode_index = output->current_mode_index;
+        }
+    }
     /*
      * Find a surface for each sprite in the output using some heuristics:
      * 1) size
@@ -837,8 +860,27 @@ drm_output_destroy(struct weston_output *output_base)
 static struct drm_mode *
 choose_mode (struct drm_output *output, struct weston_mode *target_mode)
 {
-    //TODO(user): will be implemented in SDM backend
-    struct drm_mode *tmp_mode = NULL;
+    struct drm_mode *tmp_mode = NULL, *mode;
+
+   /**
+    * TODO: need to involve aspect ratio for mode validation and selection.
+    */
+    if (output->base.current_mode->width == target_mode->width &&
+        output->base.current_mode->height == target_mode->height &&
+        (output->base.current_mode->refresh == target_mode->refresh ||
+         target_mode->refresh == 0))
+        return (struct drm_mode *)output->base.current_mode;
+
+    wl_list_for_each(mode, &output->base.mode_list, base.link) {
+        if (mode->base.width == target_mode->width &&
+            mode->base.height == target_mode->height) {
+            if (mode->base.refresh == target_mode->refresh ||
+                target_mode->refresh == 0) {
+                return mode;
+            } else if (!tmp_mode)
+                tmp_mode = mode;
+        }
+    }
 
     return tmp_mode;
 }
@@ -907,6 +949,75 @@ drm_output_switch_mode(struct weston_output *output_base, struct weston_mode *mo
     }
 
     return 0;
+}
+
+static int
+drm_output_switch_mode_with_index(struct weston_output *output_base, uint32_t index)
+{
+    struct weston_mode mode = {0};
+    struct drm_output *output;
+    int32_t width, height;
+    uint32_t refresh;
+    bool rc = false;
+
+    if (output_base == NULL) {
+        weston_log("%s: output is NULL.\n", __func__);
+        return -1;
+    }
+
+    output = (struct drm_output *)output_base;
+
+    struct DisplayConfigInfo display_config;
+    display_config.x_pixels        = 0;
+    display_config.y_pixels        = 0;
+    display_config.x_dpi           = 0.0f;
+    display_config.y_dpi           = 0.0f;
+    display_config.fps             = 0;
+    display_config.vsync_period_ns = 0;
+    display_config.is_yuv          = false;
+    display_config.aspect_ratio    =-1;
+
+    rc = GetDisplayConfigurationOfIndex(display_id, index, &display_config);
+    if (rc) {
+        width   = display_config.x_pixels;
+        height  = display_config.y_pixels;
+        refresh = display_config.fps * 1000;
+    } else { /* default 1080p, 60 fps */
+        width   = 1920;
+        height  = 1080;
+        refresh = 60 * 1000;
+    }
+    output->display_config = display_config;
+
+    mode.width = width;
+    mode.height = height;
+    mode.refresh = refresh;
+
+    return drm_output_switch_mode(output_base, &mode);
+}
+
+static int
+drm_output_switch_mode_with_attributes(struct weston_output *output_base)
+{
+    struct weston_mode mode = {0};
+    struct drm_output *output;
+
+    if (output_base == NULL) {
+        weston_log("%s: output is NULL.\n", __func__);
+        return -1;
+    }
+
+    output = (struct drm_output *)output_base;
+
+    mode.width = output->display_config.x_pixels;
+    mode.height = output->display_config.y_pixels;
+    mode.refresh = output->display_config.fps*1000;
+
+   /**
+    * TODO: need to involve aspect ratio for mode validation and selection.
+    */
+
+    return drm_output_switch_mode(output_base, &mode);
 }
 
 static int
@@ -1097,6 +1208,40 @@ drm_output_add_mode(struct drm_output *output, const drmModeModeInfo *info)
     return mode;
 }
 
+/**
+ * Add a mode to output's mode list
+ *
+ * Copy the supplied SDM mode into a Weston mode structure, and add it to the
+ * output's mode list.
+ *
+ * @param output DRM output to add mode to
+ * @param display config info mode structure to add
+ * @returns Newly-allocated Weston/DRM mode structure
+ */
+static struct drm_mode *
+sdm_output_add_mode(struct drm_output *output, const struct DisplayConfigInfo *display_config)
+{
+    struct drm_mode *mode;
+    uint64_t refresh;
+
+    mode = zalloc(sizeof *mode);
+    if (mode == NULL)
+        return NULL;
+
+    mode->base.flags = 0;
+    mode->base.width = display_config->x_pixels;
+    mode->base.height = display_config->y_pixels;
+
+    /* Calculate higher precision (mHz) refresh rate */
+    refresh = display_config->fps;
+
+    mode->base.refresh = refresh *1000;
+
+    wl_list_insert(output->base.mode_list.prev, &mode->base.link);
+
+    return mode;
+}
+
 static int
 drm_subpixel_to_wayland(int drm_value)
 {
@@ -1185,6 +1330,49 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
         output->dpms = level;
 }
 
+static void
+drm_set_mode_index(struct weston_output *output_base, uint32_t index)
+{
+    struct drm_output *output = (struct drm_output *) output_base;
+
+    int ret = drm_output_switch_mode_with_index(output_base, index);
+    if (ret) {
+        weston_log("DRM: mode switch failed for display %d\n",
+               display_id);
+        return;
+    }
+
+    output->next_mode_index = index;
+    return;
+}
+
+static void
+drm_set_mode_attributes(struct weston_output *output_base,
+                        uint32_t width, uint32_t height, uint32_t fps, int32_t ar)
+{
+    struct drm_output *output = (struct drm_output *) output_base;
+    int ret =0;
+
+    if (output == NULL) {
+        weston_log("%s: output is NULL.\n", __func__);
+        return;
+    }
+
+    output->display_config.x_pixels = width;
+    output->display_config.y_pixels = height;
+    output->display_config.fps = fps;
+    output->display_config.aspect_ratio = ar;
+
+    ret = drm_output_switch_mode_with_attributes(output_base);
+    if (ret) {
+        weston_log("DRM: mode switch failed for display %d\n",
+               display_id);
+        return;
+    }
+
+    output->new_mode_attributes = 1;
+    return;
+}
 
 static void
 drm_set_hpd(struct weston_output *output_base, enum hpd_enum state)
@@ -1683,6 +1871,8 @@ hotplug_handler(int disp, bool connected, void *data)
 	output->base.assign_planes = drm_assign_planes;
 	output->base.set_dpms = drm_set_dpms;
 	output->base.set_hpd = drm_set_hpd;
+	output->base.set_mode_index = drm_set_mode_index;
+	output->base.set_mode_attributes = drm_set_mode_attributes;
 	output->base.switch_mode = drm_output_switch_mode;
 	output->base.enable_ppm = drm_enable_ppm;
 	output->base.set_ppm = drm_set_ppm;
@@ -1693,6 +1883,8 @@ hotplug_handler(int disp, bool connected, void *data)
 	output->base.set_backlight = NULL;
 	output->base.set_dpms = NULL;
 	output->base.set_hpd = NULL;
+	output->base.set_mode_index = NULL;
+	output->base.set_mode_attributes = NULL;
 	output->base.switch_mode = NULL;
 	output->base.enable_ppm = NULL;
 	output->base.set_ppm = NULL;
@@ -1762,6 +1954,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     uint32_t transform;
     struct wl_event_loop *loop;
     struct weston_compositor *c = b->compositor;
+    uint32_t count_modes = 0;
+    bool rc = false;
 
     output = zalloc(sizeof *output);
     if (output == NULL)
@@ -1818,6 +2012,34 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
 
     output->dpms_prop = zalloc(sizeof *output->dpms_prop);
 
+    struct DisplayConfigInfo display_config;
+    display_config.x_pixels        = 0;
+    display_config.y_pixels        = 0;
+    display_config.x_dpi           = 0.0f;
+    display_config.y_dpi           = 0.0f;
+    display_config.fps             = 0;
+    display_config.vsync_period_ns = 0;
+    display_config.is_yuv          = false;
+    display_config.aspect_ratio    =-1;
+
+    rc = GetNumDisplayAttributes(display_id, &count_modes);
+    if (!rc) {
+        weston_log("%s: failed to get number of display modes", __func__);
+    }
+
+    for (i = 0; i < count_modes; i++) {
+        rc = GetDisplayConfigurationOfIndex(display_id, i, &display_config);
+        if (!rc) {
+            weston_log("%s: failed to get display config for index %d", __func__, i);
+        } else {
+            drm_mode = sdm_output_add_mode(output, &display_config);
+            if (!drm_mode) {
+                weston_log("%s: fail to add mode\n", __func__);
+                goto err_free;
+            }
+        }
+    }
+
     if (config == OUTPUT_CONFIG_OFF) {
         weston_log("Disabling output %s\n", output->base.name);
         drmModeSetCrtc(b->drm.fd, output->crtc_id,
@@ -1825,29 +2047,25 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
         goto err_free;
     }
 
-        struct DisplayConfigInfo display_config;
-        display_config.x_pixels        = 0;
-        display_config.y_pixels        = 0;
-        display_config.x_dpi           = 0.0f;
-        display_config.y_dpi           = 0.0f;
-        display_config.fps             = 0;
-        display_config.vsync_period_ns = 0;
-        display_config.is_yuv          = false;
+    rc = GetDisplayConfiguration(display_id, &output->current_mode_index, &display_config);
+    if (rc) {
+        width   = display_config.x_pixels;
+        height  = display_config.y_pixels;
+        refresh = display_config.fps*1000;
+        x_dpi = display_config.x_dpi;
+        y_dpi = display_config.y_dpi;
+    } else { /* default 1080p, 60 fps */
+        width   = 1920;
+        height  = 1080;
+        refresh = 60*1000;
+        x_dpi = 25.4;
+        y_dpi = 25.4;
+        output->current_mode_index = 1;
+    }
 
-        bool rc = GetDisplayConfiguration(display_id, &display_config);
-        if (rc) {
-            width   = display_config.x_pixels;
-            height  = display_config.y_pixels;
-            refresh = display_config.fps*1000;
-            x_dpi = display_config.x_dpi;
-            y_dpi = display_config.y_dpi;
-        } else { /* default 1080p, 60 fps */
-            width   = 1920;
-            height  = 1080;
-            refresh = 60*1000;
-            x_dpi = 25.4;
-            y_dpi = 25.4;
-        }
+    output->next_mode_index = output->current_mode_index;
+    output->new_mode_attributes = 0;
+    output->display_config = display_config;
 
     config = OUTPUT_CONFIG_MODE;
 
@@ -1897,6 +2115,8 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.assign_planes = drm_assign_planes;
     output->base.set_dpms = drm_set_dpms;
     output->base.set_hpd = drm_set_hpd;
+    output->base.set_mode_index = drm_set_mode_index;
+    output->base.set_mode_attributes = drm_set_mode_attributes;
     output->base.switch_mode = drm_output_switch_mode;
     output->base.enable_ppm = drm_enable_ppm;
     output->base.set_ppm = drm_set_ppm;
@@ -1916,7 +2136,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
         goto err_output;
     }
 
-    int count_modes = 1;
+    count_modes = 1;
     wl_list_for_each(m, &output->base.mode_list, link)
         weston_log_continue(STAMP_SPACE "mode %dx%d@%.1f%s%s%s\n",
                     m->width, m->height, m->refresh / 1000.0,

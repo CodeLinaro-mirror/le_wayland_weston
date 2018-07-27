@@ -287,6 +287,9 @@ struct weston_output {
 	void (*set_backlight)(struct weston_output *output, uint32_t value);
 	void (*set_dpms)(struct weston_output *output, enum dpms_enum level);
 	void (*set_hpd)(struct weston_output *output, enum hpd_enum level);
+	void (*set_mode_index)(struct weston_output *output, uint32_t index);
+	void (*set_mode_attributes)(struct weston_output *output, uint32_t width, uint32_t height,
+				    uint32_t fps, int32_t ar);
 
 	int connection_internal;
 	uint16_t gamma_size;
