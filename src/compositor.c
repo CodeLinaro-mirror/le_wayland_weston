@@ -4519,9 +4519,25 @@ mediabox_platform_set_hpd(struct wl_client *client,
 	}
 }
 
+mediabox_platform_set_mode(struct wl_client *client,
+		    struct wl_resource *mediabox_platform,
+		    uint32_t index)
+{
+	struct weston_compositor *compositor = wl_resource_get_user_data(mediabox_platform);
+	struct weston_output *output, *next;
+
+	wl_list_for_each_safe(output, next, &compositor->output_list, link) {
+		if (output->set_mode)
+			output->set_mode(output, index);
+		else
+			weston_log("no suitable set_mode ops available for index %u.\n", index);
+	}
+}
+
 static const struct wl_mediabox_platform_interface mediabox_platform_interface = {
 	mediabox_platform_destroy,
-	mediabox_platform_set_hpd
+	mediabox_platform_set_hpd,
+	mediabox_platform_set_mode
 };
 
 static void

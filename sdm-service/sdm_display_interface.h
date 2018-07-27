@@ -215,6 +215,7 @@ struct DisplayConfigInfo {
   uint32_t fps;               //!< Frame rate per second.
   uint32_t vsync_period_ns;   //!< VSync period in nanoseconds.
   bool     is_yuv;            //!< If the display output is in YUV format.
+  int32_t aspect_ratio;       //!< Aspect ratio enum value
 };
 
 typedef void (*pageflip_cb_t)(unsigned int sequence, unsigned int tv_sec,

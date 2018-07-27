@@ -65,13 +65,69 @@ static const struct wl_registry_listener registry_listener = {
 	global_registry_remover
 };
 
+int do_hpd_on_off_test(int use_key, int delay)
+{
+	char cmd = 'o';
+	int rc = 0;
+	do {
+		if (use_key)
+		{
+			printf("Enter a command sequence to Turn On HPD (o), Turn Off HPD (f)," \
+				" or Quit (q): ");
+			cmd = getchar();
+			if (cmd == 'q') break;
+		}
+		else
+		{
+			cmd = (cmd=='o') ? 'f' : 'o' ;
+		}
+		printf("Powering %s HPD Clocks ...\n", (cmd=='f') ? "Off":"On");
+		wl_mediabox_platform_set_hpd(actor, (cmd=='f') ? 1:0);
+		// Flush requests to server
+		rc = wl_display_flush(display);
+		if (rc < 0)
+			fprintf(stderr, "failed to flush display\n");
+		sleep(delay);
+
+	} while (1);
+}
+
+void mode_set_with_index(int delay, int idx)
+{
+	printf("Setting mode index %d\n", idx);
+	wl_mediabox_platform_set_mode(actor, idx);
+	// Flush requests to server
+	if (wl_display_flush(display) < 0)
+		fprintf(stderr, "failed to flush display\n");
+	sleep(delay);
+}
+
+int do_mode_set_test(int test_id, int use_key, int delay, int idx_a, int idx_b)
+{
+	if (test_id == 2)
+	{
+		int idx = 0;
+		for (idx = idx_a; idx <= idx_b ; idx++)
+			mode_set_with_index(delay, idx);
+	}
+	else if (test_id == 3)
+	{
+		while(1)
+		{
+			mode_set_with_index(delay, idx_a);
+			mode_set_with_index(delay, idx_b);
+		}
+	}
+}
+
 int main(int argc, char **argv)
 {
-	int rc = 0;
 	int i = 0;
 	int delay = SLEEP_TIME;
 	int use_key = 0;
-	char cmd = 'o';
+	int start_idx = 0;
+	int end_idx = 0;
+	int test_id = 0;
 
 	/* Need to follow the format of the specific command arg */
 	for (i = 1; i < argc; i++) {
@@ -79,6 +135,20 @@ int main(int argc, char **argv)
 			delay = atoi(argv[++i]);
 		if (strcmp("-k", argv[i]) == 0)
 			use_key = 1;
+		if (strcmp("-h", argv[i]) == 0)
+			test_id = 1;
+		if (strcmp("-m1", argv[i]) == 0)
+		{
+			test_id = 2;
+			start_idx = atoi(argv[++i]);
+			end_idx = atoi(argv[++i]);
+		}
+		if (strcmp("-m2", argv[i]) == 0)
+		{
+			test_id = 3;
+			start_idx = atoi(argv[++i]);
+			end_idx = atoi(argv[++i]);
+		}
 	}
 
 	display = wl_display_connect(NULL);
@@ -99,25 +169,19 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	do {
-		if (use_key) {
-			printf("Enter a command sequence to Turn On HPD (o), Turn Off HPD (f)," \
-				" or Quit (q): ");
-			cmd = getchar();
-			if (cmd == 'q') break;
-		} else {
-			cmd = (cmd=='o') ? 'f' : 'o' ;
-		}
-		printf("Powering %s HPD Clocks ...\n", (cmd=='f') ? "Off":"On");
-		wl_mediabox_platform_set_hpd(actor, (cmd=='f') ? 1:0);
-		// Flush requests to server
-		rc = wl_display_flush(display);
-		if (rc < 0)
-			fprintf(stderr, "failed to flush display\n");
-		sleep(delay);
-
-	} while (1);
-
+switch(test_id)
+{
+	case 1:
+		do_hpd_on_off_test(use_key, delay);
+		break;
+	case 2:
+	case 3:
+		do_mode_set_test(test_id, use_key, delay, start_idx, end_idx);
+		break;
+	default:
+		printf("invalid test id %d\n", test_id);
+		break;
+}
 	wl_display_disconnect(display);
 	printf("disconnected from display\n");
 
