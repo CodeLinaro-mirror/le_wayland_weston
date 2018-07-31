@@ -42,6 +42,8 @@ struct weston_fbdev_backend_config {
 	struct weston_backend_config base;
 
 	int tty;
+	/** Whether to use the pixman renderer instead of the OpenGL ES renderer. */
+	bool use_pixman;
 	char *device;
 
 	/** Callback used to configure input devices.

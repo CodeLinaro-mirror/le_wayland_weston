@@ -70,9 +70,9 @@ CLEANFILES = weston.ini				\
 install-libweston_moduleLTLIBRARIES install-moduleLTLIBRARIES: install-libLTLIBRARIES
 
 lib_LTLIBRARIES = libweston-@LIBWESTON_MAJOR@.la
-libweston_@LIBWESTON_MAJOR@_la_CPPFLAGS = $(AM_CPPFLAGS) -DIN_WESTON
+libweston_@LIBWESTON_MAJOR@_la_CPPFLAGS = $(AM_CPPFLAGS) -DIN_WESTON -DENABLE_EGL
 libweston_@LIBWESTON_MAJOR@_la_CFLAGS = $(AM_CFLAGS) \
-	$(COMPOSITOR_CFLAGS) $(EGL_CFLAGS) $(LIBUNWIND_CFLAGS) $(LIBDRM_CFLAGS)
+	$(COMPOSITOR_CFLAGS) $(EGL_CFLAGS) $(LIBUNWIND_CFLAGS) $(LIBDRM_CFLAGS) -DENABLE_EGL
 libweston_@LIBWESTON_MAJOR@_la_LIBADD = $(COMPOSITOR_LIBS) $(LIBUNWIND_LIBS) \
 	$(DLOPEN_LIBS) -lm $(CLOCK_GETTIME_LIBS) \
 	$(LIBINPUT_BACKEND_LIBS) libshared.la
@@ -316,7 +316,7 @@ westoninclude_HEADERS +=				\
 	ivi-shell/ivi-layout-export.h
 endif
 
-if ENABLE_EGL
+EGL_LIBS = -lEGL_adreno -lGLESv2_adreno -lwaylandegl -lwayland-client
 libweston_module_LTLIBRARIES += gl-renderer.la
 gl_renderer_la_LDFLAGS = -module -avoid-version
 gl_renderer_la_LIBADD =				\
@@ -334,7 +334,6 @@ gl_renderer_la_SOURCES =			\
 	libweston/vertex-clipping.c		\
 	libweston/vertex-clipping.h		\
 	shared/helpers.h
-endif
 
 if ENABLE_X11_COMPOSITOR
 libweston_module_LTLIBRARIES += x11-backend.la
@@ -440,6 +439,9 @@ headless_backend_la_SOURCES = 			\
 endif
 
 if ENABLE_FBDEV_COMPOSITOR
+COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
+COMPOSITOR_CFLAGS += -DUSE_GBM
+COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
 libweston_module_LTLIBRARIES += fbdev-backend.la
 fbdev_backend_la_LDFLAGS = -module -avoid-version
 fbdev_backend_la_LIBADD =			\
@@ -460,6 +462,7 @@ fbdev_backend_la_SOURCES =			\
 	libweston/compositor-fbdev.h		\
 	shared/helpers.h			\
 	$(INPUT_BACKEND_SOURCES)
+
 endif
 
 if ENABLE_RDP_COMPOSITOR
@@ -610,7 +613,6 @@ weston_multi_resource_CFLAGS = $(AM_CFLAGS) $(SIMPLE_CLIENT_CFLAGS)
 weston_multi_resource_LDADD = $(SIMPLE_CLIENT_LIBS) libshared.la $(CLOCK_GETTIME_LIBS) -lm
 endif
 
-if BUILD_SIMPLE_EGL_CLIENTS
 demo_clients += weston-simple-egl
 weston_simple_egl_SOURCES = clients/simple-egl.c
 nodist_weston_simple_egl_SOURCES =		\
@@ -618,9 +620,10 @@ nodist_weston_simple_egl_SOURCES =		\
 	protocol/xdg-shell-unstable-v6-client-protocol.h	\
 	protocol/ivi-application-protocol.c		\
 	protocol/ivi-application-client-protocol.h
-weston_simple_egl_CFLAGS = $(AM_CFLAGS) $(SIMPLE_EGL_CLIENT_CFLAGS)
+SIMPLE_EGL_CLIENT_LIBS += -lEGL_adreno -lGLESv2_adreno -lwaylandegl -lwayland-client -lwayland-cursor
+weston_simple_egl_CFLAGS = $(AM_CFLAGS) $(SIMPLE_EGL_CLIENT_CFLAGS) -DENABLE_EGL
 weston_simple_egl_LDADD = $(SIMPLE_EGL_CLIENT_LIBS) -lm
-endif
+
 
 if BUILD_SIMPLE_DMABUF_DRM_CLIENT
 demo_clients += weston-simple-dmabuf-drm

@@ -42,6 +42,9 @@
 #include <linux/input.h>
 
 #include <libudev.h>
+#ifdef USE_GBM
+#include <gbm.h>
+#endif
 
 #include "shared/helpers.h"
 #include "compositor.h"
@@ -50,6 +53,7 @@
 #include "pixman-renderer.h"
 #include "libinput-seat.h"
 #include "presentation-time-server-protocol.h"
+#include "gl-renderer.h"
 
 struct fbdev_backend {
 	struct weston_backend base;
@@ -60,6 +64,8 @@ struct fbdev_backend {
 	struct udev_input input;
 	uint32_t output_transform;
 	struct wl_listener session_listener;
+	bool use_pixman;
+	void *buffer_alloc_dev;
 };
 
 struct fbdev_screeninfo {
@@ -77,6 +83,13 @@ struct fbdev_screeninfo {
 	unsigned int refresh_rate; /* Hertz */
 };
 
+struct buffer_allocator {
+#ifdef USE_GBM
+	struct gbm_surface *surface;
+	struct gbm_bo *compositor_bo;
+#endif
+};
+
 struct fbdev_output {
 	struct fbdev_backend *backend;
 	struct weston_output base;
@@ -92,9 +105,19 @@ struct fbdev_output {
 	/* pixman details. */
 	pixman_image_t *hw_surface;
 	uint8_t depth;
+	struct buffer_allocator buf_alloc;
 };
 
+static struct gl_renderer_interface *gl_renderer;
+static int fb_device_fd;
 static const char default_seat[] = "seat0";
+static void surface_acquire_buffer(struct fbdev_output *output);
+static void surface_release_buffer(struct fbdev_output *output);
+static void surface_create(struct fbdev_output *output, struct fbdev_backend *backend);
+static void create_buff_alloc_device(int fb_fd, struct fbdev_backend * backend);
+static void fbdev_output_fini_egl(struct fbdev_output *output);
+static void buffer_destroy(struct buffer_allocator buf_alloc);
+
 
 static inline struct fbdev_output *
 to_fbdev_output(struct weston_output *base)
@@ -117,17 +140,41 @@ fbdev_output_start_repaint_loop(struct weston_output *output)
 	weston_output_finish_frame(output, &ts, WP_PRESENTATION_FEEDBACK_INVALID);
 }
 
+/* Call FBIOPUT_VSCREENINFO ioctl as FB driver will refresh the screen
+   when FBIOPUT_VSCREENINFO is called */
+static void
+fbdev_output_display(struct fbdev_output *output)
+{
+	struct fb_var_screeninfo varinfo;
+	if (ioctl(fb_device_fd, FBIOGET_VSCREENINFO, &varinfo) < 0) {
+		weston_log("FBIOGET_VSCREENINFO failure \n ");
+	}
+	varinfo.grayscale=0;
+	varinfo.yres_virtual = output->fb_info.y_resolution;
+	varinfo.yoffset = 0;
+	varinfo.bits_per_pixel = 32;
+	if (ioctl(fb_device_fd,  FBIOPUT_VSCREENINFO, &varinfo) < 0) {
+		weston_log("FBIOPUT_VSCREENINFO failure \n ");
+	}
+}
+
 static int
 fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 		     void *repaint_data)
 {
 	struct fbdev_output *output = to_fbdev_output(base);
 	struct weston_compositor *ec = output->base.compositor;
+	struct fbdev_backend *fbb = output->backend;
 
-	/* Repaint the damaged region onto the back buffer. */
-	pixman_renderer_output_set_buffer(base, output->hw_surface);
-	ec->renderer->repaint_output(base, damage);
+	if (fbb->use_pixman) {
+		/* Repaint the damaged region onto the back buffer. */
+		pixman_renderer_output_set_buffer(base, output->hw_surface);
+		ec->renderer->repaint_output(base, damage);
 
+	} else {
+		ec->renderer->repaint_output(base, damage);
+		surface_acquire_buffer(output);
+	}
 	/* Update the damage region. */
 	pixman_region32_subtract(&ec->primary_plane.damage,
 	                         &ec->primary_plane.damage, damage);
@@ -142,6 +189,7 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 	wl_event_source_timer_update(output->finish_frame_timer,
 	                             1000000 / output->mode.refresh);
 
+	fbdev_output_display(output);
 	return 0;
 }
 
@@ -153,7 +201,9 @@ finish_frame_handler(void *data)
 
 	weston_compositor_read_presentation_clock(output->base.compositor, &ts);
 	weston_output_finish_frame(&output->base, &ts, 0);
-
+	if(!output->backend->use_pixman) {
+		surface_release_buffer(output);
+	}
 	return 1;
 }
 
@@ -213,7 +263,7 @@ calculate_pixman_format(struct fb_var_screeninfo *vinfo,
 
 	/* Work out the format type from the offsets. We only support RGBA and
 	 * ARGB at the moment. */
-	type = PIXMAN_TYPE_OTHER;
+	type = PIXMAN_TYPE_ARGB;
 
 	if ((vinfo->transp.offset >= vinfo->red.offset ||
 	     vinfo->transp.length == 0) &&
@@ -427,6 +477,37 @@ fbdev_frame_buffer_destroy(struct fbdev_output *output)
 static void fbdev_output_destroy(struct weston_output *base);
 static void fbdev_output_disable(struct weston_output *base);
 
+/* Init output state that depends on gl or gbm */
+static int
+fbdev_output_init_egl(struct fbdev_output *output, struct fbdev_backend *b)
+{
+	EGLint format[2] = {
+		GBM_FORMAT_ABGR8888,
+		GBM_FORMAT_ARGB8888,
+	};
+	int n_formats = 2;
+	surface_create(output, b);
+	void *surface = NULL;
+	surface = output->buf_alloc.surface;
+
+	if (!surface) {
+		weston_log("failed to create gbm surface\n");
+		return -1;
+	}
+
+	if (gl_renderer->output_window_create(&output->base,
+					      (EGLNativeWindowType)surface,
+					      surface,
+					      gl_renderer->opaque_attribs,
+					      format,
+					      n_formats) < 0) {
+		weston_log("failed to create gl renderer output state\n");
+		gbm_surface_destroy(surface);
+		return -1;
+	}
+
+	return 0;
+}
 static int
 fbdev_output_enable(struct weston_output *base)
 {
@@ -450,8 +531,17 @@ fbdev_output_enable(struct weston_output *base)
 	output->base.start_repaint_loop = fbdev_output_start_repaint_loop;
 	output->base.repaint = fbdev_output_repaint;
 
-	if (pixman_renderer_output_create(&output->base) < 0)
+	if (backend->use_pixman) {
+		if (pixman_renderer_output_create(&output->base) < 0) {
+			weston_log("Failed to init output pixman state\n");
+			goto out_hw_surface;
+		}
+	} else if (fbdev_output_init_egl(output, backend) < 0) {
+		weston_log("Failed to init output gl state\n");
 		goto out_hw_surface;
+	}
+
+
 
 	loop = wl_display_get_event_loop(backend->compositor->wl_display);
 	output->finish_frame_timer =
@@ -497,9 +587,9 @@ fbdev_output_create(struct fbdev_backend *backend,
 
 	output->base.name = strdup("fbdev");
 	output->base.destroy = fbdev_output_destroy;
-	output->base.disable = NULL;
+	output->base.disable = fbdev_output_disable;
 	output->base.enable = fbdev_output_enable;
-
+	fb_device_fd = fb_fd;
 	weston_output_init(&output->base, backend->compositor);
 
 	/* only one static mode in list */
@@ -519,7 +609,6 @@ fbdev_output_create(struct fbdev_backend *backend,
 	output->base.mm_width = output->fb_info.width_mm;
 	output->base.mm_height = output->fb_info.height_mm;
 
-	close(fb_fd);
 
 	weston_compositor_add_pending_output(&output->base, backend->compositor);
 
@@ -541,10 +630,13 @@ fbdev_output_destroy(struct weston_output *base)
 
 	/* Close the frame buffer. */
 	fbdev_output_disable(base);
-
-	if (base->renderer_state != NULL)
-		pixman_renderer_output_destroy(base);
-
+	if (base->renderer_state != NULL) {
+		if (output->backend->use_pixman) {
+			pixman_renderer_output_destroy(base);
+		}
+		else
+			fbdev_output_fini_egl(output);
+	}
 	/* Remove the output. */
 	weston_output_destroy(&output->base);
 
@@ -604,6 +696,7 @@ fbdev_output_reenable(struct fbdev_backend *backend,
 		 * the frame buffer X/Y resolution (such as the shadow buffer)
 		 * are re-initialised. */
 		device = strdup(output->device);
+		close(fb_device_fd);
 		fbdev_output_destroy(&output->base);
 		fbdev_output_create(backend, device);
 		free(device);
@@ -706,6 +799,67 @@ fbdev_restore(struct weston_compositor *compositor)
 	weston_launcher_restore(compositor->launcher);
 }
 
+static int
+fbdev_backend_create_gl_renderer(struct fbdev_backend *b)
+{
+	EGLint format[3] = {
+		GBM_FORMAT_ABGR8888,
+		GBM_FORMAT_ARGB8888,
+		0,
+	};
+
+	int n_formats = 3;
+	EGLenum platform = NO_EGL_PLATFORM;
+#ifdef USE_GBM
+	platform = EGL_PLATFORM_GBM_KHR;
+#endif
+
+	if (gl_renderer->display_create(b->compositor,
+					platform,
+					b->buffer_alloc_dev,
+					NULL,
+					gl_renderer->opaque_attribs,
+					format,
+					n_formats) < 0) {
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+init_egl(struct fbdev_backend *b)
+{
+	gl_renderer = weston_load_module("gl-renderer.so",
+					 "gl_renderer_interface");
+	if (!gl_renderer) {
+		weston_log("Unable to load gl-renderer \n");
+		return;
+	}
+
+	create_buff_alloc_device(fb_device_fd, b);
+
+	if (!b->buffer_alloc_dev) {
+		weston_log("Buffer allocator is NULL \n");
+		return -1;
+	}
+
+	if (fbdev_backend_create_gl_renderer(b) < 0) {
+		weston_log("Unable to create FB backend \n");
+		gbm_device_destroy(b->buffer_alloc_dev);
+		return -1;
+	}
+
+	return 0;
+}
+
+static void
+fbdev_output_fini_egl(struct fbdev_output *output)
+{
+	gl_renderer->output_destroy(&output->base);
+	buffer_destroy(output->buf_alloc);
+}
+
 static struct fbdev_backend *
 fbdev_backend_create(struct weston_compositor *compositor,
                      struct weston_fbdev_backend_config *param)
@@ -729,7 +883,7 @@ fbdev_backend_create(struct weston_compositor *compositor,
 		weston_log("Failed to initialize udev context.\n");
 		goto out_compositor;
 	}
-
+	backend->use_pixman = param->use_pixman;
 	/* Set up the TTY. */
 	backend->session_listener.notify = session_notify;
 	wl_signal_add(&compositor->session_signal,
@@ -749,11 +903,20 @@ fbdev_backend_create(struct weston_compositor *compositor,
 
 	weston_setup_vt_switch_bindings(compositor);
 
-	if (pixman_renderer_init(compositor) < 0)
-		goto out_launcher;
-
 	if (fbdev_output_create(backend, param->device) < 0)
 		goto out_launcher;
+
+	if (backend->use_pixman) {
+		if (pixman_renderer_init(compositor) < 0) {
+			weston_log("failed to initialize pixman renderer\n");
+			goto out_launcher;
+		}
+	} else {
+		if (init_egl(backend) < 0) {
+			weston_log("failed to initialize egl\n");
+			goto out_launcher;
+		}
+	}
 
 	udev_input_init(&backend->input, compositor, backend->udev,
 			seat_id, param->configure_device);
@@ -781,6 +944,7 @@ config_init_to_defaults(struct weston_fbdev_backend_config *config)
 	 * udev, rather than passing a device node in as a parameter. */
 	config->tty = 0; /* default to current tty */
 	config->device = "/dev/fb0"; /* default frame buffer */
+	config->use_pixman = false;
 }
 
 WL_EXPORT int
@@ -804,4 +968,47 @@ weston_backend_init(struct weston_compositor *compositor,
 	if (b == NULL)
 		return -1;
 	return 0;
+}
+
+static void
+surface_acquire_buffer(struct fbdev_output *output)
+{
+#ifdef USE_GBM
+	output->buf_alloc.compositor_bo = gbm_surface_lock_front_buffer(output->buf_alloc.surface);
+#endif
+}
+
+static void
+surface_release_buffer(struct fbdev_output *output)
+{
+#ifdef USE_GBM
+	gbm_surface_release_buffer(output->buf_alloc.surface,output->buf_alloc.compositor_bo);
+#endif
+}
+
+static void
+surface_create(struct fbdev_output *output, struct fbdev_backend *backend)
+{
+#ifdef USE_GBM
+	output->buf_alloc.surface = gbm_surface_create(backend->buffer_alloc_dev, output->mode.width, output->mode.height,
+													GBM_FORMAT_ABGR8888,
+													GBM_BO_USE_SCANOUT |GBM_BO_USE_RENDERING);
+#endif
+}
+
+static void
+create_buff_alloc_device(int fb_fd, struct fbdev_backend * backend)
+{
+#ifdef USE_GBM
+	struct gbm_device * gbmdev = gbm_create_device(fb_fd);
+	backend->buffer_alloc_dev = (void *)gbmdev;
+#endif
+}
+
+static void
+buffer_destroy(struct buffer_allocator buf_alloc)
+{
+#ifdef USE_GBM
+	gbm_surface_destroy(buf_alloc.surface);
+#endif
 }
