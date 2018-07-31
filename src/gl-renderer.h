@@ -23,6 +23,9 @@
  * SOFTWARE.
  */
 
+#ifndef _GL_RENDERER_H_
+#define _GL_RENDERER_H_
+
 #include "config.h"
 
 #include "compositor.h"
@@ -130,3 +133,4 @@ struct gl_renderer_interface {
 	void (*print_egl_error_state)(void);
 };
 
+#endif

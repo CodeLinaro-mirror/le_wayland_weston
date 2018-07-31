@@ -44,6 +44,7 @@ extern "C" {
 #include "config-parser.h"
 #include "zalloc.h"
 #include "timeline-object.h"
+#include "gbm-buffer-backend.h"
 
 struct weston_transform {
 	struct weston_matrix matrix;
@@ -1634,6 +1635,25 @@ weston_seat_get_pointer(struct weston_seat *seat);
 
 struct weston_touch *
 weston_seat_get_touch(struct weston_seat *seat);
+
+/** Import gbmbuf buffer into current renderer
+ *
+ * \param compositor
+ * \param buffer the gbmbuf buffer to import
+ * \return true on usable buffers, false otherwise
+ *
+ * This function tests that the gbm_buffer is usable
+ * for the current renderer. Returns false on unusable buffers. Usually
+ * usability is tested by importing the gbmbuf for composition.
+ *
+ * This hook is also used for detecting if the renderer supports
+ * gbmbuf at all. If the renderer hook is NULL, dmabufs are not
+ * supported.
+ * */
+bool
+weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
+  struct gbm_buffer *buffer);
+
 
 #ifdef  __cplusplus
 }

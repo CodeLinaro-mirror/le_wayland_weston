@@ -29,6 +29,7 @@
 extern "C" {
 #endif
 #include <color_metadata.h>
+#include "compositor-sdm-output.h"
 
 #define MAX_SDE_Layers          16
 #define MAX_PIPE_WIDTH          2560

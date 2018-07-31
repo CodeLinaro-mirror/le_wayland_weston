@@ -45,7 +45,7 @@ struct EarlyDisplayInfo {
 /* details client to obtaining master fd
 * [return]: fd
 */
-int early_get_drm_master();
+int early_get_drm_master(void);
 
 /* Display initialization: Load libsdedrm.so and get DRMManager interface
  * [input]: drm fd
@@ -68,7 +68,7 @@ int early_create_display(uint32_t order, struct EarlyDisplayInfo *dispinfo);
 /* Unregister token in token_list in order not to block SDM register
  * display
  */
-void early_unregister_displays();
+void early_unregister_displays(void);
 
 /* prepare pipe for every early_layer according early_layer->view
  * [input] struct drm_output
@@ -90,7 +90,24 @@ int early_commit(struct drm_output *output);
 int early_layer_prepare(struct early_layer *layer, struct drm_output *output);
 
 
-void early_drm_destroy_displays();
+void early_drm_destroy_displays(void);
+
+/* Early display deinitialization,DRM Manager is not destroied if sdm is still using it
+ * [input]: destroy
+ */
+void early_drm_display_deinit(bool destroy);
+
+/*
+ * destroy early displays
+ * [input]: early_display_intf
+ */
+void early_destroy_display(void *early_display_intf) ;
+
+/*
+ * Unregister early displays in order not to block SDM register
+ * [input]: early_display_intf
+ */
+void early_unregister_display(void *early_display_intf);
 
 
 #ifdef __cplusplus

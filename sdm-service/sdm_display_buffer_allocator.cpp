@@ -288,7 +288,7 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     int ret = gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
     if (ret == GBM_ERROR_NONE) {
         *num_planes = buf_layout.num_planes;
-        for(int j=0; j< *num_planes; j++) {
+        for(uint32_t j=0; j< *num_planes; j++) {
             offset[j] = buf_layout.planes[j].offset;
             stride[j] = buf_layout.planes[j].v_increment;
         }

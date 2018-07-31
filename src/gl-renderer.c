@@ -1292,9 +1292,9 @@ gl_renderer_capture_screen(struct weston_output *output,
 		return;
 	}
 
-	if (gbm_buf = gbm_buffer_get(buffer->resource)) {
+	if ((gbm_buf = gbm_buffer_get(buffer->resource))) {
 		cap_buf_image = gbm_buffer_backend_get_user_data(gbm_buf);
-	} else if (gbm_buf = wl_resource_get_user_data(buffer->resource)) {
+	} else if ((gbm_buf = wl_resource_get_user_data(buffer->resource))) {
 		/* TODO: Create egl image */
 		weston_log("Error! no egl image is bound.\n");
 		return;
@@ -1786,7 +1786,7 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	}
 	memset(attribs,0,sizeof(EGLint));
 
-	image = gbm_buffer_backend_get_user_data(gbmbuf);
+	image = (struct egl_image *)gbm_buffer_backend_get_user_data(gbmbuf);
 	if (image)
 		return egl_image_ref(image);
 
@@ -2076,7 +2076,7 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
  *
  * Here we release the cache reference which has to be final.
  */
-	gs->images[0] = gbm_buffer_backend_get_user_data(gbmbuf);
+	gs->images[0] = (struct egl_image *)gbm_buffer_backend_get_user_data(gbmbuf);
 
 	if (gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) {
 		if (gs->images[0]) {

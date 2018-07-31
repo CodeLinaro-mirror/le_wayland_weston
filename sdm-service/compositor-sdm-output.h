@@ -46,6 +46,10 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+
+#ifndef _COMPOSITOR_SDM_OUTPUT_H_
+#define _COMPOSITOR_SDM_OUTPUT_H_
+
 #include "config.h"
 #include <errno.h>
 #include <stdlib.h>
@@ -242,3 +246,4 @@ struct drm_output {
        // Indicate previous frame whether commit layers or not, record previous layer_none_commit
        bool prev_layer_none_commit;
 };
+#endif

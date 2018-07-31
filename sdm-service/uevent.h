@@ -17,17 +17,17 @@
 #ifndef _HARDWARE_UEVENT_H
 #define _HARDWARE_UEVENT_H
 
-#if __cplusplus
+#ifdef __cplusplus
 extern "C" {
 #endif
 
-int uevent_init();
+int uevent_init(void);
 int uevent_next_event(char* buffer, int buffer_length);
 int uevent_add_native_handler(void (*handler)(void *data, const char *msg, int msg_len),
                               void *handler_data);
 int uevent_remove_native_handler(void (*handler)(void *data, const char *msg, int msg_len));
 
-#if __cplusplus
+#ifdef __cplusplus
 } // extern "C"
 #endif
 

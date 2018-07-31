@@ -25,6 +25,7 @@
 #ifndef SDM_DISPLAY_CONNECT_H
 #define SDM_DISPLAY_CONNECT_H
 #include "sdm_display_interface.h"
+#include "compositor-sdm-output.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,7 +39,7 @@ extern "C" {
 
     @sa
 */
-int get_drm_master_fd();
+int get_drm_master_fd(void);
 
 struct sdm_service_interface {
 
@@ -58,7 +59,7 @@ struct sdm_service_interface {
 
     @sa DestroyCore
 */
-int (*CreateCore)();
+int (*CreateCore)(void);
 
 /*! @brief Method to release internally stored handle to display core interface.
 
@@ -74,7 +75,7 @@ int (*CreateCore)();
 
     @sa CreateCore
 */
-int (*DestroyCore)();
+int (*DestroyCore)(void);
 
 uint32_t (*GetDisplayCount)(void);
 
@@ -282,6 +283,40 @@ int (*SetPlaneAvailable)(uint32_t plane_id, bool is_available);
 
 
 };
+
+/*! @brief Method for obtaining connector name.
+
+    @details client to obtaining connector name.
+
+    @param[in] display_id \link int \endlink
+
+    @return \link char * \endlink
+
+    @sa
+*/
+char *GetConnectorName(uint32_t display_id);
+
+/*! @brief Method for obtaining the count of display.
+
+    @details client to obtaining the count of display.
+
+    @return \link uint32_t \endlink
+
+    @sa
+*/
+uint32_t GetDisplayCount(void);
+
+/*! @brief Method for obtaining display info.
+
+    @details client to obtaining display info, such as: display order ,
+    display type , name and is_connected.
+
+    @return \link int \endlink
+
+    @sa
+*/
+int GetDisplayInfos(void);
+
 
 #ifdef __cplusplus
 }
