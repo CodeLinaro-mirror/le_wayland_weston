@@ -137,7 +137,6 @@ gbm_buffer_backend_create_params(struct wl_client *client,
     struct weston_compositor *compositor;
     struct gbm_buffer *buffer;
     uint32_t version;
-    int i;
 
     version = wl_resource_get_version(gbmbuf_resource);
     compositor = wl_resource_get_user_data(gbmbuf_resource);
@@ -223,10 +222,7 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
         uint32_t flags)
 {
     struct gbm_buffer *buffer;
-    uint32_t version;
-    int i;
     bool ret = true;
-
 
     GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Invoked\n");
 

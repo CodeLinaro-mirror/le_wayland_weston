@@ -66,7 +66,7 @@ static const struct wl_registry_listener registry_listener = {
 int main(int argc, char **argv)
 {
 	int ppms[] = {50000, 50000, -50000};
-	int i;
+	uint32_t i;
 	int rc = 0;
 
 	display = wl_display_connect(NULL);

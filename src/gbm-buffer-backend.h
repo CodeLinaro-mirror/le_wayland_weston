@@ -136,6 +136,53 @@ int gbm_buffer_backend_setup(struct weston_compositor *compositor);
  */
 struct gbm_buffer *gbm_buffer_get(struct wl_resource *resource);
 
+/** Set gbm_buffer_backend data
+ *
+ * Set the user data for the gbm_buffer_backend. It is invalid to overwrite
+ * a non-NULL user data with a new non-NULL pointer. This is meant to
+ * protect against renderers fighting over gbm_buffer user data
+ * ownership.
+ *
+ * \param buffer The gbm_buffer object to set for.
+ * \param data The new gbm_buffer_backend data pointer.
+ * \param func Destructor function to be called for the gbm_buffer_backend
+ *             data when the gbm_buffer gets destroyed.
+ *
+ * \sa gbm_buffer_backend_set_user_data.
+ */
+void gbm_buffer_backend_set_user_data(struct gbm_buffer *buffer, void *data,
+	gbm_buffer_user_data_destroy_func func);
+
+/** Get gbm_buffer_backend data
+ *
+ * Get the user data from the gbm_buffer.
+ *
+ * \param buffer The gbm_buffer to query.
+ * \return gbm_buffer_backend data pointer.
+ *
+ * \sa gbm_buffer_backend_get_user_data
+ */
+void *gbm_buffer_backend_get_user_data(struct gbm_buffer *buffer);
+
+/** Resolve an internal compositor error by disconnecting the client.
+ *
+ * This function is used in cases when the gbmbuf-based wl_buffer
+ * turns out unusable and there is no fallback path. This is used by
+ * renderers which are the fallback path in the first place.
+ *
+ * It is possible the fault is caused by a compositor bug, the underlying
+ * graphics stack bug or normal behaviour, or perhaps a client mistake.
+ * In any case, the options are to either composite garbage or nothing,
+ * or disconnect the client. This is a helper function for the latter.
+ *
+ * The error is sent as a INVALID_OBJECT error on the client's wl_display.
+ *
+ * \param buffer The gbm_buffer that is unusable.
+ * \param msg A custom error message attached to the protocol error.
+ */
+void gbm_buffer_send_server_error(struct gbm_buffer *buffer, const char *msg);
+
+
 #ifdef __cplusplus
 }
 #endif

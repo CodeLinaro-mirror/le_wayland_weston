@@ -110,7 +110,6 @@ int early_get_drm_master() {
 int early_drm_get_planes() {
 	sde_drm::DRMPlanesInfo planes;
 	uint32_t plane_num = 0;
-	uint32_t primary_cnt = 0;
 
 	if (!drm_mgr_intf_)
 		return -1;
@@ -182,7 +181,6 @@ int early_create_display(uint32_t order, struct EarlyDisplayInfo *dispinfo) {
 	sde_drm::DRMDisplayToken token_ = {};
 	DRMAtomicReqInterface *drm_atomic_intf_;
 	sde_drm::DRMCrtcInfo crtc_info;
-	uint32_t max_blend_stages;
 	struct early_display *early_disp;
 	int ret = -1;
 
@@ -324,7 +322,7 @@ static int early_get_drm_fb_id(int drm_fd, struct gbm_bo *bo, uint32_t *fb_id)
 	ret = gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
 	if (ret == GBM_ERROR_NONE) {
 		layout.num_planes = buf_layout.num_planes;
-		 for(int j = 0; j < layout.num_planes; j++) {
+		 for(uint32_t j = 0; j < layout.num_planes; j++) {
 			layout.offset[j] = buf_layout.planes[j].offset;
 			layout.stride[j] = buf_layout.planes[j].v_increment;
 		}
@@ -666,9 +664,6 @@ static void early_reset_planes(display_id disp_id) {
 
 int early_prepare(struct drm_output *output) {
 	struct early_layer *layer, *next_layer;
-	uint32_t pipe_id;
-	struct drm_backend *b =
-		(struct drm_backend *)output->base.compositor->backend;
 	struct early_display *early_disp =
 		(struct early_display *)output->early_display_intf;
 	uint32_t pipe_count = 0;

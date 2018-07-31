@@ -217,6 +217,7 @@ westoninclude_HEADERS =				\
 	src/version.h				\
 	src/compositor.h			\
 	src/timeline-object.h			\
+	src/gbm-buffer-backend.h		\
 	shared/matrix.h				\
 	shared/config-parser.h			\
 	shared/zalloc.h				\
@@ -247,9 +248,10 @@ sdm_service_la_LDFLAGS = -module -avoid-version
 sdm_service_la_LIBADD = $(COMPOSITOR_LIBS)
 sdm_service_la_LIBADD += -lsdmutils -lhdr_tm -lsdmcore
 sdm_service_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service  --std=c++11 -std=c++11 \
+	-Wall -Wextra -Wno-unused-parameter \
+	-Wno-missing-field-initializers -g -fvisibility=hidden -Wsign-compare \
 	$(COMPOSITOR_CFLAGS)                   \
-	$(DRM_COMPOSITOR_CFLAGS)               \
-	$(AM_CFLAGS)
+	$(DRM_COMPOSITOR_CFLAGS)
 sdm_service_la_CFLAGS =                        \
 	$(COMPOSITOR_CFLAGS)                   \
 	$(DRM_COMPOSITOR_CFLAGS)               \
@@ -299,11 +301,14 @@ drm_backend_la_LIBADD =				\
 	libshared.la -lrt			\
 	libsession-helper.la		
 
+# Remove -Wstrict-prototypes -Wmissing-prototypes from $AM_CFLAGS(GCC_CFLAGS),avoid build warnings.
+# But still keep other -W flags in $AM_CFLAGS
 drm_backend_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service -I$(top_src_dir)/drm-service --std=c++11 -std=c++11 \
+	-Wall -Wextra -Wno-unused-parameter \
+	-Wno-missing-field-initializers -g -fvisibility=hidden -Wsign-compare \
 	$(COMPOSITOR_CFLAGS)			\
 	$(EGL_CFLAGS)				\
-	$(DRM_COMPOSITOR_CFLAGS)		\
-	$(AM_CFLAGS)
+	$(DRM_COMPOSITOR_CFLAGS)
 
 drm_backend_la_CFLAGS =				\
 	$(COMPOSITOR_CFLAGS)			\

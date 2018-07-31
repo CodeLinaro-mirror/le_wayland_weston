@@ -89,7 +89,7 @@ namespace sdm {
 
 int SdmDisplayInterface::GetDrmMasterFd() {
   DRMMaster *master = nullptr;
-  int ret = DRMMaster::GetInstance(&master);
+  DRMMaster::GetInstance(&master);
   int fd;
 
   master->GetHandle(&fd);
@@ -98,7 +98,7 @@ int SdmDisplayInterface::GetDrmMasterFd() {
 
 void SdmDisplayInterface::UseExternalGemHandle() {
   DRMMaster *master = nullptr;
-  int ret = DRMMaster::GetInstance(&master);
+  DRMMaster::GetInstance(&master);
 
   master->UseExternalGemHandle();
 }
@@ -296,7 +296,7 @@ DisplayError SdmDisplay::FreeLayerGeometry(struct LayerGeometry *glayer) {
 DisplayError SdmDisplay::AllocLayerStackMemory(struct drm_output *output) {
     uint32_t num_layers = output->view_count;
 
-    for (size_t i = 0; i < output->view_count; i++) {
+    for (size_t i = 0; i < num_layers; i++) {
          Layer *layer = new Layer();
          layer_stack_.layers.push_back(layer);
     }
@@ -310,34 +310,6 @@ static void SetRect(sdm::LayerRect *dst, struct Rect *src)
     dst->top = src->top;
     dst->right = src->right;
     dst->bottom = src->bottom;
-}
-
-static void SetRectArray(sdm::LayerRectArray *dst, struct RectArray *src)
-{
-    for (uint32_t i = 0; i < src->count; i++)
-         SetRect(&dst->rect[i], &src->rects[i]);
-}
-
-static uint32_t GetComposition(sdm::LayerComposition composition)
-{
-    uint32_t ret;
-
-    switch (composition) {
-     case sdm::kCompositionGPUTarget:
-          ret = SDM_COMPOSITION_FB_TARGET;
-          break;
-     case sdm::kCompositionGPU:
-          ret = SDM_COMPOSITION_GPU;
-          break;
-     case sdm::kCompositionHWCursor:
-          ret = SDM_COMPOSITION_HW_CURSOR;
-          break;
-     default:
-          ret = SDM_COMPOSITION_OVERLAY;
-          break;
-    }
-
-    return ret;
 }
 
 DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *output,
@@ -563,8 +535,8 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
         if ((dmabuf = linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource))) {
             struct gbm_import_fd_data gbm_dmabuf = {
                 .fd     = dmabuf->dmabuf_fd[0],
-                .width  = dmabuf->width,
-                .height = dmabuf->height,
+                .width  = (uint32_t)dmabuf->width,
+                .height = (uint32_t)dmabuf->height,
                 .stride = dmabuf->stride[0],
                 .format = dmabuf->format
             };
@@ -590,24 +562,13 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             DLOGE("fail to import gbm bo!\n");
          else {
             uint32_t width, height;
-            uint32_t *fbid;
-            uint32_t fb_id, stride, handle, size;
-            uint32_t fb_id1;
-
             //save gbm bo in sdm layer for future reference.
             sdm_layer->bo = bo;
 
             width = gbm_bo_get_width(bo);
             height = gbm_bo_get_height(bo);
-            stride = gbm_bo_get_stride(bo);
-            handle = gbm_bo_get_handle(bo).u32;
             format = gbm_bo_get_format(bo);
-            int drm_fd = SdmDisplayInterface::GetDrmMasterFd();
-
-            uint32_t handles[4], pitches[4], offsets[4];
-            handles[0] = handle;
-            pitches[0] = stride;
-            offsets[0] = 0;
+            SdmDisplayInterface::GetDrmMasterFd();
 
             uint32_t alignedWidth = 0;
             uint32_t alignedHeight = 0;
@@ -687,7 +648,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
 
 DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     DisplayError error = kErrorNone;
-    struct sdm_layer *sdm_layer = NULL, *next_sdm_layer = NULL;
+    struct sdm_layer *sdm_layer = NULL;
     struct LayerGeometry *glayer = NULL;
     uint32_t gpu_target_index = GET_GPU_TARGET_SLOT(output->view_count);
     uint32_t index = 0;
@@ -783,8 +744,8 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
   struct LayerStack *layer_stack;
   layer_stack = reinterpret_cast<struct LayerStack *>(layerStack);
   DLOGI("\n-------- Display Manager: Layer Stack Dump --------");
-  fprintf(stderr,"Frame:%d LayerStack: NumLayers:%d flags:0x%x\n",
-                frame_count, layer_stack->layers.size(), layer_stack->flags);
+  fprintf(stderr,"Frame:%d LayerStack: NumLayers:%ld flags:0x%x\n",
+                frame_count, layer_stack->layers.size(), layer_stack->flags.flags);
 
   for (uint32_t i = 0; i < layer_stack->layers.size(); i++) {
       char buf[LEN_LOCAL] = {0};
@@ -810,7 +771,7 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
         "true":"false"), (layer->transform.flip_vertical? "true":"false"));
       sprintf(buf, "%s\n Plane Alpha = %#x, frame_rate = %d,  solid_fill_color = %d",
         buf, layer->plane_alpha, layer->frame_rate, layer->solid_fill_color);
-      sprintf(buf, "%s\n LayerFlags = %#x", buf, layer->flags);
+      sprintf(buf, "%s\n LayerFlags = %#x", buf, layer->flags.flags);
       sprintf(buf, "%s\t LayerFlags.skip = %d", buf, layer->flags.skip);
       sprintf(buf, "%s\n LayerBuffer Flags: hdr:%d secure:%d video:%d", buf,
                     buffer.flags.hdr, buffer.flags.secure, buffer.flags.video);
@@ -887,7 +848,6 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
 
     uint32_t GPUTarget_index = layer_count-1;
     Layer *GpuTargetlayer;
-    uint32_t fb_id = output->next->fb_id;
 
     GpuTargetlayer = layer_stack_.layers.at(GPUTarget_index);
 
@@ -1492,7 +1452,7 @@ DisplayError SdmNullDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info)
 
 SdmDisplayProxy::SdmDisplayProxy(DisplayOrder order, DisplayType type, CoreInterface *core_intf)
   : disp_order_(order), disp_type_(type), core_intf_(core_intf),
-    sdm_disp_(order, type, core_intf), null_disp_(order, type, core_intf) {
+    null_disp_(order, type, core_intf) , sdm_disp_(order, type, core_intf) {
     display_intf_ = &sdm_disp_;
 
     std::thread uevent_thread(UeventThread, this);

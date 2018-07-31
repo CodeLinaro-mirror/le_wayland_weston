@@ -69,8 +69,8 @@ extern "C" {
 
 
 struct screen_capture {
-    uint32_t width;
-    uint32_t height;
+    int32_t width;
+    int32_t height;
     struct weston_compositor *compositor;
     uint32_t mirror_output_id;
     void *virtual_output; /* point to drm_output to avoid nested definition */
@@ -104,6 +104,33 @@ struct screen_capture_buffer {
  * \return Zero on success, -1 on failure.
  */
 int screen_capture_setup(struct weston_compositor *compositor);
+
+/** Ensure if it is screen capture view or not
+*
+*\param ev Get the capture view state from ev.
+*\return true on scree capture view,  otherwise false .
+*/
+bool is_screen_capture_view(struct weston_view *ev);
+
+/** Ensure if it is ready for capture
+*
+*Calling this before do_screen_capture.
+*
+*\param screen_cap Use screen_cap to get screen_cap->enabled and mirror_output_id
+*\param output Use output to get weston output id.
+*\return true on capture is ready,  otherwise false .
+*/
+bool is_capture_ready(struct screen_capture *screen_cap, struct weston_output *output);
+
+/** Attach screen capture buffer
+*
+* Create screen capture buffer after creating egl image. FBO path needs it .
+*
+*\param compositor Use compositor to get screen_cap.
+*\param buffer Use buffer to attach to screen_cap buffer.
+*/
+void screen_capture_attach(struct weston_compositor *compositor,
+	struct weston_buffer *buffer);
 
 #ifdef __cplusplus
 }

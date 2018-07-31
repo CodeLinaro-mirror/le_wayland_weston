@@ -38,7 +38,7 @@ struct uevent_handler {
 static int fd = -1;
 
 /* Returns 0 on failure, 1 on success */
-int uevent_init()
+int uevent_init(void)
 {
     struct sockaddr_nl addr;
     int sz = 64*1024;

@@ -43,6 +43,14 @@ enum {
        VERBOSE
 };
 
+/*undef these MACRO from file 'poky/build/tmp-glibc/sysroots/8x96autodvrs/usr/include/
+*sdm/utils/debug.h', remove build redefine warning.*/
+#undef DLOGE
+#undef DLOGD
+#undef DLOGW
+#undef DLOGI
+#undef DLOGV
+
 #define WLOG(tag, method, format, ...) SdmDisplayDebugger::Get()->method(tag, \
                                                             __CLASS__ "::%s: " format, \
                                                             __FUNCTION__, ##__VA_ARGS__)
