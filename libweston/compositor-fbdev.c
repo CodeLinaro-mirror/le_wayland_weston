@@ -40,10 +40,14 @@
 #include <unistd.h>
 #include <linux/fb.h>
 #include <linux/input.h>
-
+#ifdef USE_SDM
+#include <stdint.h>
+#include <linux/msm_mdp.h>
+#endif
 #include <libudev.h>
 #ifdef USE_GBM
 #include <gbm.h>
+#include <gbm_priv.h>
 #endif
 
 #include "shared/helpers.h"
@@ -54,6 +58,7 @@
 #include "libinput-seat.h"
 #include "presentation-time-server-protocol.h"
 #include "gl-renderer.h"
+#include "../sdm-service_fb/sdm_display_connect.h"
 
 struct fbdev_backend {
 	struct weston_backend base;
@@ -116,6 +121,10 @@ static void surface_release_buffer(struct fbdev_output *output);
 static void surface_create(struct fbdev_output *output, struct fbdev_backend *backend);
 static void create_buff_alloc_device(int fb_fd, struct fbdev_backend * backend);
 static void fbdev_output_fini_egl(struct fbdev_output *output);
+#ifdef USE_SDM
+int display_id = -1;
+int line_length = -1;
+#endif
 static void buffer_destroy(struct buffer_allocator buf_alloc);
 
 
@@ -158,6 +167,30 @@ fbdev_output_display(struct fbdev_output *output)
 	}
 }
 
+#ifdef USE_SDM
+static int
+get_output_fd(struct fbdev_output *output)
+{
+	struct msmfb_metadata metadata;
+	int fd = open(output->device, O_RDWR | O_CLOEXEC);
+	if (fd > 0) {
+		weston_log("%s(%d): FB opened \n",__func__,__LINE__);
+    }
+	memset(&metadata, 0 , sizeof(metadata));
+	metadata.op = metadata_op_get_ion_fd;
+	if (ioctl(fd, MSMFB_METADATA_GET, &metadata) == -1) {
+		weston_log("%s(%d): MSMFB_METADATA_GET ioctl failed \n",__func__,__LINE__);
+		return -1;
+	}
+	if(metadata.data.fbmem_ionfd < 0) {
+		weston_log("%s(%d): Invalid ion fd handle %d\n",__func__,__LINE__, metadata.data.fbmem_ionfd);
+		return -1;
+  }
+	close(fd);
+	return metadata.data.fbmem_ionfd;
+}
+#endif
+
 static int
 fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 		     void *repaint_data)
@@ -165,7 +198,7 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 	struct fbdev_output *output = to_fbdev_output(base);
 	struct weston_compositor *ec = output->base.compositor;
 	struct fbdev_backend *fbb = output->backend;
-
+	static int fd = -1;
 	if (fbb->use_pixman) {
 		/* Repaint the damaged region onto the back buffer. */
 		pixman_renderer_output_set_buffer(base, output->hw_surface);
@@ -174,9 +207,10 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 	} else {
 		ec->renderer->repaint_output(base, damage);
 		surface_acquire_buffer(output);
+		fd = output->buf_alloc.compositor_bo->ion_fd;
 	}
 	/* Update the damage region. */
-	pixman_region32_subtract(&ec->primary_plane.damage,
+		pixman_region32_subtract(&ec->primary_plane.damage,
 	                         &ec->primary_plane.damage, damage);
 
 	/* Schedule the end of the frame. We do not sync this to the frame
@@ -189,7 +223,16 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 	wl_event_source_timer_update(output->finish_frame_timer,
 	                             1000000 / output->mode.refresh);
 
+#ifdef USE_SDM
+	int ret = 0;
+	ret = Commit(display_id, fd);
+	if (ret) {
+		weston_log("fail to commit to sdm display! err=%d\n", ret);
+	}
+#else
 	fbdev_output_display(output);
+#endif
+
 	return 0;
 }
 
@@ -332,6 +375,9 @@ fbdev_query_screen_info(struct fbdev_output *output, int fd,
 
 	info->buffer_length = fixinfo.smem_len;
 	info->line_length = fixinfo.line_length;
+#ifdef USE_SDM
+	line_length = fixinfo.line_length;
+#endif
 	strncpy(info->id, fixinfo.id, sizeof(info->id));
 	info->id[sizeof(info->id)-1] = '\0';
 
@@ -920,6 +966,16 @@ fbdev_backend_create(struct weston_compositor *compositor,
 
 	udev_input_init(&backend->input, compositor, backend->udev,
 			seat_id, param->configure_device);
+#ifdef USE_SDM
+    /* begin SDM initialization */
+    int rc = CreateCore();
+    rc = GetFirstDisplayType(&display_id);
+    weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
+    /* and create default display */
+    rc = CreateDisplay(display_id);
+    weston_log("CreateDisplay: ret = %d \n", rc);
+    SetLineLength(line_length);
+#endif
 
 	compositor->backend = &backend->base;
 	return backend;

@@ -74,6 +74,7 @@ m4_if(m4_cmp(weston_micro_version, [90]), [-1],
 # Check for programs
 AC_PROG_CC
 AC_PROG_SED
+AC_PROG_CXX
 
 # Initialize libtool
 LT_PREREQ([2.2])

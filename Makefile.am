@@ -439,11 +439,13 @@ headless_backend_la_SOURCES = 			\
 endif
 
 if ENABLE_FBDEV_COMPOSITOR
-COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
-COMPOSITOR_CFLAGS += -DUSE_GBM
-COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
+AM_CPPFLAGS += -I$(top_srcdir)/sdm-service_fb
+COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno -lsdmutils -lsdmcore
+COMPOSITOR_CFLAGS += -DENABLE_EGL -DUSE_GBM -DUSE_SDM $(AM_CPPFLAGS)
+
 libweston_module_LTLIBRARIES += fbdev-backend.la
 fbdev_backend_la_LDFLAGS = -module -avoid-version
+fbdev_backend_la_CPPFLAGS = -Wundef -Wno-trigraphs --std=c++11 -std=c++11
 fbdev_backend_la_LIBADD =			\
 	libshared.la				\
 	libsession-helper.la			\
@@ -461,7 +463,13 @@ fbdev_backend_la_SOURCES =			\
 	libweston/compositor-fbdev.c		\
 	libweston/compositor-fbdev.h		\
 	shared/helpers.h			\
-	$(INPUT_BACKEND_SOURCES)
+	$(INPUT_BACKEND_SOURCES)			\
+	sdm-service_fb/sdm_display.cpp		\
+	sdm-service_fb/sdm_display_debugger.cpp	\
+	sdm-service_fb/sdm_display_buffer_allocator.cpp \
+	sdm-service_fb/sdm_display_buffer_sync_handler.cpp \
+	sdm-service_fb/sdm_display_socket_handler.cpp \
+	sdm-service_fb/sdm_display_connect.cpp
 
 endif
 
