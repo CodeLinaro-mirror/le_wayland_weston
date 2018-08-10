@@ -285,11 +285,13 @@ launcher_direct_connect(struct weston_launcher **out, struct weston_compositor *
 
 	launcher->base.iface = &launcher_direct_iface;
 	launcher->compositor = compositor;
-
+// Todo: With TTY enabled, weston could not be launched by-default.
+#ifndef COMPILE_WITH_FBDEV
 	if (setup_tty(launcher, tty) == -1) {
 		free(launcher);
 		return -1;
 	}
+#endif
 
 	* (struct launcher_direct **) out = launcher;
 	return 0;

@@ -441,7 +441,7 @@ endif
 if ENABLE_FBDEV_COMPOSITOR
 AM_CPPFLAGS += -I$(top_srcdir)/sdm-service_fb
 COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno -lsdmutils -lsdmcore
-COMPOSITOR_CFLAGS += -DENABLE_EGL -DUSE_GBM -DUSE_SDM $(AM_CPPFLAGS)
+COMPOSITOR_CFLAGS += -DENABLE_EGL -DCOMPILE_WITH_FBDEV -DUSE_GBM -DUSE_SDM $(AM_CPPFLAGS)
 
 libweston_module_LTLIBRARIES += fbdev-backend.la
 fbdev_backend_la_LDFLAGS = -module -avoid-version
