@@ -27,8 +27,7 @@
 
 #include <core/core_interface.h>
 #include <core/display_interface.h>
-#include <core/debug_interface.h>
-#include <core/dump_interface.h>
+#include <debug_handler.h>
 #include <utils/debug.h>
 #include <utils/constants.h>
 #include <utils/formats.h>
@@ -60,6 +59,7 @@ using std::pair;
 using std::fstream;
 
 enum SdmDisplayIntfType {null_disp, sdm_disp};
+typedef std::map<uint32_t, HWDisplayInfo> SdmDisplaysInfo;
 
 class SdmDisplayInterface {
   public:
@@ -72,7 +72,6 @@ class SdmDisplayInterface {
     virtual DisplayError SetDisplayState(DisplayState state) = 0;
     virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
     virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
-    virtual DisplayError RegisterCb(int display_id, pageflip_cb_t pflipcb) = 0;
     virtual DisplayError EnablePllUpdate(int32_t enable) = 0;
     virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
     virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
@@ -86,7 +85,7 @@ class SdmDisplayInterface {
 
 class SdmNullDisplay : public SdmDisplayInterface {
   public:
-    SdmNullDisplay(DisplayOrder order, DisplayType type, CoreInterface *core_intf);
+    SdmNullDisplay(int32_t display_id, DisplayType type, CoreInterface *core_intf);
     ~SdmNullDisplay();
 
     SdmDisplayIntfType GetDisplayIntfType() {
@@ -99,7 +98,6 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
-    DisplayError RegisterCb(int display_id, pageflip_cb_t pflipcb);
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
@@ -110,7 +108,7 @@ class SdmNullDisplay : public SdmDisplayInterface {
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
 
  public:
-    SdmDisplay(DisplayOrder order, DisplayType type, CoreInterface *core_intf);
+    SdmDisplay(int32_t display_id, DisplayType type, CoreInterface *core_intf);
     ~SdmDisplay();
 
     SdmDisplayIntfType GetDisplayIntfType() {
@@ -124,7 +122,6 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
-    DisplayError RegisterCb(int display_id, pageflip_cb_t pflipcb);
     DisplayError EnablePllUpdate(int32_t enable);
     DisplayError UpdateDisplayPll(int32_t ppm);
 
@@ -134,13 +131,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
 
  protected:
     virtual DisplayError VSync(const DisplayEventVSync &vsync);
-    virtual DisplayError VSync(int fd, unsigned int sequence,
-                               unsigned int tv_sec, unsigned int tv_usec,
-                               void *data);
-    virtual DisplayError PFlip(int fd, unsigned int sequence,
-                               unsigned int tv_sec, unsigned int tv_usec,
-                               void *data);
     virtual DisplayError CECMessage(char *message);
+    virtual DisplayError HandleEvent(DisplayEvent event);
     virtual DisplayError Refresh();
 
  private:
@@ -194,14 +186,12 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     SdmDisplaySocketHandler socket_handler_;
     DisplayEventHandler *client_event_handler_ = NULL;
     DisplayInterface *display_intf_ = NULL;
-    DisplayOrder display_order_ = kOrderMax;
     DisplayType display_type_ = kDisplayMax;
-    DisplaySyncEventType sync_event_type_ = kPageFlipEvent;
     DisplayConfigVariableInfo variable_info_;
     HWDisplayInterfaceInfo hw_disp_info_;
     bool shutdown_pending_ = false;
     LayerStack layer_stack_;
-    int  display_id_ = -1;
+    int32_t display_id_ = -1;
     uint32_t fps_ = 0;
     float max_luminance_ = 0.0;
     float max_average_luminance_ = 0.0;
@@ -210,12 +200,11 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     bool hdr_supported_ = false;
 
     struct drm_output *drm_output_ = NULL;
-    pageflip_cb_t pageflip_cb_ = NULL;
 };
 
 class SdmDisplayProxy {
   public:
-    SdmDisplayProxy(DisplayOrder order, DisplayType type, CoreInterface *core_intf);
+    SdmDisplayProxy(int32_t display_id, DisplayType type, CoreInterface *core_intf);
     ~SdmDisplayProxy();
 
     DisplayError CreateDisplay() { return display_intf_->CreateDisplay(); }
@@ -237,7 +226,7 @@ class SdmDisplayProxy {
     }
     DisplayError RegisterCbs(int display_id, sdm_cbs_t *cbs) {
       hotplug_cb_ = cbs->hotplug_cb;
-      return display_intf_->RegisterCb(display_id, cbs->pageflip_cb);
+      return kErrorNone;
     }
     DisplayError EnablePllUpdate(int32_t enable) {
       return display_intf_->EnablePllUpdate(enable);
@@ -257,7 +246,7 @@ class SdmDisplayProxy {
     void *UeventThreadHandler();
 
     SdmDisplayInterface *display_intf_;
-    DisplayOrder disp_order_;
+    int32_t display_id_ = -1;
     DisplayType disp_type_;
     CoreInterface *core_intf_;
     SdmNullDisplay null_disp_;

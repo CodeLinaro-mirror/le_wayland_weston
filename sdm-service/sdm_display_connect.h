@@ -64,17 +64,6 @@ int CreateCore();
 */
 int DestroyCore();
 
-/*! @brief Method to get characteristics of the first display.
-
-    @details Client shall use this method to determine type of the first display.
-
-    @param[in] display_id that this method will fill up with info.
-
-    @return \link DisplayError \endlink
-
-*/
-int GetFirstDisplayType(int *display_id);
-
 /*! @brief Method to create a display device for a given display id.
 
     @details Client shall use this method to create each of the display.
