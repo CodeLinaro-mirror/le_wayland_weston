@@ -57,8 +57,6 @@
 extern "C" {
 #endif
 
-#include "gbm_priv.h"
-
 #define GBM_BUFFER_BACKEND_PROTOCOL
 
 #define MAX_NUM_PLANES (3)
@@ -137,19 +135,6 @@ int gbm_buffer_backend_setup(struct weston_compositor *compositor);
  * \return The gbm_buffer if it exists, or NULL otherwise.
  */
 struct gbm_buffer *gbm_buffer_get(struct wl_resource *resource);
-
-/** Populate the gbm_buf_info from a wl_buffer resource
- *
- * If the given wl_buffer resource was created through the gdb_buffer_backend
- * protocol interface, populates the gbm_buffer_info.
- * This wraps the gbm_buffer_get and protects the gbm_buffer object against
- * unwanted exposure. Also it can be used as a type check for a wl_buffer.
- *
- * \param resource A wl_buffer resource.
- * \param gbo_info The gbm_buf_info to populate.
- * \return Zero on success, -1 on failure.
- */
-int gbm_buf_info_get(struct wl_resource *resource, struct gbm_buf_info *gbo_info);
 
 #ifdef __cplusplus
 }
