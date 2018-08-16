@@ -195,6 +195,9 @@ struct drm_output {
 
        struct wl_event_source *finish_frame_timer;
 
+       int retire_fence_fd;
+       struct wl_event_source *retire_fence_source;
+
        int pageflip_ev_fd;
        struct wl_event_source *pageflip_ev_source;
        struct {
