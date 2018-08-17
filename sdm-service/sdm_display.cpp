@@ -97,6 +97,8 @@ namespace sdm {
 #define SDM_DEAFULT_NULL_DISPLAY_X_DPI 25.4
 #define SDM_DEAFULT_NULL_DISPLAY_Y_DPI 25.4
 #define SDM_DEAFULT_NULL_DISPLAY_IS_YUV false
+#define SDM_DEAFULT_NULL_DISPLAY_AR -1
+
 
 #define MAX_PROP_STR_SIZE 64
 #define SDM_NULL_DISPLAY_RESOLUTON_PROP_NAME "weston.sdm.default.resolution"
@@ -238,9 +240,89 @@ DisplayError SdmDisplay::SetVSyncState(bool VSyncState, struct drm_output *outpu
     return kErrorNone;
 }
 
-DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
+DisplayError SdmDisplay::SetActiveConfig(uint32_t index) {
     DisplayError error = kErrorNone;
-    DisplayConfigVariableInfo disp_config;
+    DisplayConfigVariableInfo display_variable_info;
+
+    error = display_intf_->SetActiveConfig(index);
+    if (error != kErrorNone) {
+        DLOGE("Active Config setting failed. Error = %d", error);
+        return error;
+    }
+
+    error = display_intf_->GetConfig(index, &display_variable_info);
+    if (error != kErrorNone) {
+        DLOGE("Config Info getting failed. Error = %d", error);
+        return error;
+    }
+
+    error = display_intf_->SetFrameBufferConfig(display_variable_info);
+    if (error != kErrorNone) {
+        DLOGE("FB Config setting failed. Error = %d", error);
+        return error;
+    }
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::SetActiveConfig(struct DisplayConfigInfo *variable_info)
+{
+    DisplayError error = kErrorNone;
+    DisplayConfigVariableInfo display_variable_info;
+    uint32_t active_index = 0;
+
+    display_variable_info.x_pixels        = variable_info->x_pixels;
+    display_variable_info.y_pixels        = variable_info->y_pixels;
+    display_variable_info.x_dpi           = variable_info->x_dpi;
+    display_variable_info.y_dpi           = variable_info->y_dpi;
+    display_variable_info.fps             = variable_info->fps;
+    display_variable_info.vsync_period_ns = variable_info->vsync_period_ns;
+    display_variable_info.is_yuv          = variable_info->is_yuv;
+    display_variable_info.aspect_ratio    = variable_info->aspect_ratio;
+
+    error = display_intf_->SetActiveConfig(&display_variable_info);
+    if (error != kErrorNone) {
+        DLOGE("Active Config setting failed. Error = %d", error);
+        return error;
+    }
+
+    error = display_intf_->GetActiveConfig(&active_index);
+    if (error != kErrorNone) {
+        DLOGE("Config Info getting failed. Error = %d", error);
+        return error;
+    }
+
+    error = display_intf_->GetConfig(active_index, &display_variable_info);
+    if (error != kErrorNone) {
+        DLOGE("Config Info getting failed. Error = %d", error);
+        return error;
+    }
+
+    error = display_intf_->SetFrameBufferConfig(display_variable_info);
+    if (error != kErrorNone) {
+        DLOGE("FB Config setting failed. Error = %d", error);
+        return error;
+    }
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::GetNumDisplayAttributes(uint32_t *count) {
+    DisplayError error = kErrorNone;
+
+    error = display_intf_->GetNumVariableInfoConfigs(count);
+
+    if (error != kErrorNone) {
+        DLOGE("Get number of display configs failed. Error = %d", error);
+        return error;
+    }
+
+    return error;
+}
+
+DisplayError SdmDisplay::GetDisplayConfiguration(uint32_t *index,
+                                                        struct DisplayConfigInfo *display_config) {
+    DisplayError error = kErrorNone;
     uint32_t active_index = 0;
 
     error = display_intf_->GetActiveConfig(&active_index);
@@ -250,7 +332,16 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
         return error;
     }
 
-    error = display_intf_->GetConfig(active_index, &disp_config);
+    *index = active_index;
+    return GetDisplayConfiguration(active_index, display_config);
+}
+
+DisplayError SdmDisplay::GetDisplayConfiguration(uint32_t index,
+                                                        struct DisplayConfigInfo *display_config) {
+    DisplayError error = kErrorNone;
+    DisplayConfigVariableInfo disp_config;
+
+    error = display_intf_->GetConfig(index, &disp_config);
 
     if (error != kErrorNone) {
         DLOGE("Display Configuration failed. Error = %d", error);
@@ -264,6 +355,7 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
     display_config->fps          = disp_config.fps;
     display_config->vsync_period_ns = disp_config.vsync_period_ns;
     display_config->is_yuv       = disp_config.is_yuv;
+    display_config->aspect_ratio = disp_config.aspect_ratio;
     fps_                         = disp_config.fps;
 
     return kErrorNone;
@@ -1463,7 +1555,30 @@ DisplayError SdmNullDisplay::SetVSyncState(bool enable, struct drm_output *outpu
   return kErrorNone;
 }
 
-DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
+DisplayError SdmNullDisplay::SetActiveConfig(uint32_t index) {
+  DLOGW("Cannot Set Active Config index %u", index);
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::SetActiveConfig(struct DisplayConfigInfo *variable_info) {
+  DLOGW("Cannot Set Active Config Info");
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::GetNumDisplayAttributes(uint32_t *count) {
+  *count = 0;
+  DLOGW("Cannot Get Number of Display Attributes");
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::GetDisplayConfiguration(uint32_t index,
+                                                        struct DisplayConfigInfo *display_config) {
+  DLOGW("Cannot Get Display Config");
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::GetDisplayConfiguration(uint32_t *index,
+                                                        struct DisplayConfigInfo *display_config) {
   uint32_t props_value[3] = {0};
   char null_display_props[MAX_PROP_STR_SIZE] = {0};
   char *prop = NULL, *saveptr = NULL;
@@ -1495,6 +1610,8 @@ DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *d
   display_config->y_dpi = SDM_DEAFULT_NULL_DISPLAY_Y_DPI;
   display_config->vsync_period_ns = UINT32(1000000000/display_config->fps);
   display_config->is_yuv = SDM_DEAFULT_NULL_DISPLAY_IS_YUV;
+  display_config->aspect_ratio = SDM_DEAFULT_NULL_DISPLAY_AR;
+  *index = 0;
 
   return kErrorNone;
 }
