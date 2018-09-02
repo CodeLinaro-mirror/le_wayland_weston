@@ -67,6 +67,7 @@
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-server-protocol.h"
 #include "gbm_priv.h"
+#include "screen-capture.h"
 
 #include "shared/helpers.h"
 #include "weston-egl-ext.h"
@@ -874,6 +875,10 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
   pixman_region32_t r;
 
   wl_list_for_each_reverse(view, &compositor->view_list, link) {
+    /* Skip screen capture buffer during GPU composition */
+    if (is_screen_capture_view(view))
+        continue;
+
     if (view->plane == &compositor->primary_plane) {
        draw_view(view, output, damage);
     }
@@ -1151,6 +1156,12 @@ gl_renderer_repaint_output(struct weston_output *output,
 	if (use_output(output) < 0)
 		return;
 
+	/* Clear all unknown regions */
+	if (output->need_gpu_composition)
+	{
+	    glClearColor(0,0,0,0);
+	    glClear(GL_COLOR_BUFFER_BIT);
+	}
 	/* Calculate the viewport */
 	glViewport(go->borders[GL_RENDERER_BORDER_LEFT].width,
 		   go->borders[GL_RENDERER_BORDER_BOTTOM].height,
@@ -1246,6 +1257,112 @@ gl_renderer_repaint_output(struct weston_output *output,
 		weston_log("Failed in eglSwapBuffers.\n");
 		gl_renderer_print_egl_error_state();
 	}
+
+	go->border_status = BORDER_STATUS_CLEAN;
+}
+
+/*
+ * Capture screen content into a specified buffer by using FBO. This buffer
+ * must be gbm buffer which is created by GBM buffer protocol, otherwise, egl
+ * image must be created here.
+ */
+static void
+gl_renderer_capture_screen(struct weston_output *output,
+			      struct weston_buffer *buffer,
+			      pixman_region32_t *output_damage)
+{
+	struct gl_output_state *go = get_output_state(output);
+	struct weston_compositor *compositor = output->compositor;
+	pixman_region32_t buffer_damage, total_damage;
+	enum gl_border_status border_damage = BORDER_STATUS_CLEAN;
+	GLuint framebuffer, texture;
+	GLenum status;
+	struct gbm_buffer *gbm_buf = NULL;
+	struct egl_image *cap_buf_image = NULL;
+	struct weston_view *view;
+
+	if (!buffer) {
+		weston_log("Error! buffer is NULL.\n");
+		return;
+	}
+
+	if (wl_shm_buffer_get(buffer->resource) ||
+		linux_dmabuf_buffer_get(buffer->resource)) {
+		weston_log("Error! buffer is not supported by screen capture.\n");
+		return;
+	}
+
+	if (gbm_buf = gbm_buffer_get(buffer->resource)) {
+		cap_buf_image = gbm_buffer_backend_get_user_data(gbm_buf);
+	} else if (gbm_buf = wl_resource_get_user_data(buffer->resource)) {
+		/* TODO: Create egl image */
+		weston_log("Error! no egl image is bound.\n");
+		return;
+	}
+	if (!cap_buf_image) {
+		weston_log("Error! no egl image is bound.\n");
+		return;
+	}
+
+	/* Prepare for framebuffer */
+	glGenTextures(1, &texture);
+	glBindTexture(GL_TEXTURE_2D, texture);
+	glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, cap_buf_image->image);
+	glBindTexture(GL_TEXTURE_2D, 0);
+
+	glGenFramebuffers(1, &framebuffer);
+	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+	status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if (status != GL_FRAMEBUFFER_COMPLETE) {
+		glDeleteFramebuffers(1, &framebuffer);
+		glDeleteTextures(1, &texture);
+		weston_log("Error! can't make FBO.\n");
+		return;
+	}
+
+	/* Calculate the viewport */
+	glViewport(go->borders[GL_RENDERER_BORDER_LEFT].width,
+		   go->borders[GL_RENDERER_BORDER_BOTTOM].height,
+		   gbm_buf->width,
+		   gbm_buf->height);
+
+	/* Calculate the global GL matrix */
+	go->output_matrix = output->matrix;
+	weston_matrix_translate(&go->output_matrix,
+				-(output->current_mode->width / 2.0),
+				-(output->current_mode->height / 2.0), 0);
+	/* Change y to y_invert */
+	weston_matrix_scale(&go->output_matrix,
+			    2.0 / output->current_mode->width,
+			    2.0 / output->current_mode->height, 1);
+
+	pixman_region32_init(&total_damage);
+	pixman_region32_init(&buffer_damage);
+
+	output_get_damage(output, &buffer_damage, &border_damage);
+	output_rotate_damage(output, output_damage, go->border_status);
+
+	pixman_region32_union(&total_damage, &buffer_damage, output_damage);
+	border_damage |= go->border_status;
+
+	/* Draw all views */
+	wl_list_for_each_reverse(view, &compositor->view_list, link) {
+		if (is_screen_capture_view(view))
+			continue;
+		draw_view(view, output, &total_damage);
+	}
+
+	pixman_region32_fini(&total_damage);
+	pixman_region32_fini(&buffer_damage);
+
+	draw_output_borders(output, border_damage);
+
+	/* Check if FBO rendering is completed. Any efficient way except glFinish? */
+	glFinish();
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glDeleteFramebuffers(1, &framebuffer);
+	glDeleteTextures(1, &texture);
 
 	go->border_status = BORDER_STATUS_CLEAN;
 }
@@ -1663,10 +1780,10 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	EGLint attribs[30];
 	int atti = 0;
 
-    //If format is in skip list, return with out creating egl image.
-    if (gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
-      return image;
-    }
+	//If format is in skip list, return with out creating egl image.
+	if (gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+		return image;
+	}
 	memset(attribs,0,sizeof(EGLint));
 
 	image = gbm_buffer_backend_get_user_data(gbmbuf);
@@ -1755,7 +1872,6 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
 	generic_buf_layout_t buf_lyt;
 	struct gbm_bo *bo;
 	uint32_t j;
-	int32_t tmp_fd;
 
 	buf_info.fd          = gbm_buf->fd;
 	buf_info.metadata_fd = gbm_buf->metadata_fd;
@@ -1767,6 +1883,10 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
 
 	//We will import BO to create an entry into the hash map for this buf_info
 	bo = gbm_bo_import(gbm, GBM_BO_IMPORT_GBM_BUF_TYPE, &buf_info, GBM_BO_USE_RENDERING);
+	if (bo == NULL) {
+		GBM_PROTOCOL_LOG(LOG_DBG,"failed to import gbm bo");
+		return false;
+	}
 
 	//save gbm buffer object
 	gbm_buf->bo = bo;
@@ -1932,10 +2052,10 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 	buffer->y_inverted =
 		!!(gbmbuf->flags & ZLINUX_BUFFER_PARAMS_FLAGS_Y_INVERT);
 
-    if (gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) {
-    	for (i = 0; i < gs->num_images; i++)
-  	    	egl_image_unref(gs->images[i]);
-    }
+	if (gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+		for (i = 0; i < gs->num_images; i++)
+			egl_image_unref(gs->images[i]);
+	}
 
 	gs->num_images = 0;
 
@@ -1958,9 +2078,9 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
  */
 	gs->images[0] = gbm_buffer_backend_get_user_data(gbmbuf);
 
-    if (gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) {
-  	    if (gs->images[0]) {
-  		    int ret;
+	if (gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+		if (gs->images[0]) {
+			int ret;
 
 			ret = egl_image_unref(gs->images[0]);
 			assert(ret == 0);
@@ -1995,7 +2115,7 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	struct gl_surface_state *gs = get_surface_state(es);
 	struct wl_shm_buffer *shm_buffer;
 	struct linux_dmabuf_buffer *dmabuf;
-    struct gbm_buffer *gbmbuf;
+	struct gbm_buffer *gbmbuf;
 	EGLint format;
 	int i;
 
@@ -2033,6 +2153,9 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 		gs->buffer_type = BUFFER_TYPE_NULL;
 		gs->y_inverted = 1;
 	}
+
+	/* Create screen capture buffer after creating egl image. FBO path needs it */
+	screen_capture_attach(ec, buffer);
 }
 
 static void
@@ -2263,6 +2386,23 @@ gl_renderer_create_surface(struct weston_surface *surface)
 	if (surface->buffer_ref.buffer) {
 		gl_renderer_attach(surface, surface->buffer_ref.buffer);
 		gl_renderer_flush_damage(surface);
+	} else if (surface->surf_color.is_pended) {
+		/*
+		* if weston_surface_set_color is called before
+		* gl renderer is initialized, surface color is stored
+		* in surf_color and is_pended is set to true. Here,
+		* gs color is set accordingly.
+		*/
+		gs->color[0] = surface->surf_color.red;
+		gs->color[1] = surface->surf_color.green;
+		gs->color[2] = surface->surf_color.blue;
+		gs->color[3] = surface->surf_color.alpha;
+		gs->buffer_type = BUFFER_TYPE_SOLID;
+		gs->pitch = 1;
+		gs->height = 1;
+
+		gs->shader = &gr->solid_shader;
+		surface->surf_color.is_pended = false;
 	}
 
 	return 0;
@@ -2963,6 +3103,7 @@ gl_renderer_create(struct weston_compositor *ec, EGLenum platform,
 
 	gr->base.read_pixels = gl_renderer_read_pixels;
 	gr->base.repaint_output = gl_renderer_repaint_output;
+	gr->base.capture_screen = gl_renderer_capture_screen;
 	gr->base.flush_damage = gl_renderer_flush_damage;
 	gr->base.attach = gl_renderer_attach;
 	gr->base.surface_set_color = gl_renderer_surface_set_color;
@@ -3008,6 +3149,8 @@ gl_renderer_create(struct weston_compositor *ec, EGLenum platform,
 		weston_log("failed to initialize display\n");
 		goto fail_with_error;
 	}
+
+	weston_place_marker("W - eglInitialize");
 
 	if (egl_choose_config(gr, attribs, visual_id,
 			      n_ids, &gr->egl_config) < 0) {

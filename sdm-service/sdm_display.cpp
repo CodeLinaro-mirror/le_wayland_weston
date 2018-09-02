@@ -96,6 +96,13 @@ int SdmDisplayInterface::GetDrmMasterFd() {
   return fd;
 }
 
+void SdmDisplayInterface::UseExternalGemHandle() {
+  DRMMaster *master = nullptr;
+  int ret = DRMMaster::GetInstance(&master);
+
+  master->UseExternalGemHandle();
+}
+
 SdmDisplay::SdmDisplay(DisplayOrder order, DisplayType type, CoreInterface *core_intf) {
     display_order_ = order;
     display_type_ = type;
@@ -828,8 +835,11 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
 #endif
 
     error = display_intf_->Prepare(&layer_stack_);
+    output->prev_layer_none_commit = output->layer_none_commit;
     if (error == kErrorNoAppLayers)
-        output->skip_commit = true;
+        output->layer_none_commit = true;
+    else
+        output->layer_none_commit = false;
     DumpInterface::GetDump(dump_buffer, sizeof(dump_buffer));
     error = PostPrepare(output);
     if (error != kErrorNone)
@@ -996,6 +1006,15 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
         case SDM_BUFFER_FORMAT_CbYCrY_422_I:
             format = sdm::kFormatCbYCrY422H2V1Packed;
             break;
+        case SDM_BUFFER_FORMAT_CrYCbY_422_I:
+            format = sdm::kFormatCrYCbY422H2V1Packed;
+            break;
+        case SDM_BUFFER_FORMAT_YCbYCr_422_I:
+            format = sdm::kFormatYCbYCr422H2V1Packed;
+            break;
+        case SDM_BUFFER_FORMAT_YCrYCb_422_I:
+            format = sdm::kFormatYCrYCb422H2V1Packed;
+            break;
         default:
             DLOGE("Unsupported format %d\n", src_fmt);
             return sdm::kFormatInvalid;
@@ -1028,6 +1047,9 @@ bool SdmDisplay::GetVideoPresenceByFormatFromGbm(uint32_t fmt)
     switch (fmt) {
        case GBM_FORMAT_NV12:
        case GBM_FORMAT_UYVY:
+       case GBM_FORMAT_VYUY:
+       case GBM_FORMAT_YUYV:
+       case GBM_FORMAT_YVYU:
        case GBM_FORMAT_YCbCr_420_TP10_UBWC:
        case GBM_FORMAT_YCbCr_420_P010_UBWC:
             is_video_present = true;
@@ -1088,6 +1110,15 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
          break;
     case GBM_FORMAT_UYVY:
          ret = SDM_BUFFER_FORMAT_CbYCrY_422_I;
+         break;
+    case GBM_FORMAT_VYUY:
+         ret = SDM_BUFFER_FORMAT_CrYCbY_422_I;
+         break;
+    case GBM_FORMAT_YUYV:
+         ret = SDM_BUFFER_FORMAT_YCbYCr_422_I;
+         break;
+    case GBM_FORMAT_YVYU:
+         ret = SDM_BUFFER_FORMAT_YCrYCb_422_I;
          break;
     case GBM_FORMAT_ABGR2101010:
          ret = SDM_BUFFER_FORMAT_RGBA_2101010;

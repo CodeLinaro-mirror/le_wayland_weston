@@ -31,6 +31,7 @@
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
+#include <fcntl.h>
 
 #include <wayland-util.h>
 
@@ -140,4 +141,15 @@ weston_log_continue(const char *fmt, ...)
 	va_end(argp);
 
 	return l;
+}
+
+WL_EXPORT void
+weston_place_marker(const char *name)
+{
+	int fd = open("/debug/bootkpi/kpi_values",O_WRONLY);
+
+	if (fd > 0) {
+		write(fd, name, strlen(name));
+		close(fd);
+	}
 }

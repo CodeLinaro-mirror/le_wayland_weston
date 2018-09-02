@@ -387,6 +387,7 @@ int get_drm_master_fd() {
 
     int fd = SdmDisplayInterface::GetDrmMasterFd();
 
+    SdmDisplayInterface::UseExternalGemHandle();
     #if SDM_DISPLAY_DEBUG
     DLOGD("fd is: %d \n", fd);
     #endif
@@ -464,6 +465,33 @@ int UpdateDisplayPll(int display_id, int enable)
 {
     return display_[display_id]->UpdateDisplayPll(enable);
 }
+
+int SetPlaneAvailable(uint32_t plane_id, bool is_available)
+{
+    return core_intf_->SetPlaneAvailable(plane_id, is_available);
+}
+
+WL_EXPORT struct sdm_service_interface sdm_service_interface{
+    .CreateCore = CreateCore,
+    .DestroyCore = DestroyCore,
+    .GetDisplayCount = GetDisplayCount,
+    .GetDisplayInfos = GetDisplayInfos,
+    .GetConnectorName = GetConnectorName,
+    .GetFirstDisplayType = GetFirstDisplayType,
+    .CreateDisplay = CreateDisplay,
+    .DestroyDisplay = DestroyDisplay,
+    .ReconfigureDisplay = NULL,
+    .Prepare = Prepare,
+    .Commit = Commit,
+    .GetDisplayConfiguration = GetDisplayConfiguration,
+    .GetDisplayHdrInfo = GetDisplayHdrInfo,
+    .RegisterCbs = RegisterCbs,
+    .SetDisplayState = SetDisplayState,
+    .SetVSyncState = SetVSyncState,
+    .EnablePllUpdate = EnablePllUpdate,
+    .UpdateDisplayPll = UpdateDisplayPll,
+    .SetPlaneAvailable = SetPlaneAvailable
+};
 
 }// namespace sdm
 #ifdef __cplusplus

@@ -49,6 +49,7 @@
 #include "weston-launch.h"
 
 #include "sdm_display_connect.h"
+#include "drm_display.h"
 
 #define DRM_MAJOR 226
 
@@ -130,7 +131,7 @@ weston_launcher_open(struct weston_launcher *launcher,
 
 	if (launcher->fd == -1) {
 		if(!strcmp(path, "/dev/dri/card0")) {
-			fd = get_drm_master_fd();
+			fd = early_get_drm_master();
 			launcher->drm_fd = fd;
 		} else {
 			fd = open(path, flags);
@@ -194,7 +195,7 @@ weston_launcher_open(struct weston_launcher *launcher,
 	 * and get master permission. Or else, drm authentication will fail
 	 */
 	if(!strcmp(path, "/dev/dri/card0"))
-		return get_drm_master_fd();
+		return early_get_drm_master();
 
 	return data->fd;
 }
@@ -436,12 +437,13 @@ weston_launcher_connect(struct weston_compositor *compositor, int tty,
 					  seat_id, tty, sync_drm);
 		if (r < 0) {
 			launcher->logind = NULL;
-			if (geteuid() == 0) {
-				if (setup_tty(launcher, tty) == -1) {
-					free(launcher);
-					return NULL;
-				}
-			} else {
+#ifndef ENABLE_SYS_UID
+			if (geteuid() != 0) {
+				free(launcher);
+				return NULL;
+			}
+#endif
+			if (setup_tty(launcher, tty) == -1) {
 				free(launcher);
 				return NULL;
 			}

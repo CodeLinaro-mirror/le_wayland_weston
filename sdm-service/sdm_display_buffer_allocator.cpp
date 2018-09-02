@@ -53,6 +53,9 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format) {
        case GBM_FORMAT_XRGB8888: layer_buffer_format = kFormatBGRX8888; break;
        case GBM_FORMAT_NV12: layer_buffer_format = kFormatYCbCr420SemiPlanarVenus; break;
        case GBM_FORMAT_UYVY: layer_buffer_format = kFormatCbYCrY422H2V1Packed; break;
+       case GBM_FORMAT_VYUY: layer_buffer_format = kFormatCrYCbY422H2V1Packed; break;
+       case GBM_FORMAT_YUYV: layer_buffer_format = kFormatYCbYCr422H2V1Packed; break;
+       case GBM_FORMAT_YVYU: layer_buffer_format = kFormatYCrYCb422H2V1Packed; break;
        case GBM_FORMAT_YCbCr_420_TP10_UBWC: layer_buffer_format = kFormatYCbCr420TP10Ubwc; break;
        case GBM_FORMAT_YCbCr_420_P010_UBWC: layer_buffer_format = kFormatYCbCr420P010Ubwc; break;
        default:
@@ -172,6 +175,9 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
   case kFormatYCbCr420SemiPlanarVenus:  *target = GBM_FORMAT_NV12;                 break;
   case kFormatYCbCr420SPVenusUbwc:      *target = GBM_FORMAT_NV12;                 break;
   case kFormatCbYCrY422H2V1Packed:      *target = GBM_FORMAT_UYVY;                 break;
+  case kFormatCrYCbY422H2V1Packed:      *target = GBM_FORMAT_VYUY;                 break;
+  case kFormatYCbYCr422H2V1Packed:      *target = GBM_FORMAT_YUYV;                 break;
+  case kFormatYCrYCb422H2V1Packed:      *target = GBM_FORMAT_YVYU;                 break;
   case kFormatRGBA8888Ubwc:             *target = GBM_FORMAT_ABGR8888;
                                         *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
                                                  GBM_BO_USAGE_HW_RENDERING_QTI;
@@ -242,6 +248,9 @@ bool SdmDisplayBufferAllocator::IsFormatVideo(uint32_t fmt)
    switch (fmt) {
       case GBM_FORMAT_NV12:
       case GBM_FORMAT_UYVY:
+      case GBM_FORMAT_VYUY:
+      case GBM_FORMAT_YUYV:
+      case GBM_FORMAT_YVYU:
       case GBM_FORMAT_YCbCr_420_TP10_UBWC:
            is_video_present = true;
            break;

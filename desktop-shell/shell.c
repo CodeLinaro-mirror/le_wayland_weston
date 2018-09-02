@@ -5110,6 +5110,8 @@ lower_fullscreen_layer(struct desktop_shell *shell,
 			/* Hide the black view */
 			weston_layer_entry_remove(&shsurf->fullscreen.black_view->layer_link);
 			wl_list_init(&shsurf->fullscreen.black_view->layer_link.link);
+			wl_list_remove(&shsurf->fullscreen.black_view->link);
+			wl_list_init(&shsurf->fullscreen.black_view->link);
 			weston_view_damage_below(shsurf->fullscreen.black_view);
 
 		}

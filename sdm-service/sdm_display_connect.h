@@ -30,6 +30,18 @@
 extern "C" {
 #endif
 
+/*! @brief Method for obtaining master fd.
+
+    @details client to obtaining master fd.
+
+    @return \link int \endlink
+
+    @sa
+*/
+int get_drm_master_fd();
+
+struct sdm_service_interface {
+
 /*! @brief Method to create and internally store the handle to display core interface.
 
     @details This method is the entry point into the display core. Client can create
@@ -46,7 +58,7 @@ extern "C" {
 
     @sa DestroyCore
 */
-int CreateCore();
+int (*CreateCore)();
 
 /*! @brief Method to release internally stored handle to display core interface.
 
@@ -62,7 +74,13 @@ int CreateCore();
 
     @sa CreateCore
 */
-int DestroyCore();
+int (*DestroyCore)();
+
+uint32_t (*GetDisplayCount)(void);
+
+int (*GetDisplayInfos)(void);
+
+char *(*GetConnectorName)(uint32_t display_id);
 
 /*! @brief Method to get characteristics of the first display.
 
@@ -73,7 +91,7 @@ int DestroyCore();
     @return \link DisplayError \endlink
 
 */
-int GetFirstDisplayType(int *display_id);
+int (*GetFirstDisplayType)(int *display_id);
 
 /*! @brief Method to create a display device for a given display id.
 
@@ -85,7 +103,7 @@ int GetFirstDisplayType(int *display_id);
 
     @sa DestroyDisplay
 */
-int CreateDisplay(int display_id);
+int (*CreateDisplay)(int display_id);
 
 /*! @brief Method to destroy a display device.
 
@@ -98,7 +116,7 @@ int CreateDisplay(int display_id);
 
     @sa CreateDisplay
 */
-int DestroyDisplay(int display_id);
+int (*DestroyDisplay)(int display_id);
 
 /*! @brief Method to create a display device for a given display id even if
     display was already created. This method forces the display to be re-created
@@ -112,7 +130,7 @@ int DestroyDisplay(int display_id);
 
     @sa DestroyDisplay
 */
-int ReconfigureDisplay(int display_id);
+int (*ReconfigureDisplay)(int display_id);
 
 /*! @brief Method to compose layers associated with given frame.
 
@@ -130,7 +148,7 @@ int ReconfigureDisplay(int display_id);
 
     @sa Commit
 */
-int Prepare(int display_id, struct drm_output *output);
+int (*Prepare)(int display_id, struct drm_output *output);
 
 /*! @brief Method to commit layers of a frame submitted in a former call to Prepare().
 
@@ -150,7 +168,7 @@ int Prepare(int display_id, struct drm_output *output);
 
     @sa Prepare
 */
-int Commit(int display_id, struct drm_output *output);
+int (*Commit)(int display_id, struct drm_output *output);
 
 /*! @brief Method to obtain display property for a display_id requested.
     @details Client shall use this method to display properties of requested
@@ -163,7 +181,7 @@ int Commit(int display_id, struct drm_output *output);
 
     @sa
 */
-bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_config);
+bool (*GetDisplayConfiguration)(int display_id, struct DisplayConfigInfo *display_config);
 
 /*! @brief Method to obtain display's HDR information parameters for requested display_id.
     @details Client shall use this method to obtain display's HDR capability parameters
@@ -176,7 +194,7 @@ bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_c
 
     @sa
 */
-bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info);
+bool (*GetDisplayHdrInfo)(int display_id, struct DisplayHdrInfo *display_hdr_info);
 
 /*! @brief Method to register callbacks: VBlank Handler function to be called on
     enabling VBlank (VSync), and hotplug handler function to be called on hotplug
@@ -190,7 +208,7 @@ bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info);
     @sa
 */
 
-int RegisterCbs(int display_id, sdm_cbs_t *cbs);
+int (*RegisterCbs)(int display_id, sdm_cbs_t *cbs);
 
 /*! @brief Method to turn on power of display
 
@@ -205,7 +223,7 @@ int RegisterCbs(int display_id, sdm_cbs_t *cbs);
 
     @sa
 */
-int SetDisplayState(int display_id, int power_mode);
+int (*SetDisplayState)(int display_id, int power_mode);
 
 /*! @brief Method to enable VSync State, i.e. whether to generate callback
     on next frame.
@@ -220,17 +238,7 @@ int SetDisplayState(int display_id, int power_mode);
 
     @sa
 */
-int SetVSyncState(int display_id, bool enable, struct drm_output *output);
-
-/*! @brief Method for obtaining master fd.
-
-    @details client to obtaining master fd.
-
-    @return \link int \endlink
-
-    @sa
-*/
-int get_drm_master_fd();
+int (*SetVSyncState)(int display_id, bool enable, struct drm_output *output);
 
 /*! @brief Method for enable PLL update function.
 
@@ -244,7 +252,7 @@ int get_drm_master_fd();
 
     @sa
 */
-int EnablePllUpdate(int display_id, int enable);
+int (*EnablePllUpdate)(int display_id, int enable);
 
 /*! @brief Method for update display PLL.
 
@@ -258,7 +266,22 @@ int EnablePllUpdate(int display_id, int enable);
 
     @sa
 */
-int UpdateDisplayPll(int display_id, int ppm);
+int (*UpdateDisplayPll)(int display_id, int ppm);
+
+/*! @brief Method for set hardware pipe unavailable.
+
+    @param[in] plane_id \link int \endlink
+
+    @param[in] is_available \link int \endlink
+
+    @return \link int \endlink
+
+    @sa
+*/
+int (*SetPlaneAvailable)(uint32_t plane_id, bool is_available);
+
+
+};
 
 #ifdef __cplusplus
 }

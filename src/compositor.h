@@ -188,6 +188,8 @@ struct weston_output {
 	struct wl_list animation_list;
 	int32_t x, y, width, height;
 	int32_t mm_width, mm_height;
+	/* Indicate current repainting need gpu do compositon. */
+	bool need_gpu_composition;
 
 	/** Output area in global coordinates, simple rect */
 	pixman_region32_t region;
@@ -574,6 +576,9 @@ struct weston_renderer {
 			       uint32_t width, uint32_t height);
 	void (*repaint_output)(struct weston_output *output,
 			       pixman_region32_t *output_damage);
+	void (*capture_screen)(struct weston_output *output,
+			       struct weston_buffer *buffer,
+			       pixman_region32_t *output_damage);
 	void (*flush_damage)(struct weston_surface *surface);
 	void (*attach)(struct weston_surface *es, struct weston_buffer *buffer);
 	void (*surface_set_color)(struct weston_surface *surface,
@@ -867,6 +872,9 @@ struct weston_view {
 
 	/* Per-surface Presentation feedback flags, controlled by backend. */
 	uint32_t psf_flags;
+
+	/* Indicate if this view is used for screen capture. */
+	bool is_capture_view;
 };
 
 struct weston_surface_state {
@@ -896,6 +904,11 @@ struct weston_surface_state {
 	/* wl_surface.set_scaling_factor */
 	/* wl_viewport.set */
 	struct weston_buffer_viewport buffer_viewport;
+};
+
+struct surface_color {
+	bool is_pended;
+	float red, blue, green, alpha;
 };
 
 struct weston_surface {
@@ -980,6 +993,11 @@ struct weston_surface {
 	 */
 	const char *role_name;
 
+	/*
+	* Early renderer does not support setting surface color, so,
+	* store color and set surface color after switching to gl renderer
+	*/
+	struct surface_color surf_color;
 	struct weston_timeline_object timeline;
 };
 
@@ -1453,6 +1471,9 @@ weston_log(const char *fmt, ...)
 int
 weston_log_continue(const char *fmt, ...)
 	__attribute__ ((format (printf, 1, 2)));
+
+void
+weston_place_marker(const char *name);
 
 enum {
 	TTY_ENTER_VT,
