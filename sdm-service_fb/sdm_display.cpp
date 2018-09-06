@@ -48,17 +48,11 @@
  */
 #include <unistd.h>
 #include "sdm_display.h"
-//#include "compositor-sdm-output.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-
-//#include "../src/linux-dmabuf.h"
-
 #define __CLASS__ "SdmDisplay"
-
-
 
 
 namespace sdm {
@@ -85,9 +79,7 @@ DisplayError SdmDisplay::CreateDisplay() {
     }
     display_intf_->GetFrameBufferConfig(&fb_config_);
     display_intf_->SetDisplayState(kStateOn);
-    //display_intf_->SetVSyncState(true);
     display_intf_->SetPanelBrightness(255);
-    display_intf_->Flush();
     layer_stack_.layers.clear();
     gpu_target_layer_ = new Layer();
     dummy_layer_ = new Layer();
@@ -113,8 +105,11 @@ void SdmDisplay::PrepareFbLayerGeometry()
     buffer.unaligned_width = fb_config_.x_pixels;
     buffer.unaligned_height = fb_config_.y_pixels;
     buffer.planes[0].offset = 0;
-    buffer.format = kFormatRGBA8888;
-
+    if (fb_config_.bits_per_pixel == SDM_BPP_16) {
+      buffer.format = kFormatRGB565;
+    } else {
+      buffer.format = kFormatRGBA8888;
+    }
     if (buffer.acquire_fence_fd >= 0) {
         close(buffer.acquire_fence_fd);
         buffer.acquire_fence_fd = -1;
@@ -193,7 +188,11 @@ DisplayError SdmDisplay::PFlip(int fd, unsigned int sequence,
 void SdmDisplay::SetFBTStride(int stride)
 {
     LayerBuffer &buffer = gpu_target_layer_->input_buffer;
-    buffer.width = stride / 4;
+	if (fb_config_.bits_per_pixel == SDM_BPP_16) {
+      buffer.width = stride / 2;
+    } else {
+      buffer.width = stride / 4;
+    }
     buffer.planes[0].stride = stride;
 }
 

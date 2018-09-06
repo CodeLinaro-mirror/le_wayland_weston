@@ -43,6 +43,7 @@
 #ifdef USE_SDM
 #include <stdint.h>
 #include <linux/msm_mdp.h>
+#include "sdm_display_connect.h"
 #endif
 #include <libudev.h>
 #ifdef USE_GBM
@@ -58,7 +59,7 @@
 #include "libinput-seat.h"
 #include "presentation-time-server-protocol.h"
 #include "gl-renderer.h"
-#include "../sdm-service_fb/sdm_display_connect.h"
+
 
 struct fbdev_backend {
 	struct weston_backend base;
@@ -527,8 +528,10 @@ static void fbdev_output_disable(struct weston_output *base);
 static int
 fbdev_output_init_egl(struct fbdev_output *output, struct fbdev_backend *b)
 {
-	EGLint format[2] = {
-		GBM_FORMAT_ABGR8888,
+	uint32_t gbm_format = (output->fb_info.bits_per_pixel == BPP_16) ?
+						GBM_FORMAT_RGB565 : GBM_FORMAT_ABGR8888;
+	EGLint format[1] = {
+		gbm_format,
 		GBM_FORMAT_ARGB8888,
 	};
 	int n_formats = 2;
@@ -1046,9 +1049,10 @@ static void
 surface_create(struct fbdev_output *output, struct fbdev_backend *backend)
 {
 #ifdef USE_GBM
+	uint32_t format = (output->fb_info.bits_per_pixel == BPP_16) ?
+						GBM_FORMAT_RGB565 : GBM_FORMAT_ABGR8888;
 	output->buf_alloc.surface = gbm_surface_create(backend->buffer_alloc_dev, output->mode.width, output->mode.height,
-													GBM_FORMAT_ABGR8888,
-													GBM_BO_USE_SCANOUT |GBM_BO_USE_RENDERING);
+													format, GBM_BO_USE_SCANOUT |GBM_BO_USE_RENDERING);
 #endif
 }
 

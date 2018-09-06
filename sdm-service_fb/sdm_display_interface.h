@@ -83,6 +83,12 @@ enum {
 
 };
 
+enum {
+       SDM_BPP_16=16,
+       SDM_BPP_24=24,
+       SDM_BPP_32=32
+};
+
 /* Blending type for each layer, now only support premultiplied blending */
 enum {
        SDM_BLENDING_NONE = 0,

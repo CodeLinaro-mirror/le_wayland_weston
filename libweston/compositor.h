@@ -81,6 +81,12 @@ enum weston_keyboard_modifier {
 	MODIFIER_SHIFT = (1 << 3),
 };
 
+enum {
+	BPP_16=16,
+	BPP_24=24,
+	BPP_32=32
+};
+
 enum weston_keyboard_locks {
 	WESTON_NUM_LOCK = (1 << 0),
 	WESTON_CAPS_LOCK = (1 << 1),
