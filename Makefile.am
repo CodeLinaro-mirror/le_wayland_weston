@@ -6,6 +6,7 @@ libexec_PROGRAMS =
 moduledir = $(libdir)/weston
 module_LTLIBRARIES =
 noinst_LTLIBRARIES =
+lib_LTLIBRARIES =
 BUILT_SOURCES =
 
 AM_DISTCHECK_CONFIGURE_FLAGS = --disable-setuid-install
@@ -278,6 +279,13 @@ gbm_buffer_backend_la_SOURCES =					\
 	src/compositor.h								\
 	src/gbm-buffer-backend.c						\
 	src/gbm-buffer-backend.h						\
+	protocol/gbm-buffer-backend-protocol.c			\
+	protocol/gbm-buffer-backend-server-protocol.h
+
+lib_LTLIBRARIES += libgbm-buffer-backend-protocol.la
+libgbm_buffer_backend_protocol_la_CFLAGS =				\
+	$(AM_CFLAGS)
+libgbm_buffer_backend_protocol_la_SOURCES =					\
 	protocol/gbm-buffer-backend-protocol.c			\
 	protocol/gbm-buffer-backend-server-protocol.h
 endif
