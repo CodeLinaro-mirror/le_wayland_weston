@@ -1157,6 +1157,8 @@ view_compute_bbox(struct weston_view *view, const pixman_box32_t *inbox,
 static void
 weston_view_update_transform_disable(struct weston_view *view)
 {
+	struct weston_view *parent = view->geometry.parent;
+
 	view->transform.enabled = 0;
 
 	/* round off fractions when not transformed */
@@ -1178,6 +1180,16 @@ weston_view_update_transform_disable(struct weston_view *view)
 				  0, 0,
 				  view->surface->width,
 				  view->surface->height);
+
+	 if (parent) {
+		if (parent->geometry.scissor_enabled) {
+			view->geometry.scissor_enabled = true;
+			weston_view_transfer_scissor(parent, view);
+		} else {
+			view->geometry.scissor_enabled = false;
+		}
+	}
+
 	if (view->geometry.scissor_enabled)
 		pixman_region32_intersect(&view->transform.boundingbox,
 					  &view->transform.boundingbox,
@@ -1224,6 +1236,15 @@ weston_view_update_transform_enable(struct weston_view *view)
 		weston_log("error: weston_view %p"
 			" transformation not invertible.\n", view);
 		return -1;
+	}
+
+	if (parent) {
+		if (parent->geometry.scissor_enabled) {
+			view->geometry.scissor_enabled = true;
+			weston_view_transfer_scissor(parent, view);
+		} else {
+			view->geometry.scissor_enabled = false;
+		}
 	}
 
 	pixman_region32_init_rect(&surfregion, 0, 0,
@@ -1288,15 +1309,6 @@ weston_view_update_transform(struct weston_view *view)
 		pixman_region32_intersect(&view->transform.opaque,
 					  &view->transform.opaque, &mask);
 		pixman_region32_fini(&mask);
-	}
-
-	if (parent) {
-		if (parent->geometry.scissor_enabled) {
-			view->geometry.scissor_enabled = true;
-			weston_view_transfer_scissor(parent, view);
-		} else {
-			view->geometry.scissor_enabled = false;
-		}
 	}
 
 	weston_view_damage_below(view);
