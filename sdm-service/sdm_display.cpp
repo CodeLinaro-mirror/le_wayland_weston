@@ -1232,11 +1232,7 @@ void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view
             return;
      }
 
-     tbox = weston_transformed_rect(wl_fixed_from_int(ev->surface->width),
-              wl_fixed_from_int(ev->surface->height),
-              buffer_transform2,
-              viewport->buffer.scale,
-              tbox);
+     tbox = weston_surface_to_buffer_rect_fixed(ev->surface, tbox);
     }
 
     src_ret->left = (float)(tbox.x1 >> 8);
