@@ -1070,6 +1070,10 @@ weston_surface_to_buffer_float(struct weston_surface *surface,
 void
 weston_surface_to_buffer(struct weston_surface *surface,
 			 int sx, int sy, int *bx, int *by);
+
+WL_EXPORT pixman_box32_t
+weston_surface_to_buffer_rect_fixed(struct weston_surface *surface,
+                              pixman_box32_t rect);
 pixman_box32_t
 weston_surface_to_buffer_rect(struct weston_surface *surface,
 			      pixman_box32_t rect);

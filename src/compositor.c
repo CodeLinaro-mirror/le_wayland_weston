@@ -877,6 +877,34 @@ weston_surface_to_buffer(struct weston_surface *surface,
 	*by = floorf(byf);
 }
 
+/**
+ * transform surface region to buffer region, include scaler from surface to buffer
+ * @input_param: rect, the rect have already been fixed by wl_fixed_from_int()
+ * @return     : pixman_box32_t, buffer region
+ */
+WL_EXPORT pixman_box32_t
+weston_surface_to_buffer_rect_fixed(struct weston_surface *surface,
+                              pixman_box32_t rect)
+{
+        struct weston_buffer_viewport *vp = &surface->buffer_viewport;
+        float xf, yf;
+
+        /* first transform box coordinates if the scaler is set */
+        scaler_surface_to_buffer(surface, rect.x1, rect.y1, &xf, &yf);
+        rect.x1 = floorf(xf);
+        rect.y1 = floorf(yf);
+
+        scaler_surface_to_buffer(surface, rect.x2, rect.y2, &xf, &yf);
+        rect.x2 = floorf(xf);
+        rect.y2 = floorf(yf);
+
+        return weston_transformed_rect(wl_fixed_from_int(surface->width_from_buffer),
+                                       wl_fixed_from_int(surface->height_from_buffer),
+                                       vp->buffer.transform, vp->buffer.scale,
+                                       rect);
+}
+
+
 WL_EXPORT pixman_box32_t
 weston_surface_to_buffer_rect(struct weston_surface *surface,
 			      pixman_box32_t rect)
