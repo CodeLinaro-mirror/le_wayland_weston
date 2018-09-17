@@ -249,6 +249,18 @@ int EnablePllUpdate(int display_id, int enable);
 */
 int UpdateDisplayPll(int display_id, int ppm);
 
+/*! @brief Method to get connector name.
+
+    @details weston backend shall use this method to obtain name.
+
+    @param[in] display_id \link int \endlink
+
+    @return \link char * \endlink
+
+    @sa
+*/
+char *GetConnectorName(uint32_t display_id);
+
 #ifdef __cplusplus
 }
 #endif

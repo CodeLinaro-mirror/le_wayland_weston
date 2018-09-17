@@ -120,8 +120,7 @@ uint32_t GetDisplayCount(void)
 
     count = sdm_displays_info_.size();
 
-    //return count;
-    return 1;
+    return count;
 }
 
 int GetDisplayInfos(void)
@@ -142,6 +141,9 @@ int GetDisplayInfos(void)
     HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
     for (iter; iter != hw_displays_info_.end(); ++iter) {
         if (iter->second.display_type == sdm::kVirtual)
+            continue;
+
+        if (!iter->second.is_connected)
             continue;
 
         // Find the primary display and reserve slot 0 for it later.
@@ -169,9 +171,22 @@ int GetDisplayInfos(void)
 char *GetConnectorName(uint32_t display_id)
 {
     char name[100]={};
+    const char *type_name = NULL;
+    auto iter = sdm_displays_info_.find(display_id);
 
-    snprintf(name, sizeof name, "%s-%d", "DSI", display_id);
-    //TODO: Query name from SDM.
+    switch(iter->second.display_type) {
+        case kBuiltIn:
+            type_name = "DSI";
+            break;
+        case kPluggable:
+            type_name = "DP";
+            break;
+        default:
+            type_name = "unKnown";
+            break;
+    }
+
+    snprintf(name, sizeof name, "%s-%d", type_name, display_id);
     return strdup(name);
 }
 

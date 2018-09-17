@@ -1919,11 +1919,9 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
     output->base.compositor = b->compositor;
     output->base.subpixel = WL_OUTPUT_SUBPIXEL_NONE;
     /* TODO (user): To get make, model, serial no. from SDM interface */
-    //output->base.name = GetConnectorName(display_id);
-    output->base.name = "DSI";
+    output->base.name = GetConnectorName(display_id);
     output->base.make = "unknown";
-    //output->base.model = GetConnectorName(display_id);
-    output->base.model = "DSI";
+    output->base.model = GetConnectorName(display_id);
     output->base.serial_number = "unknown";
     wl_list_init(&output->base.mode_list);
     /* TODO (user): remove following line of code: */
