@@ -46,6 +46,8 @@ extern "C" {
 #include "timeline-object.h"
 #include "gbm-buffer-backend.h"
 
+#include <cutils/properties.h>
+
 struct weston_transform {
 	struct weston_matrix matrix;
 	struct wl_list link;
@@ -713,6 +715,12 @@ struct weston_compositor {
 
 	void *user_data;
 	void (*exit)(struct weston_compositor *c);
+
+	struct {
+		struct wl_event_source * check_property_timer;
+		bool enable_sdm_display_log;
+		int sdm_log_frame_interval;
+	} debug;
 };
 
 struct weston_buffer {

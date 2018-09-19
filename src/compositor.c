@@ -4547,6 +4547,35 @@ timeline_key_binding_handler(struct weston_keyboard *keyboard, uint32_t time,
 		weston_timeline_open(compositor);
 }
 
+static int check_log_property_handler(void *data)
+{
+	struct weston_compositor *compositor = data;
+	char sdm_prop_value[16] = {0};
+	int value_enable = 0;
+	int value_interval = 0;
+
+	wl_event_source_timer_update(compositor->debug.check_property_timer, 500);
+	memset(sdm_prop_value, 0, sizeof(sdm_prop_value));
+	if (property_get("sdm_display_log_enable", sdm_prop_value, NULL) > 0) {
+		value_enable = atoi(sdm_prop_value);
+		if (value_enable == 1) {
+			compositor->debug.enable_sdm_display_log = true;
+			/* if sdm_display_log_enable equals 1, getprop sdm_log_frame_interval */
+			memset(sdm_prop_value, 0, sizeof(sdm_prop_value));
+			compositor->debug.sdm_log_frame_interval = 1;
+			if (property_get("sdm_log_frame_interval", sdm_prop_value, NULL) > 0) {
+				value_interval = atoi(sdm_prop_value);
+				if (value_interval >= 1 && value_interval < 65536)
+					compositor->debug.sdm_log_frame_interval = value_interval;
+			}
+		}
+		else
+			compositor->debug.enable_sdm_display_log = false;
+	}
+
+	return 1;
+}
+
 /** Create the compositor.
  *
  * This functions creates and initializes a compositor instance.
@@ -4630,6 +4659,10 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 	loop = wl_display_get_event_loop(ec->wl_display);
 	ec->idle_source = wl_event_loop_add_timer(loop, idle_handler, ec);
 	wl_event_source_timer_update(ec->idle_source, ec->idle_time * 1000);
+
+	ec->debug.check_property_timer =
+	    wl_event_loop_add_timer(loop, check_log_property_handler, ec);
+	wl_event_source_timer_update(ec->debug.check_property_timer, 500);
 
 	ec->input_loop = wl_event_loop_create();
 
