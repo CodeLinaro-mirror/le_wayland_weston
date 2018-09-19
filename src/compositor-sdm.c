@@ -1456,6 +1456,10 @@ init_drm(struct drm_backend *b, struct udev_device *device)
     }
 
     filename = udev_device_get_devnode(device);
+    if (!filename) {
+        weston_log("failed to get devnode\n");
+        return -1;
+    }
 
     weston_log("using %s\n", filename);
 
@@ -2611,10 +2615,14 @@ static void full_init_main(void *arg){
         wl_event_loop_add_fd(loop,
                      udev_monitor_get_fd(b->udev_monitor),
                      WL_EVENT_READABLE, udev_drm_event, b);
+    if (!b->udev_drm_source) {
+        weston_log("failed to add wl-event-loop fd\n");
+        goto err_udev_monitor;
+    }
 
     if (udev_monitor_enable_receiving(b->udev_monitor) < 0) {
         weston_log("failed to enable udev-monitor receiving\n");
-        goto err_udev_monitor;
+        goto err_udev_drm_source;
     }
 
     udev_device_unref(drm_device);
@@ -2631,17 +2639,29 @@ static void full_init_main(void *arg){
        * not full ready
        */
         para = (struct udev_para *)malloc(sizeof(struct udev_para));
+        if (!para) {
+            weston_log("out of memory\n");
+            goto err_udev_drm_source;
+        }
         para->input = &b->input;
         para->compositor = b->compositor;
         para->udev = b->udev;
         para->seat_id = param->seat_id;
         b->input_init = wl_event_loop_add_timer(loop, bg_init_input, para);
+        if (!b->input_init) {
+            weston_log("failed to add wl-event-loop input_init timer\n");
+            goto err_free_para;
+        }
         wl_event_source_timer_update(b->input_init, 500);
 
         /*
         * Set up a timer to switch to sdm repaint mode
         */
         b->finish_full_init = wl_event_loop_add_timer(loop, finish_init, b);
+        if (!b->finish_full_init) {
+            weston_log("failed to add wl-event-loop finish_init timer\n");
+            goto err_wl_event_input_init;
+        }
         wl_event_source_timer_update(b->finish_full_init, 1);
 
         free(param);
@@ -2656,8 +2676,13 @@ static void full_init_main(void *arg){
     param->success = true;
     return;
 
-err_udev_monitor:
+err_wl_event_input_init:
+    wl_event_source_remove(b->input_init);
+err_free_para:
+    free(para);
+err_udev_drm_source:
     wl_event_source_remove(b->udev_drm_source);
+err_udev_monitor:
     udev_monitor_unref(b->udev_monitor);
 //err_udev_input:
     udev_input_destroy(&b->input);
