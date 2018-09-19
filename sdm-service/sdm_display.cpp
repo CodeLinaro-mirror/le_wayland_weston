@@ -629,16 +629,11 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     pixman_region32_init_rect(&r, 0, 0, ev->surface->width, ev->surface->height);
     pixman_region32_subtract(&r, &r, &ev->surface->opaque);
 
-    if (!pixman_region32_not_empty(&r) && (layer->plane_alpha == 0xFF))
+    if ((!pixman_region32_not_empty(&r) || layer->flags.video_present) && (layer->plane_alpha == 0xFF))
         layer->blending = SDM_BLENDING_NONE;
     else
         layer->blending = SDM_BLENDING_PREMULTIPLIED;
     pixman_region32_fini(&r);
-
-    // Video layers are always opaque
-    if (layer->flags.video_present) {
-        layer->blending = SDM_BLENDING_NONE;
-    }
 
     /* Initialize all views with GPU composition first, SDM will update them after prepare */
     layer->composition = SDM_COMPOSITION_GPU;

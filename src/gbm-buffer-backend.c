@@ -191,6 +191,25 @@ gbm_buffer_get(struct wl_resource *resource)
     return buffer;
 }
 
+WL_EXPORT bool is_yuv_format(uint32_t fmt)
+{
+    bool is_yuv = false;
+
+    switch (fmt) {
+       case GBM_FORMAT_NV12:
+       case GBM_FORMAT_UYVY:
+       case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+       case GBM_FORMAT_YCbCr_420_P010_UBWC:
+            is_yuv = true;
+            break;
+       default:
+            is_yuv = false;
+            break;
+    }
+
+    return is_yuv;
+}
+
 static void
 destroy_gbm_buffer(struct wl_resource *resource)
 {
