@@ -149,9 +149,11 @@ int early_drm_display_init(int drm_fd) {
 		return -1;
 	}
 
-	DRMLibLoader::GetInstance()->FuncGetDRMManager()(drm_fd, &drm_mgr_intf_);
-	if (!drm_mgr_intf_)
-		return -1;
+	if (DRMLibLoader::GetInstance()->FuncGetDRMManager()) {
+		DRMLibLoader::GetInstance()->FuncGetDRMManager()(drm_fd, &drm_mgr_intf_);
+		if (!drm_mgr_intf_)
+			return -1;
+	}
 
 	ret = early_drm_get_planes();
 	if (ret) {
@@ -755,8 +757,10 @@ void early_destroy_display(void *early_display_intf) {
 
 void early_drm_display_deinit(bool destroy) {
 	/* DRM Manager is not destroied if sdm is still using it */
-	if (destroy)
-		DRMLibLoader::GetInstance()->FuncDestroyDRMManager()();
+	if (destroy) {
+		if (DRMLibLoader::GetInstance()->FuncDestroyDRMManager())
+			DRMLibLoader::GetInstance()->FuncDestroyDRMManager()();
+	}
 	drm_mgr_intf_ = nullptr;
 	plane_list.clear();
 }
