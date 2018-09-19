@@ -245,5 +245,11 @@ struct drm_output {
        bool layer_none_commit;
        // Indicate previous frame whether commit layers or not, record previous layer_none_commit
        bool prev_layer_none_commit;
+
+       struct {
+           unsigned int frames; /* frames count in every time interval */
+           unsigned int interval; /* time interval */
+           uint64_t begin_time; /* The start time between interval */
+       } fps_debug;
 };
 #endif

@@ -85,7 +85,6 @@ namespace sdm {
 #define LEN_LOCAL 2048
 
 #define SDM_DISPLAY_DEBUG 0
-#define SDM_DISPLAY_DUMP_LAYER_STACK 0
 
 int SdmDisplayInterface::GetDrmMasterFd() {
   DRMMaster *master = nullptr;
@@ -730,67 +729,95 @@ DisplayError SdmDisplay::PostPrepare(struct drm_output *output)
     return error;
 }
 
-static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
-  if (!buffer || !length) {
+static const char * GetLayerCompositionName(const LayerComposition &composition)
+{
+    switch (composition) {
+        case sdm::kCompositionGPU:         return "GPU";
+        case sdm::kCompositionSDE:         return "SDE";
+        case sdm::kCompositionHWCursor:    return "CURSOR";
+        case sdm::kCompositionHybrid:      return "HYBRID";
+        case sdm::kCompositionBlit:        return "BLIT";
+        case sdm::kCompositionGPUTarget:   return "GPU_TARGET";
+        case sdm::kCompositionBlitTarget:  return "BLIT_TARGET";
+        default:                           return "UNKNOWN";
+    }
+}
+
+static const char * GetLayerBlendingName(const LayerBlending &blending)
+{
+    switch (blending) {
+        case sdm::kBlendingPremultiplied:  return "Premultiplied";
+        case sdm::kBlendingOpaque:         return "Opaque";
+        case sdm::kBlendingCoverage:       return "Coverage";
+        default:                           return "UNKNOWN";
+    }
+}
+
+static void GetLayerStackDump(void *layerStack)
+{
+    struct LayerStack *layer_stack;
+    layer_stack = reinterpret_cast<struct LayerStack *>(layerStack);
+
+    weston_log("------ Display Manager: Layer Stack Dump ------\n");
+    weston_log("LayerStack: NumLayers:%ld flags:0x%x\n",
+        layer_stack->layers.size(), layer_stack->flags.flags);
+
+    for (uint32_t i = 0; i < layer_stack->layers.size(); i++) {
+        char buf[LEN_LOCAL] = {0};
+        struct Layer *layer;
+        struct LayerBuffer buffer;
+        layer = layer_stack->layers.at(i);
+        buffer = layer->input_buffer;
+
+        memset(buf, '\0', LEN_LOCAL);
+        sprintf(buf, "Layer: %d\n width  = %d, height = %d", i,
+            layer->input_buffer.width, layer->input_buffer.height);
+        sprintf(buf, "%s\n LayerComposition = %s", buf,
+            GetLayerCompositionName(layer->composition));
+        sprintf(buf, "%s\n src_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f",
+            buf, layer->src_rect.left, layer->src_rect.top,
+            layer->src_rect.right, layer->src_rect.bottom);
+        sprintf(buf, "%s\n dst_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f", buf,
+            layer->dst_rect.left, layer->dst_rect.top, layer->dst_rect.right,
+            layer->dst_rect.bottom);
+        sprintf(buf, "%s\n LayerBlending = %s", buf,
+            GetLayerBlendingName(layer->blending));
+        sprintf(buf,"%s\n LayerTransform:rotation= %f,flip_horizontal=%s,flip_vertical=%s",
+            buf, layer->transform.rotation, (layer->transform.flip_horizontal ? \
+            "true" : "false"), (layer->transform.flip_vertical ? "true" : "false"));
+        sprintf(buf, "%s\n Plane Alpha = %#x, frame_rate = %d, solid_fill_color = %d",
+            buf, layer->plane_alpha, layer->frame_rate, layer->solid_fill_color);
+        sprintf(buf, "%s\n LayerFlags = %#x", buf, layer->flags.flags);
+        sprintf(buf, "%s\t LayerFlags.skip = %d", buf, layer->flags.skip);
+        sprintf(buf, "%s\n LayerBuffer Flags: hdr:%d secure:%d video:%d format:%s",
+            buf, buffer.flags.hdr, buffer.flags.secure, buffer.flags.video,
+            GetFormatString(buffer.format));
+        weston_log("\n%s\n", buf);
+    }
+
     return;
-  }
-  static int frame_count=0;
-  buffer[0] = '\0';
-  struct LayerStack *layer_stack;
-  layer_stack = reinterpret_cast<struct LayerStack *>(layerStack);
-  DLOGI("\n-------- Display Manager: Layer Stack Dump --------");
-  fprintf(stderr,"Frame:%d LayerStack: NumLayers:%ld flags:0x%x\n",
-                frame_count, layer_stack->layers.size(), layer_stack->flags.flags);
-
-  for (uint32_t i = 0; i < layer_stack->layers.size(); i++) {
-      char buf[LEN_LOCAL] = {0};
-
-      struct Layer *layer;
-      struct LayerBuffer buffer;
-      layer = layer_stack->layers.at(i);
-      buffer = layer->input_buffer;
-
-      memset(buf, '\0', LEN_LOCAL);
-      sprintf(buf, "Layer: %d\n    width  = %d,     height = %d", i,
-        layer->input_buffer.width, layer->input_buffer.height);
-      sprintf(buf, "%s\n LayerComposition = %#x", buf, layer->composition);
-      sprintf(buf, "%s\n src_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f",
-        buf, layer->src_rect.left, layer->src_rect.top,
-        layer->src_rect.right, layer->src_rect.bottom);
-      sprintf(buf, "%s\n dst_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f", buf,
-        layer->dst_rect.left, layer->dst_rect.top, layer->dst_rect.right,
-        layer->dst_rect.bottom);
-      sprintf(buf, "%s\n LayerBlending = %#x", buf, layer->blending);
-      sprintf(buf,"%s\n LayerTransform:rotation= %f,flip_horizontal=%s,flip_vertical=%s",
-        buf, layer->transform.rotation, (layer->transform.flip_horizontal? \
-        "true":"false"), (layer->transform.flip_vertical? "true":"false"));
-      sprintf(buf, "%s\n Plane Alpha = %#x, frame_rate = %d,  solid_fill_color = %d",
-        buf, layer->plane_alpha, layer->frame_rate, layer->solid_fill_color);
-      sprintf(buf, "%s\n LayerFlags = %#x", buf, layer->flags.flags);
-      sprintf(buf, "%s\t LayerFlags.skip = %d", buf, layer->flags.skip);
-      sprintf(buf, "%s\n LayerBuffer Flags: hdr:%d secure:%d video:%d", buf,
-                    buffer.flags.hdr, buffer.flags.secure, buffer.flags.video);
-
-      fprintf(stderr,"\n%s\n", buf);
-  }
-  frame_count++;
-
-  return;
 }
 
 DisplayError SdmDisplay::Prepare(struct drm_output *output)
 {
     DisplayError error = kErrorNone;
     char dump_buffer[8192] = {0};
+    static int log_frame_count = 0;
+
+    struct weston_compositor *compositor = output->base.compositor;
 
     error = PrePrepare(output);
-
-#if SDM_DISPLAY_DUMP_LAYER_STACK
-    // Dump all input layers of the layer stack:
-    GetLayerStackDump(&layer_stack_, dump_buffer, sizeof(dump_buffer));
-#endif
-
     error = display_intf_->Prepare(&layer_stack_);
+
+    if (compositor->debug.enable_sdm_display_log) {
+        log_frame_count++;
+        if (log_frame_count >= compositor->debug.sdm_log_frame_interval) {
+            log_frame_count = 0;
+            weston_log("\n\nOutput Name: %s\n", output->base.name);
+            GetLayerStackDump(&layer_stack_);
+        }
+    }
+
     output->prev_layer_none_commit = output->layer_none_commit;
     if (error == kErrorNoAppLayers)
         output->layer_none_commit = true;

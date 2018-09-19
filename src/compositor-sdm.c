@@ -879,6 +879,26 @@ pageflip_handler(unsigned int frame, unsigned int sec, unsigned int usec,
     write(output->pageflip_ev_fd, &v, sizeof v);
 }
 
+static void
+enable_fps_debug_log(struct drm_output *output, struct timespec ts)
+{
+    uint64_t time;
+    /* normal interval : 5s */
+    output->fps_debug.interval = 5;
+
+    time = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    if (output->fps_debug.frames == 0)
+        output->fps_debug.begin_time = time;
+    if ((time - output->fps_debug.begin_time) > output->fps_debug.interval * 1000) {
+        weston_log("%s : frames %d in %d seconds %d fps\n", output->base.name,
+            output->fps_debug.frames, output->fps_debug.interval,
+            output->fps_debug.frames / output->fps_debug.interval);
+        output->fps_debug.frames = 0;
+        output->fps_debug.begin_time = time;
+    }
+    output->fps_debug.frames++;
+}
+
 static int
 on_pageflip(int fd, uint32_t mask, void *data)
 {
@@ -889,6 +909,7 @@ on_pageflip(int fd, uint32_t mask, void *data)
              PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
              PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
     struct sdm_layer *sdm_layer, *next_sdm_layer;
+    struct weston_compositor *compositor = output->base.compositor;
 
     read(fd, &v, sizeof v);
 
@@ -935,6 +956,8 @@ on_pageflip(int fd, uint32_t mask, void *data)
         ts.tv_nsec = output->last_vblank.usec * 1000;
 
         weston_output_finish_frame(&output->base, &ts, flags);
+        if (compositor->debug.enable_sdm_display_log)
+            enable_fps_debug_log(output, ts);
 
         /* We can't call this from frame_notify, because the output's
          * repaint needed flag is cleared just after that */
