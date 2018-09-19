@@ -264,31 +264,6 @@ err_register:
 	return -1;
 }
 
-static bool is_yuv_format(uint32_t fmt) {
-	bool is_yuv;
-
-	switch (fmt) {
-		case GBM_FORMAT_RGB565:
-		case GBM_FORMAT_BGR565:
-		case GBM_FORMAT_RGB888:
-		case GBM_FORMAT_RGBA8888:
-		case GBM_FORMAT_BGRA8888:
-		case GBM_FORMAT_RGBX8888:
-		case GBM_FORMAT_XRGB8888:
-		case GBM_FORMAT_XBGR8888:
-		case GBM_FORMAT_ARGB8888:
-		case GBM_FORMAT_ABGR8888:
-		case GBM_FORMAT_ABGR2101010:
-			is_yuv = false;
-			break;
-		default:
-			is_yuv = true;
-			break;
-	}
-
-	return is_yuv;
-}
-
 static int early_get_drm_fb_id(int drm_fd, struct gbm_bo *bo, uint32_t *fb_id)
 {
 	int ret = -1;
