@@ -264,6 +264,24 @@ gl_renderer_la_SOURCES =			\
 	shared/helpers.h
 endif
 
+if  ENABLE_DRM_COMPOSITOR
+module_LTLIBRARIES += gbm-buffer-backend.la
+gbm_buffer_backend_la_LDFLAGS = -module -avoid-version
+gbm_buffer_backend_la_LIBADD = $(COMPOSITOR_LIBS) $(EGL_LIBS)
+gbm_buffer_backend_la_CFLAGS =				\
+	$(COMPOSITOR_CFLAGS)			\
+	$(DRM_COMPOSITOR_CFLAGS)		\
+	$(EGL_CFLAGS)				\
+	$(GL_RENDERER_CFLAGS)			\
+	$(AM_CFLAGS)
+gbm_buffer_backend_la_SOURCES =					\
+	src/compositor.h								\
+	src/gbm-buffer-backend.c						\
+	src/gbm-buffer-backend.h						\
+	protocol/gbm-buffer-backend-protocol.c			\
+	protocol/gbm-buffer-backend-server-protocol.h
+endif
+
 if ENABLE_X11_COMPOSITOR
 module_LTLIBRARIES += x11-backend.la
 x11_backend_la_LDFLAGS = -module -avoid-version
