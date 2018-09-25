@@ -196,6 +196,12 @@ void SdmDisplay::SetFBTStride(int stride)
     buffer.planes[0].stride = stride;
 }
 
+
+DisplayError SdmDisplay::SetDisplayState(DisplayState state)
+{
+    return display_intf_->SetDisplayState(state);
+}
+
 #ifdef __cplusplus
 }
 #endif

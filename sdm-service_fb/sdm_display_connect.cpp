@@ -175,6 +175,23 @@ void SetLineLength(int line_length)
     display_->SetFBTStride(line_length);
 }
 
+int SetDisplayState(int power_mode) {
+    DisplayError error = kErrorNone;
+    DisplayState state = kStateOff;
+    if (power_mode == kDisplayStateOn) {
+        state = kStateOn;
+    }
+    error = display_->SetDisplayState(state);
+    if (error != kErrorNone) {
+        DLOGE("function failed with error = %d", error);
+        return error;
+    }
+    #if SDM_DISPLAY_DEBUG
+    DLOGD("function successful.");
+    #endif
+    return kErrorNone;
+}
+
 
 }// namespace sdm
 #ifdef __cplusplus

@@ -122,6 +122,7 @@ static void surface_release_buffer(struct fbdev_output *output);
 static void surface_create(struct fbdev_output *output, struct fbdev_backend *backend);
 static void create_buff_alloc_device(int fb_fd, struct fbdev_backend * backend);
 static void fbdev_output_fini_egl(struct fbdev_output *output);
+static void fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level);
 #ifdef USE_SDM
 int display_id = -1;
 int line_length = -1;
@@ -638,6 +639,7 @@ fbdev_output_create(struct fbdev_backend *backend,
 	output->base.destroy = fbdev_output_destroy;
 	output->base.disable = fbdev_output_disable;
 	output->base.enable = fbdev_output_enable;
+	output->base.set_dpms = fbdev_set_dpms;
 	fb_device_fd = fb_fd;
 	weston_output_init(&output->base, backend->compositor);
 
@@ -1071,4 +1073,18 @@ buffer_destroy(struct buffer_allocator buf_alloc)
 #ifdef USE_GBM
 	gbm_surface_destroy(buf_alloc.surface);
 #endif
+}
+
+static void
+fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level)
+{
+	weston_log("fbdev_set_dpms: Calling SetDisplayState weston dpms level = %d \n",level);
+	int state = kDisplayStateOff;
+	if (level == WESTON_DPMS_ON) {
+		state = kDisplayStateOn;
+	}
+	int ret = SetDisplayState(state);
+	if (ret) {
+		weston_log("fbdev_set_dpms: SetDisplaySatte failed. \n");
+	}
 }

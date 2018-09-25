@@ -72,6 +72,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError Refresh();
     DisplayError CECMessage(char *message);
     void SetFBTStride(int stride);
+    DisplayError SetDisplayState(DisplayState state);
 
  protected:
     CoreInterface *core_intf_ = NULL;

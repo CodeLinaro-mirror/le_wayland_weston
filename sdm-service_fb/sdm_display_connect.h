@@ -30,6 +30,12 @@
 extern "C" {
 #endif
 
+enum SDM_DisplayState {
+  kDisplayStateOff,
+  kDisplayStateOn
+};
+
+
 /*! @brief Method to create and internally store the handle to display core interface.
 
     @details This method is the entry point into the display core. Client can create
@@ -124,6 +130,7 @@ int Commit(int display_id,int fd);
 
 void SetLineLength(int line_length);
 
+int SetDisplayState(int power_mode);
 
 
 #ifdef __cplusplus
