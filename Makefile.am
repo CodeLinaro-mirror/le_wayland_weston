@@ -40,7 +40,7 @@ tests/weston-ivi.ini : $(srcdir)/ivi-shell/weston.ini.in
 all-local : weston.ini ivi-shell/weston.ini
 
 AM_CFLAGS = $(GCC_CFLAGS) -DENABLE_EGL
-SIMPLE_EGL_CLIENT_LIBS +=  -lgbm -lEGL_adreno -lGLESv2_adreno -lwaylandegl
+SIMPLE_EGL_CLIENT_LIBS +=  -lgbm -lEGL_adreno -lGLESv2_adreno -lwaylandegl -lwayland-client
 
 AM_CPPFLAGS = 					\
 	-I$(top_srcdir)/src			\
@@ -49,7 +49,6 @@ AM_CPPFLAGS = 					\
 	-I$(top_builddir)/tests			\
 	-I$(top_srcdir)/shared			\
 	-I$(top_builddir)/protocol		\
-	-I$(top_srcdir)/sdm-service		\
 	-DDATADIR='"$(datadir)"'		\
 	-DMODULEDIR='"$(moduledir)"'		\
 	-DLIBEXECDIR='"$(libexecdir)"'		\
@@ -63,10 +62,17 @@ CLEANFILES = weston.ini				\
 
 bin_PROGRAMS += weston
 if ENABLE_DRM_COMPOSITOR
-COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
+COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno -ldl
 COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
 COMPOSITOR_LIBS += -lsdmutils -lsdmcore -lsdedrm
 COMPOSITOR_LIBS += -lgpu_tonemapper -lhdr_tm
+endif
+
+if ENABLE_FBDEV_COMPOSITOR
+COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
+COMPOSITOR_CFLAGS += -DCOMPILE_WITH_FBDEV -DENABLE_EGL $(AM_CPPFLAGS)
+COMPOSITOR_LIBS += -lsdmutils -lsdmcore
+COMPOSITOR_CFLAGS += -DUSE_SDM
 endif
 
 weston_LDFLAGS = -export-dynamic
@@ -146,7 +152,7 @@ libsession_helper_la_SOURCES =			\
 	src/launcher-util.h
 libsession_helper_la_CFLAGS = $(AM_CFLAGS) $(LIBDRM_CFLAGS) $(PIXMAN_CFLAGS) $(COMPOSITOR_CFLAGS)
 
-libsession_helper_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service --std=c++11 -std=c++11 \
+libsession_helper_la_CPPFLAGS = -Wundef -Wno-trigraphs --std=c++11 -std=c++11 \
 	$(COMPOSITOR_CFLAGS)			\
 	$(EGL_CFLAGS)				\
 	$(DRM_COMPOSITOR_CFLAGS)		\
@@ -238,6 +244,26 @@ gl_renderer_la_SOURCES =			\
 	shared/helpers.h
 endif
 
+if  ENABLE_FBDEV_COMPOSITOR
+FBDEV_COMPOSITOR_CFLAGS += -DENABLE_EGL	-DADRENO_WAYLAND_PLATFORM
+FBDEV_COMPOSITOR_CFLAGS += -DUSE_GBM
+module_LTLIBRARIES += gl-renderer.la
+gl_renderer_la_LDFLAGS = -module -avoid-version
+gl_renderer_la_LIBADD = $(COMPOSITOR_LIBS) $(EGL_LIBS)
+gl_renderer_la_CFLAGS =				\
+	$(COMPOSITOR_CFLAGS)			\
+	$(FBDEV_COMPOSITOR_CFLAGS)		\
+	$(EGL_CFLAGS)				\
+	$(GL_RENDERER_CFLAGS)			\
+	$(AM_CFLAGS)
+gl_renderer_la_SOURCES =			\
+	src/gl-renderer.h			\
+	src/gl-renderer.c			\
+	src/vertex-clipping.c			\
+	src/vertex-clipping.h			\
+	shared/helpers.h
+endif
+
 if ENABLE_X11_COMPOSITOR
 module_LTLIBRARIES += x11-backend.la
 x11_backend_la_LDFLAGS = -module -avoid-version
@@ -264,6 +290,8 @@ INPUT_BACKEND_SOURCES =				\
 	shared/helpers.h
 
 if ENABLE_DRM_COMPOSITOR
+AM_CPPFLAGS += -I$(top_srcdir)/sdm-service
+libsession_helper_la_CPPFLAGS += -I$(top_src_dir)/sdm-service
 module_LTLIBRARIES += drm-backend.la
 drm_backend_la_LDFLAGS = -module -avoid-version
 drm_backend_la_LIBADD =				\
@@ -391,7 +419,13 @@ fbdev_backend_la_CFLAGS =			\
 fbdev_backend_la_SOURCES =			\
 	src/compositor-fbdev.c			\
 	shared/helpers.h			\
-	$(INPUT_BACKEND_SOURCES)
+	$(INPUT_BACKEND_SOURCES)		\
+	sdm-service_fb/sdm_display.cpp		\
+	sdm-service_fb/sdm_display_debugger.cpp	\
+	sdm-service_fb/sdm_display_buffer_allocator.cpp \
+	sdm-service_fb/sdm_display_buffer_sync_handler.cpp \
+	sdm-service_fb/sdm_display_socket_handler.cpp \
+	sdm-service_fb/sdm_display_connect.cpp
 endif
 
 if ENABLE_RDP_COMPOSITOR

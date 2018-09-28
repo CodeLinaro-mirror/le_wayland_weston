@@ -48,7 +48,9 @@
 #include "logind-util.h"
 #include "weston-launch.h"
 
+#ifndef COMPILE_WITH_FBDEV
 #include "sdm_display_connect.h"
+#endif
 
 #define DRM_MAJOR 226
 
@@ -129,7 +131,11 @@ weston_launcher_open(struct weston_launcher *launcher,
 		return weston_logind_open(launcher->logind, path, flags);
 
 	if (launcher->fd == -1) {
+#ifndef COMPILE_WITH_FBDEV
 		fd = get_drm_master_fd();
+#else
+		fd = open(path, flags);
+#endif
 
 		if (fd == -1)
 			return -1;
@@ -430,10 +436,13 @@ weston_launcher_connect(struct weston_compositor *compositor, int tty,
 		if (r < 0) {
 			launcher->logind = NULL;
 			if (geteuid() == 0) {
+//TODO: remove COMPILE_WITH_FBDEV flag below when CONFIG_VT is set in defconfig in kernel
+#ifndef COMPILE_WITH_FBDEV
 				if (setup_tty(launcher, tty) == -1) {
 					free(launcher);
 					return NULL;
 				}
+#endif
 			} else {
 				free(launcher);
 				return NULL;

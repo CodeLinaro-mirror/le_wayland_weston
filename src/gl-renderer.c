@@ -58,7 +58,9 @@
 #include <float.h>
 #include <assert.h>
 #include <linux/input.h>
+#ifndef COMPILE_WITH_FBDEV
 #include <drm_fourcc.h>
+#endif
 
 #include "gl-renderer.h"
 #include "vertex-clipping.h"
@@ -1658,11 +1660,14 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	EGLint attribs[30];
 	int atti = 0;
 	unsigned int secure_status = 0;
+	EGLenum target = 0;
+	EGLClientBuffer buffer = NULL;
+
 	gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbmbuf->bo, &secure_status);
     //If format is in skip list, return with out creating egl image.
-	if ((gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
-		(gbmbuf->format == GBM_FORMAT_P010) ||
-		((gbmbuf->format == GBM_FORMAT_NV12) && secure_status)) {
+	if ((gbmbuf->format == GBM_FORMAT_P010) ||
+		((gbmbuf->format == GBM_FORMAT_NV12 ||
+		  gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) && secure_status)) {
 		return image;
 	}
 	memset(attribs,0,sizeof(EGLint));
@@ -1671,45 +1676,57 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	if (image)
 		return egl_image_ref(image);
 
-/* This requires the Mesa commit in
- * Mesa 10.3 (08264e5dad4df448e7718e782ad9077902089a07) or
- * Mesa 10.2.7 (55d28925e6109a4afd61f109e845a8a51bd17652).
- * Otherwise Mesa closes the fd behind our back and re-importing
- * will fail.
- * https://bugs.freedesktop.org/show_bug.cgi?id=76188
- */
-	attribs[atti++] = EGL_WIDTH;
-	attribs[atti++] = gbmbuf->width;
-	attribs[atti++] = EGL_HEIGHT;
-	attribs[atti++] = gbmbuf->height;
-	attribs[atti++] = EGL_LINUX_DRM_FOURCC_EXT;
-	attribs[atti++] = gbmbuf->format;
-/* XXX: Add modifier here when supported */
-	if (gbmbuf->num_planes > 0) {
-		attribs[atti++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-		attribs[atti++] = gbmbuf->fd;
-		attribs[atti++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-		attribs[atti++] = gbmbuf->offset[0];
-		attribs[atti++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-		attribs[atti++] = gbmbuf->stride[0];
+	if (gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+		attribs[atti++] = EGL_WAYLAND_PLANE_WL;
+		attribs[atti++] = 0;
+		attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
+		attribs[atti++] = secure_status;
+		attribs[atti++] = EGL_NONE;
+		target = EGL_WAYLAND_BUFFER_WL;
+		buffer = (EGLClientBuffer) (gbmbuf->buffer_resource);
+	} else {
+	/* This requires the Mesa commit in
+	 * Mesa 10.3 (08264e5dad4df448e7718e782ad9077902089a07) or
+	 * Mesa 10.2.7 (55d28925e6109a4afd61f109e845a8a51bd17652).
+	 * Otherwise Mesa closes the fd behind our back and re-importing
+	 * will fail.
+	 * https://bugs.freedesktop.org/show_bug.cgi?id=76188
+	 */
+		attribs[atti++] = EGL_WIDTH;
+		attribs[atti++] = gbmbuf->width;
+		attribs[atti++] = EGL_HEIGHT;
+		attribs[atti++] = gbmbuf->height;
+		attribs[atti++] = EGL_LINUX_DRM_FOURCC_EXT;
+		attribs[atti++] = gbmbuf->format;
+	/* XXX: Add modifier here when supported */
+		if (gbmbuf->num_planes > 0) {
+			attribs[atti++] = EGL_DMA_BUF_PLANE0_FD_EXT;
+			attribs[atti++] = gbmbuf->fd;
+			attribs[atti++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+			attribs[atti++] = gbmbuf->offset[0];
+			attribs[atti++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
+			attribs[atti++] = gbmbuf->stride[0];
+		}
+		if (gbmbuf->num_planes > 1) {
+			attribs[atti++] = EGL_DMA_BUF_PLANE1_FD_EXT;
+			attribs[atti++] = -1;
+			attribs[atti++] = EGL_DMA_BUF_PLANE1_OFFSET_EXT;
+			attribs[atti++] = gbmbuf->offset[1];
+			attribs[atti++] = EGL_DMA_BUF_PLANE1_PITCH_EXT;
+			attribs[atti++] = gbmbuf->stride[1];
+		}
+		if (gbmbuf->num_planes > 2) {
+			attribs[atti++] = EGL_DMA_BUF_PLANE2_FD_EXT;
+			attribs[atti++] = -1;
+			attribs[atti++] = EGL_DMA_BUF_PLANE2_OFFSET_EXT;
+			attribs[atti++] = gbmbuf->offset[2];
+			attribs[atti++] = EGL_DMA_BUF_PLANE2_PITCH_EXT;
+			attribs[atti++] = gbmbuf->stride[2];
+		}
+		attribs[atti++] = EGL_NONE;
+		target = EGL_LINUX_DMA_BUF_EXT;
+		buffer = NULL;
 	}
-	if (gbmbuf->num_planes > 1) {
-		attribs[atti++] = EGL_DMA_BUF_PLANE1_FD_EXT;
-		attribs[atti++] = -1;
-		attribs[atti++] = EGL_DMA_BUF_PLANE1_OFFSET_EXT;
-		attribs[atti++] = gbmbuf->offset[1];
-		attribs[atti++] = EGL_DMA_BUF_PLANE1_PITCH_EXT;
-		attribs[atti++] = gbmbuf->stride[1];
-	}
-	if (gbmbuf->num_planes > 2) {
-		attribs[atti++] = EGL_DMA_BUF_PLANE2_FD_EXT;
-		attribs[atti++] = -1;
-		attribs[atti++] = EGL_DMA_BUF_PLANE2_OFFSET_EXT;
-		attribs[atti++] = gbmbuf->offset[2];
-		attribs[atti++] = EGL_DMA_BUF_PLANE2_PITCH_EXT;
-		attribs[atti++] = gbmbuf->stride[2];
-	}
-	attribs[atti++] = EGL_NONE;
 
 	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->width=%d", gbmbuf->width);
 	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->height=%d", gbmbuf->height);
@@ -1725,7 +1742,7 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[2]=%d", gbmbuf->offset[2]);
 	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[2]=%d", gbmbuf->stride[2]);
 
-	image = egl_image_create(gr, EGL_LINUX_DMA_BUF_EXT, NULL,
+	image = egl_image_create(gr, target, buffer,
 					 attribs);
 
 	GBM_PROTOCOL_LOG(LOG_DBG,"import_gbm_buffer::Image created =%p\n", image);
@@ -1792,9 +1809,9 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
 	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Invoke import_gbm_buffer()");
 	unsigned int secure_status = 0;
 	gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbm_buf->bo, &secure_status);
-	if((gbm_buf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
-		(gbm_buf->format == GBM_FORMAT_P010) ||
-		((gbm_buf->format == GBM_FORMAT_NV12) && secure_status)) {
+	if((gbm_buf->format == GBM_FORMAT_P010) ||
+		((gbm_buf->format == GBM_FORMAT_NV12 ||
+		  gbm_buf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) && secure_status)) {
 		return true;
 	}
 
@@ -1816,7 +1833,7 @@ choose_texture_target(struct linux_dmabuf_buffer *dmabuf)
 {
 	if (dmabuf->n_planes > 1)
 		return GL_TEXTURE_EXTERNAL_OES;
-
+#ifndef COMPILE_WITH_FBDEV
 	switch (dmabuf->format & ~DRM_FORMAT_BIG_ENDIAN) {
 	case DRM_FORMAT_YUYV:
 	case DRM_FORMAT_YVYU:
@@ -1827,6 +1844,9 @@ choose_texture_target(struct linux_dmabuf_buffer *dmabuf)
 	default:
 		return GL_TEXTURE_2D;
 	}
+#else
+	return GL_TEXTURE_2D;
+#endif
 }
 
 static GLenum
@@ -1835,6 +1855,7 @@ choose_texture_gbm_buf_target(struct gbm_buffer *gbmbuf)
 	if (gbmbuf->num_planes > 1)
 		return GL_TEXTURE_EXTERNAL_OES;
 
+#ifndef COMPILE_WITH_FBDEV
 	switch (gbmbuf->format & ~DRM_FORMAT_BIG_ENDIAN) {
 	case DRM_FORMAT_YUYV:
 	case DRM_FORMAT_YVYU:
@@ -1845,6 +1866,9 @@ choose_texture_gbm_buf_target(struct gbm_buffer *gbmbuf)
 	default:
 		 return GL_TEXTURE_2D;
 	}
+#else
+	return GL_TEXTURE_2D;
+#endif
 }
 
 static void
@@ -1931,9 +1955,9 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 		!!(gbmbuf->flags & ZLINUX_BUFFER_PARAMS_FLAGS_Y_INVERT);
 	unsigned int secure_status = 0;
 	gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbmbuf->bo, &secure_status);
-	if ((gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) &&
-		(gbmbuf->format != GBM_FORMAT_P010) &&
-		((gbmbuf->format == GBM_FORMAT_NV12) && !secure_status)) {
+	if ((gbmbuf->format != GBM_FORMAT_P010) &&
+		((gbmbuf->format == GBM_FORMAT_NV12 ||
+		  gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) && !secure_status)) {
     	for (i = 0; i < gs->num_images; i++)
   	    	egl_image_unref(gs->images[i]);
 	}
@@ -1959,9 +1983,9 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
  */
 	gs->images[0] = gbm_buffer_backend_get_user_data(gbmbuf);
 
-	if ((gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) &&
-		(gbmbuf->format != GBM_FORMAT_P010) &&
-		((gbmbuf->format == GBM_FORMAT_NV12) && !secure_status)) {
+	if ((gbmbuf->format != GBM_FORMAT_P010) &&
+		((gbmbuf->format == GBM_FORMAT_NV12 ||
+		  gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) && !secure_status)) {
   	    if (gs->images[0]) {
   		    int ret;
 

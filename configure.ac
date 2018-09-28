@@ -341,7 +341,6 @@ AC_ARG_ENABLE(simple-egl-clients,
               AS_HELP_STRING([--disable-simple-egl-clients],
                              [do not build the simple EGL clients]),,
               enable_simple_egl_clients="$enable_egl")
-enable_simple_egl_clients=no
 AM_CONDITIONAL(BUILD_SIMPLE_EGL_CLIENTS, test "x$enable_simple_egl_clients" = "xyes")
 if test x$enable_simple_egl_clients = xyes; then
   PKG_CHECK_MODULES(SIMPLE_EGL_CLIENT,

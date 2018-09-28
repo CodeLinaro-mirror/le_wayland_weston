@@ -59,7 +59,6 @@
 #include "compositor.h"
 #include "gbm-buffer-backend.h"
 #include "gbm-buffer-backend-server-protocol.h"
-#include "gbm_priv.h"
 
 static void
 gbm_buffer_destroy_params(struct wl_resource *params_resource);
@@ -205,6 +204,25 @@ gbm_buffer_get(struct wl_resource *resource)
     return buffer;
 }
 
+WL_EXPORT int
+gbm_buf_info_get(struct wl_resource *resource, struct gbm_buf_info *gbo_info)
+{
+    struct gbm_buffer *buffer = gbm_buffer_get(resource);
+
+    if ((NULL != buffer) && (NULL != gbo_info))
+    {
+        gbo_info->fd = buffer->fd;
+        gbo_info->metadata_fd = buffer->metadata_fd;
+        gbo_info->width = buffer->width;
+        gbo_info->height = buffer->height;
+        gbo_info->format = buffer->format;
+    }
+    else
+        return -1;
+
+    return 0;
+}
+
 static void
 destroy_gbm_buffer(struct wl_resource *resource)
 {
@@ -265,24 +283,6 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
     buffer->format = format;
     buffer->flags  = flags;
 
-    ret = weston_compositor_import_gbm_buffer(buffer->compositor, buffer);
-    if (ret == false) {
-      weston_log("gbm_buffer_backend_create_buffer:: import_gbm_buffer failed\n");
-    }
-    // gbm bo is imported to buffer from above function to use in below perform call
-    unsigned int secure_status = 0;
-    gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, buffer->bo, &secure_status);
-    // Override return value if format is part of skip list.
-    if ((format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
-        (format == GBM_FORMAT_P010) ||
-        ((format == GBM_FORMAT_NV12) && secure_status)) {
-      ret = true;
-    }
-
-    if (ret == false) {
-      goto err_failed;
-    }
-
     buffer->buffer_resource = wl_resource_create(client,
                     &wl_buffer_interface,
                     1, 0);
@@ -294,6 +294,24 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
     wl_resource_set_implementation(buffer->buffer_resource,
                 &gbm_buffer_implementation,
                 buffer, destroy_gbm_buffer);
+
+    ret = weston_compositor_import_gbm_buffer(buffer->compositor, buffer);
+    if (ret == false) {
+      weston_log("gbm_buffer_backend_create_buffer:: import_gbm_buffer failed\n");
+    }
+    // gbm bo is imported to buffer from above function to use in below perform call
+    unsigned int secure_status = 0;
+    gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, buffer->bo, &secure_status);
+    // Override return value if format is part of skip list.
+    if ((format == GBM_FORMAT_P010) ||
+        ((format == GBM_FORMAT_NV12 ||
+          format == GBM_FORMAT_YCbCr_420_TP10_UBWC) && secure_status)) {
+      ret = true;
+    }
+
+    if (ret == false) {
+      goto err_failed;
+    }
 
     GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Exited- gracefully\n");
 
