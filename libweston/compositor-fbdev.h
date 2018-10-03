@@ -38,6 +38,15 @@ extern "C" {
 
 struct libinput_device;
 
+#define PRIMARY_DISPLAY_NODE "/dev/fb0"
+#define SECONDARY_DISPLAY_NODE "/dev/fb1"
+
+enum {
+	PRIMARY_DISPLAY_ID,
+	SECONDARY_DISPLAY_ID
+};
+
+
 struct weston_fbdev_backend_config {
 	struct weston_backend_config base;
 
