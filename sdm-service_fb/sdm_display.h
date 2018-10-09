@@ -73,6 +73,12 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError CECMessage(char *message);
     void SetFBTStride(int stride);
     DisplayError SetDisplayState(DisplayState state);
+    DisplayError SetVSyncState(bool enable) {
+      return display_intf_->SetVSyncState(enable);
+    }
+    void RegisterVSyncCb(vsync_cb_t vscb) {
+      vsync_cb = vscb;
+    }
 
  protected:
     CoreInterface *core_intf_ = NULL;
@@ -87,6 +93,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     Layer *gpu_target_layer_;
     Layer *dummy_layer_;
     int  display_id_ = -1;
+    vsync_cb_t  vsync_cb = NULL;
  private:
     void PostCommit();
     void PrepareFbLayerGeometry();

@@ -194,6 +194,16 @@ int SetDisplayState(int power_mode) {
     return kErrorNone;
 }
 
+void SetVSyncState(bool state)
+{
+    display_->SetVSyncState(state);
+}
+
+void RegisterVSyncCb(int display_id, vsync_cb_t vsync_cb)
+{
+    display_->RegisterVSyncCb(vsync_cb);
+}
+
 
 }// namespace sdm
 #ifdef __cplusplus

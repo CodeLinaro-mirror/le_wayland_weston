@@ -1950,6 +1950,9 @@ weston_pending_output_coldplug(struct weston_compositor *compositor);
 struct weston_output *
 weston_output_from_resource(struct wl_resource *resource);
 
+int
+output_repaint_timer_handler(void *data);
+
 #ifdef  __cplusplus
 }
 #endif

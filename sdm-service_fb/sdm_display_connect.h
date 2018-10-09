@@ -132,6 +132,10 @@ void SetLineLength(int line_length);
 
 int SetDisplayState(int power_mode);
 
+typedef void (*vsync_cb_t)(int64_t timestamp);
+
+void RegisterVSyncCb(int display_id, vsync_cb_t vsync_cb);
+
 
 #ifdef __cplusplus
 }

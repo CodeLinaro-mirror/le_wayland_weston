@@ -159,6 +159,10 @@ void SdmDisplay::PostCommit()
 }
  DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync)
 {
+    if(vsync_cb) {
+	vsync_cb(vsync.timestamp);
+    }
+
     return kErrorNone;
 }
 

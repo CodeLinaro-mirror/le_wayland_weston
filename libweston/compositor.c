@@ -64,8 +64,6 @@
 #include "version.h"
 #include "plugin-registry.h"
 
-#define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
-
 static void
 weston_output_update_matrix(struct weston_output *output);
 
@@ -2347,14 +2345,9 @@ weston_output_maybe_repaint(struct weston_output *output, struct timespec *now,
 {
 	struct weston_compositor *compositor = output->compositor;
 	int ret = 0;
-	int64_t msec_to_repaint;
 
 	/* We're not ready yet; come back to make a decision later. */
 	if (output->repaint_status != REPAINT_SCHEDULED)
-		return ret;
-
-	msec_to_repaint = timespec_sub_to_msec(&output->next_repaint, now);
-	if (msec_to_repaint > 1)
 		return ret;
 
 	/* If we're sleeping, drop the repaint machinery entirely; we will
@@ -2375,6 +2368,8 @@ weston_output_maybe_repaint(struct weston_output *output, struct timespec *now,
 	 * output. */
 	ret = weston_output_repaint(output, repaint_data);
 	weston_compositor_read_presentation_clock(compositor, now);
+	/*Revisit: frame_time is needed by clients to track the presented time.*/
+	output->frame_time = timespec_to_msec(now);
 	if (ret != 0)
 		goto err;
 
@@ -2390,41 +2385,24 @@ output_repaint_timer_arm(struct weston_compositor *compositor)
 {
 	struct weston_output *output;
 	bool any_should_repaint = false;
-	struct timespec now;
 	int64_t msec_to_next = INT64_MAX;
 
-	weston_compositor_read_presentation_clock(compositor, &now);
-
 	wl_list_for_each(output, &compositor->output_list, link) {
-		int64_t msec_to_this;
 
 		if (output->repaint_status != REPAINT_SCHEDULED)
 			continue;
-
-		msec_to_this = timespec_sub_to_msec(&output->next_repaint,
-						    &now);
-		if (!any_should_repaint || msec_to_this < msec_to_next)
-			msec_to_next = msec_to_this;
 
 		any_should_repaint = true;
 	}
 
 	if (!any_should_repaint)
 		return;
-
-	/* Even if we should repaint immediately, add the minimum 1 ms delay.
-	 * This is a workaround to allow coalescing multiple output repaints
-	 * particularly from weston_output_finish_frame()
-	 * into the same call, which would not happen if we called
-	 * output_repaint_timer_handler() directly.
+	/* Revisit: Removed timer for driving through vsync on fbdev.
+	 * Need corresponding changes on other compositer.
 	 */
-	if (msec_to_next < 1)
-		msec_to_next = 1;
-
-	wl_event_source_timer_update(compositor->repaint_timer, msec_to_next);
 }
 
-static int
+WL_EXPORT int
 output_repaint_timer_handler(void *data)
 {
 	struct weston_compositor *compositor = data;
@@ -2433,12 +2411,16 @@ output_repaint_timer_handler(void *data)
 	void *repaint_data = NULL;
 	int ret;
 
-	weston_compositor_read_presentation_clock(compositor, &now);
-
 	if (compositor->backend->repaint_begin)
 		repaint_data = compositor->backend->repaint_begin(compositor);
 
 	wl_list_for_each(output, &compositor->output_list, link) {
+		/* Revisit: May need cleanup to utilise this flag properly.*/
+		/* We are not ready for repainting from idle,
+		 * repaint in next cycle*/
+		if (output->repaint_status == REPAINT_BEGIN_FROM_IDLE)
+			continue;
+		output->repaint_status = REPAINT_SCHEDULED;
 		ret = weston_output_maybe_repaint(output, &now, repaint_data);
 		if (ret)
 			break;
@@ -2453,8 +2435,6 @@ output_repaint_timer_handler(void *data)
 		    compositor->backend->repaint_cancel(compositor,
 						        repaint_data);
 	}
-
-	output_repaint_timer_arm(compositor);
 
 	return 0;
 }
@@ -2493,38 +2473,8 @@ weston_output_finish_frame(struct weston_output *output,
 
 	output->frame_time = timespec_to_msec(stamp);
 
-	timespec_add_nsec(&output->next_repaint, stamp, refresh_nsec);
-	timespec_add_msec(&output->next_repaint, &output->next_repaint,
-			  -compositor->repaint_msec);
-	msec_rel = timespec_sub_to_msec(&output->next_repaint, &now);
-
-	if (msec_rel < -1000 || msec_rel > 1000) {
-		static bool warned;
-
-		if (!warned)
-			weston_log("Warning: computed repaint delay is "
-				   "insane: %lld msec\n", (long long) msec_rel);
-		warned = true;
-
-		output->next_repaint = now;
-	}
-
-	/* Called from restart_repaint_loop and restart happens already after
-	 * the deadline given by repaint_msec? In that case we delay until
-	 * the deadline of the next frame, to give clients a more predictable
-	 * timing of the repaint cycle to lock on. */
-	if (presented_flags == WP_PRESENTATION_FEEDBACK_INVALID &&
-	    msec_rel < 0) {
-		while (timespec_sub_to_nsec(&output->next_repaint, &now) < 0) {
-			timespec_add_nsec(&output->next_repaint,
-					  &output->next_repaint,
-					  refresh_nsec);
-		}
-	}
-
 out:
 	output->repaint_status = REPAINT_SCHEDULED;
-	output_repaint_timer_arm(compositor);
 }
 
 static void
@@ -5259,10 +5209,7 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 	wl_signal_init(&ec->output_resized_signal);
 	wl_signal_init(&ec->session_signal);
 	ec->session_active = 1;
-
 	ec->output_id_pool = 0;
-	ec->repaint_msec = DEFAULT_REPAINT_WINDOW;
-
 	ec->activate_serial = 1;
 
 	if (!wl_global_create(ec->wl_display, &wl_compositor_interface, 4,
@@ -5308,9 +5255,6 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 
 	loop = wl_display_get_event_loop(ec->wl_display);
 	ec->idle_source = wl_event_loop_add_timer(loop, idle_handler, ec);
-	ec->repaint_timer =
-		wl_event_loop_add_timer(loop, output_repaint_timer_handler,
-					ec);
 
 	weston_layer_init(&ec->fade_layer, ec);
 	weston_layer_init(&ec->cursor_layer, ec);
