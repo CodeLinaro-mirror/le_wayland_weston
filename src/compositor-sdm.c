@@ -2044,6 +2044,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     display_config.vsync_period_ns = 0;
     display_config.is_yuv          = false;
     display_config.aspect_ratio    =-1;
+    display_config.is_connected    = false;
 
     rc = GetNumDisplayAttributes(display_id, &count_modes);
     if (!rc) {
@@ -2132,17 +2133,35 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->finish_frame_timer =
 		wl_event_loop_add_timer(loop, finish_frame_handler, output);
 
-    output->base.start_repaint_loop = drm_output_start_repaint_loop;
-    output->base.repaint = drm_output_repaint;
-    output->base.destroy = drm_output_destroy;
-    output->base.assign_planes = drm_assign_planes;
-    output->base.set_dpms = drm_set_dpms;
-    output->base.set_hpd = drm_set_hpd;
-    output->base.set_mode_index = drm_set_mode_index;
-    output->base.set_mode_attributes = drm_set_mode_attributes;
-    output->base.switch_mode = drm_output_switch_mode;
-    output->base.enable_ppm = drm_enable_ppm;
-    output->base.set_ppm = drm_set_ppm;
+    /* TODO: This is to register drm_output. To be improved */
+    SetVSyncState(display_id, ENABLE, output);
+
+    if (display_config.is_connected){
+        output->base.start_repaint_loop = drm_output_start_repaint_loop;
+        output->base.repaint = drm_output_repaint;
+        output->base.destroy = drm_output_destroy;
+        output->base.assign_planes = drm_assign_planes;
+        output->base.set_dpms = drm_set_dpms;
+        output->base.set_hpd = drm_set_hpd;
+        output->base.set_mode_index = drm_set_mode_index;
+        output->base.set_mode_attributes = drm_set_mode_attributes;
+        output->base.switch_mode = drm_output_switch_mode;
+        output->base.enable_ppm = drm_enable_ppm;
+        output->base.set_ppm = drm_set_ppm;
+    } else {
+        output->base.start_repaint_loop = headless_output_start_repaint_loop;
+        output->base.repaint = headless_output_repaint;
+        output->base.destroy = drm_output_destroy;
+        output->base.assign_planes = NULL;
+        output->base.set_backlight = NULL;
+        output->base.set_dpms = NULL;
+        output->base.set_hpd = NULL;
+        output->base.set_mode_index = NULL;
+        output->base.set_mode_attributes = NULL;
+        output->base.switch_mode = NULL;
+        output->base.enable_ppm = NULL;
+        output->base.set_ppm = NULL;
+    }
 
     output->base.gamma_size = 0;
     output->base.set_gamma = NULL;

@@ -359,6 +359,7 @@ DisplayError SdmDisplay::GetDisplayConfiguration(uint32_t index,
     display_config->vsync_period_ns = disp_config.vsync_period_ns;
     display_config->is_yuv       = disp_config.is_yuv;
     display_config->aspect_ratio = disp_config.aspect_ratio;
+    display_config->is_connected = true;
     fps_                         = disp_config.fps;
 
     return kErrorNone;
@@ -1569,6 +1570,9 @@ DisplayError SdmDisplay::GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdc
     return error;
 }
 
+DisplayError SdmDisplay::Flush() {
+    return display_intf_->Flush();
+}
 
 SdmNullDisplay::SdmNullDisplay(DisplayType type, CoreInterface *core_intf) {
 }
@@ -1664,6 +1668,7 @@ DisplayError SdmNullDisplay::GetDisplayConfiguration(uint32_t *index,
   display_config->vsync_period_ns = UINT32(1000000000/display_config->fps);
   display_config->is_yuv = SDM_DEAFULT_NULL_DISPLAY_IS_YUV;
   display_config->aspect_ratio = SDM_DEAFULT_NULL_DISPLAY_AR;
+  display_config->is_connected = false;
   *index = 0;
 
   return kErrorNone;
@@ -1686,6 +1691,9 @@ DisplayError SdmNullDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info)
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) {
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::Flush() {
   return kErrorNone;
 }
 
@@ -1726,6 +1734,8 @@ int SdmDisplayProxy::HandleHotplug(bool connected) {
       if (hotplug_cb_) {
         hotplug_cb_(disp_type_, connected, drm_output_);
       }
+
+      display_intf_->Flush();
 
       DLOGI("Display is connected successfully.");
     } else {
