@@ -2504,14 +2504,11 @@ static int *bg_init_input(void *arg)
 
     if (udev_input_init(para->input,
             para->compositor, para->udev, para->seat_id)) {
-        weston_log("udev input init failed, retry in 100ms\n");
-        wl_event_source_timer_update(b->input_init, 100);
-        udev_input_destroy(para->input);
-    } else {
-        weston_log("udev_input_init success\n");
-        wl_event_source_remove(b->input_init);
-        free(para);
+        weston_log("udev input init failed\n");
     }
+
+    wl_event_source_remove(b->input_init);
+    free(para);
 
     return 0;
 }
@@ -2652,7 +2649,12 @@ static void full_init_main(void *arg){
             weston_log("failed to add wl-event-loop input_init timer\n");
             goto err_free_para;
         }
-        wl_event_source_timer_update(b->input_init, 500);
+        /*
+        * Set the timer with empirical time cost for systemd
+        * initialization, will refine it with a final solution
+        * in future
+        */
+        wl_event_source_timer_update(b->input_init, 2000);
 
         /*
         * Set up a timer to switch to sdm repaint mode
