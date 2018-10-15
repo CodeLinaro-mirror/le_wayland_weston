@@ -86,6 +86,7 @@ class SdmDisplayInterface {
     virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
     virtual DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) = 0;
     virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
+    virtual DisplayError Flush() = 0;
 
     static int GetDrmMasterFd();
     pageflip_cb_t pageflip_cb_ = NULL;
@@ -118,6 +119,7 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError UpdateDisplayPll(int32_t ppm);
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
     DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol);
+    DisplayError Flush();
 };
 
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
@@ -151,6 +153,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
 
     DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
     DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol);
+    DisplayError Flush();
 
  protected:
     virtual DisplayError VSync(const DisplayEventVSync &vsync);
@@ -275,7 +278,7 @@ class SdmDisplayProxy {
     }
     DisplayError RegisterCbs(int display_id, sdm_cbs_t *cbs) {
       hotplug_cb_ = cbs->hotplug_cb;
-      return display_intf_->RegisterCb(display_id, cbs->pageflip_cb);
+      return sdm_disp_.RegisterCb(display_id, cbs->pageflip_cb);
     }
     DisplayError UpdateHPDClockState(uint32_t state) {
       return display_intf_->UpdateHPDClockState(state);
@@ -291,6 +294,9 @@ class SdmDisplayProxy {
     }
     DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) {
       return display_intf_->GetHdcpProtocol(display_hdcp_protocol);
+    }
+    DisplayError Flush() {
+      return display_intf_->Flush();
     }
 
     int HandleHotplug(bool connected);
