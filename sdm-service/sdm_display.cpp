@@ -68,6 +68,9 @@
 #include "sdm_display.h"
 #include "uevent.h"
 
+/* DEBUG (user): enable this flag to calculate tonemap time*/
+bool tonemap_perf_time_profiler = true;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -961,11 +964,19 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
 DisplayError SdmDisplay::PreCommit()
 {
     DisplayError error = kErrorNone;
+    struct timeval tonemap_start, tonemap_end;
 
     if (layer_stack_.flags.hdr_present) {
         int status = -1;
         if (tone_mapper_) {
+            if (tonemap_perf_time_profiler)
+               gettimeofday(&tonemap_start, NULL);
             status = tone_mapper_->HandleToneMap(&layer_stack_);
+            if (tonemap_perf_time_profiler) {
+              gettimeofday(&tonemap_end, NULL);
+              printf("Tonemap_time: %0.9fms\n", (float)(tonemap_end.tv_sec*1000 +
+              tonemap_end.tv_usec/1000 - tonemap_start.tv_sec*1000 - tonemap_start.tv_usec/1000));
+            }
             if (status != 0) {
                 DLOGE("Error handling HDR in ToneMapper, status code = %d", status);
             }

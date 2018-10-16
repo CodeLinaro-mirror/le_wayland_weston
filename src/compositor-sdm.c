@@ -57,6 +57,7 @@
 #include <sys/eventfd.h>
 #include <dlfcn.h>
 #include <time.h>
+#include <sys/time.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -79,6 +80,12 @@
 #include "../sdm-service/sdm_display_connect.h"
 #include "../sdm-service/compositor-sdm-output.h"
 #include <pthread.h>
+
+struct timeval draw_start, draw_end;
+/* DEBUG (user): enable this flag to calculate draw time */
+bool draw_perf_time_profiler = true;
+/* DEBUG (user): enable this flag to calculate gpu composition time */
+bool gpu_perf_time_profiler = true;
 
 #ifndef DRM_CAP_TIMESTAMP_MONOTONIC
 #define DRM_CAP_TIMESTAMP_MONOTONIC 0x6
@@ -380,6 +387,9 @@ drm_output_render(struct drm_output *output, pixman_region32_t *damage)
 {
     struct weston_compositor *c = output->base.compositor;
     struct drm_backend *b = (struct drm_backend *)c->backend;
+    struct timeval gpucomp_start, gpucomp_end;
+	if (gpu_perf_time_profiler)
+    gettimeofday(&gpucomp_start, NULL);
 
     if (b->use_pixman)
         drm_output_render_pixman(output, damage);
@@ -389,6 +399,11 @@ drm_output_render(struct drm_output *output, pixman_region32_t *damage)
 
     pixman_region32_subtract(&c->primary_plane.damage,
                  &c->primary_plane.damage, damage);
+	if (gpu_perf_time_profiler) {
+       gettimeofday(&gpucomp_end, NULL);
+       printf("GPU_Comp_time: %0.9fms\n", (float)(gpucomp_end.tv_sec*1000 +
+       gpucomp_end.tv_usec/1000 - gpucomp_start.tv_sec*1000 - gpucomp_start.tv_usec/1000) );
+  }
 }
 
 
@@ -450,6 +465,11 @@ drm_output_repaint(struct weston_output *output_base,
 
     output->frame_pending = 1;
 
+    if (draw_perf_time_profiler) {
+       gettimeofday(&draw_end, NULL);
+       printf("draw_time: %0.9fms\n", (float)(draw_end.tv_sec*1000 +
+       draw_end.tv_usec/1000 - draw_start.tv_sec*1000 - draw_start.tv_usec/1000) );
+  }
     return 0;
 }
 
@@ -662,6 +682,9 @@ drm_assign_planes(struct weston_output *output_base)
     struct weston_plane *primary, *next_plane;
     struct sdm_layer *sdm_layer, *next_sdm_layer;
     bool ret = false;
+
+    if (draw_perf_time_profiler)
+       gettimeofday(&draw_start, NULL);
     output->view_count = 0;
     assert(wl_list_empty(&output->sdm_layer_list));
 
