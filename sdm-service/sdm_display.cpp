@@ -961,6 +961,39 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
     return error;
 }
 
+DisplayError SdmDisplay::WriteToFile(const char *path, const char *buf, size_t count)
+{
+    int fd;
+    ssize_t rv = 0;
+    DisplayError error = kErrorNone;
+
+    fd = open(path, O_RDWR);
+    if (fd < 0) {
+        DLOGE("open%s failed%d", path, errno);
+        error = kErrorPermission;
+        return error;
+    }
+
+    rv = write(fd, buf, count);
+    close(fd);
+
+    return error;
+}
+
+DisplayError SdmDisplay::ConfigureGPUInPerfMode()
+{
+	WriteToFile("/sys/class/devfreq/5000000.qcom,kgsl-3d0/governor", "performance", sizeof("performance"));
+
+    return kErrorNone;
+}
+
+DisplayError SdmDisplay::ConfigureGPUInsimple_ondemand()
+{
+	WriteToFile("/sys/class/devfreq/5000000.qcom,kgsl-3d0/governor", "simple_ondemand", sizeof("simple_ondemand"));
+
+    return kErrorNone;
+}
+
 DisplayError SdmDisplay::PreCommit()
 {
     DisplayError error = kErrorNone;
@@ -972,6 +1005,7 @@ DisplayError SdmDisplay::PreCommit()
             if (tonemap_perf_time_profiler)
                gettimeofday(&tonemap_start, NULL);
             status = tone_mapper_->HandleToneMap(&layer_stack_);
+			ConfigureGPUInPerfMode();
             if (tonemap_perf_time_profiler) {
               gettimeofday(&tonemap_end, NULL);
               printf("Tonemap_time: %0.9fms\n", (float)(tonemap_end.tv_sec*1000 +
@@ -984,8 +1018,10 @@ DisplayError SdmDisplay::PreCommit()
             DLOGD("HandleToneMap failed due to invalid tone_mapper_ instance");
         }
     } else {
-        if (tone_mapper_)
+        if (tone_mapper_) {
             tone_mapper_->Terminate();
+            ConfigureGPUInsimple_ondemand();
+        }
         else
             DLOGD("ToneMap Terminate failed due to invalid tone_mapper_ instance");
     }

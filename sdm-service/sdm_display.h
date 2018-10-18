@@ -185,6 +185,9 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError PrePrepareLayerStack(struct drm_output *output);
     DisplayError PrePrepare(struct drm_output *output);
     DisplayError PostPrepare(struct drm_output *output);
+    DisplayError WriteToFile(const char *path, const char *buf, size_t count);
+    DisplayError ConfigureGPUInPerfMode();
+    DisplayError ConfigureGPUInsimple_ondemand();
     DisplayError PreCommit();
     DisplayError PostCommit();
     LayerBufferFormat GetSDMFormat(uint32_t src_fmt,
