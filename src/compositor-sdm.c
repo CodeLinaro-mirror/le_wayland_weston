@@ -769,8 +769,8 @@ drm_assign_planes(struct weston_output *output_base)
             /* Composed by Display Hardware directly */
             /* ToDo(User): handle scenarios if SDE composition is not possible */
             ev->psf_flags = PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
-            /* Set the view's plane back to NULL so that it is not composed by GPU */
-            sdm_layer->view->plane = NULL;
+            /* Forget the view as it might be destroyed at anytime */
+            sdm_layer->view = NULL;
         }
     }
 
