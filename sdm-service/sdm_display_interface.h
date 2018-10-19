@@ -87,7 +87,6 @@ enum {
 enum {
        SDM_BLENDING_NONE = 0,
        SDM_BLENDING_PREMULTIPLIED,
-       SDM_BLENDING_COVERAGE,
 };
 
 /* Rotation type*/
