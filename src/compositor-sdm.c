@@ -57,6 +57,7 @@
 #include <sys/eventfd.h>
 #include <dlfcn.h>
 #include <time.h>
+#include <linux/sync_file.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -430,6 +431,68 @@ drm_waitvblank_pipe(struct drm_output *output)
 
 static void destroy_sdm_layer(struct sdm_layer *layer);
 
+static int get_fence_timestamp(int fd, struct timespec *ts)
+{
+    struct sync_file_info *info;
+    struct sync_fence_info *fence_info;
+    int ret;
+
+    info = calloc(1, sizeof(*info));
+    if (!info)
+        return -1;
+
+    ret = ioctl(fd, SYNC_IOC_FILE_INFO, info);
+    if (ret < 0)
+        return ret;
+
+    if (info->num_fences) {
+        info->flags = 0;
+
+        fence_info = calloc(info->num_fences, sizeof(*fence_info));
+        if (!fence_info) {
+            free(info);
+            return -1;
+        }
+
+        info->sync_fence_info = (uint64_t)fence_info;
+        ret = ioctl(fd, SYNC_IOC_FILE_INFO, info);
+        if (ret < 0) {
+            free(fence_info);
+            free(info);
+            return ret;
+        }
+    }
+
+    ts->tv_sec = fence_info[0].timestamp_ns / 1000000000LL;
+    ts->tv_nsec = fence_info[0].timestamp_ns % 1000000000LL;;
+
+    free(fence_info);
+    free(info);
+    return 0;
+}
+
+static void
+retire_fence_cb(int fd, uint32_t mask, void *data)
+{
+    struct drm_output *output = (struct drm_output *) data;
+    struct timespec ts;
+    uint64_t v = 1;
+
+    close(output->retire_fence_fd);
+    output->retire_fence_fd = -1;
+
+    wl_event_source_remove(output->retire_fence_source);
+    output->retire_fence_source = NULL;
+
+   if (get_fence_timestamp(output->retire_fence_fd, &ts))
+        weston_compositor_read_presentation_clock(output->base.compositor, &ts);
+
+    output->last_vblank.sec = ts.tv_sec;
+    output->last_vblank.usec = ts.tv_nsec / 1000;
+
+    write(output->pageflip_ev_fd, &v, sizeof v);
+}
+
 static int
 output_repaint(struct weston_output *output_base,
            pixman_region32_t *damage, bool is_virtual_output)
@@ -486,6 +549,15 @@ output_repaint(struct weston_output *output_base,
             wl_event_source_timer_update(output->finish_frame_timer, 16);
     } else {
         output->frame_pending = 1;
+
+        if (output->retire_fence_fd > 0) {
+            struct wl_event_loop *loop =
+                    wl_display_get_event_loop(output->base.compositor->wl_display);
+
+            output->retire_fence_source = wl_event_loop_add_fd(loop,
+                    output->retire_fence_fd, WL_EVENT_READABLE,
+                    retire_fence_cb, output);
+        }
     }
 
     return 0;
@@ -2051,6 +2123,7 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
     output->display_id = display_id;
     output->prev_layer_none_commit = true;
     output->layer_none_commit = true;
+    output->retire_fence_fd = -1;
     drm_set_dpms(&output->base, WESTON_DPMS_ON);
     return 0;
 

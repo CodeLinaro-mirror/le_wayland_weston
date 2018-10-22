@@ -850,7 +850,7 @@ DisplayError SdmDisplay::PreCommit()
     return error;
 }
 
-DisplayError SdmDisplay::PostCommit()
+DisplayError SdmDisplay::PostCommit(int *retire_fence_fd)
 {
     DisplayError error = kErrorNone;
 
@@ -865,11 +865,8 @@ DisplayError SdmDisplay::PostCommit()
         }
     }
 
-    //close release fence fds
-    if (layer_stack_.retire_fence_fd > 0) {
-      close(layer_stack_.retire_fence_fd);
-      layer_stack_.retire_fence_fd = -1;
-    }
+    *retire_fence_fd = layer_stack_.retire_fence_fd;
+    layer_stack_.retire_fence_fd = -1;
 
     return error;
 }
@@ -891,7 +888,7 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     PreCommit();
 
     ret = display_intf_->Commit(&layer_stack_);
-    PostCommit();
+    PostCommit(&output->retire_fence_fd);
 
     return ret;
 }
