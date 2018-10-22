@@ -44,7 +44,7 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format) {
    switch (format) {
        case GBM_FORMAT_ABGR8888: layer_buffer_format = kFormatRGBA8888; break;
        case GBM_FORMAT_BGRA8888: layer_buffer_format = kFormatARGB8888; break;
-       case GBM_FORMAT_RGBA8888: layer_buffer_format = kFormatABGR8888; break;
+       //case GBM_FORMAT_RGBA8888: layer_buffer_format = kFormatABGR8888; break;
        case GBM_FORMAT_XBGR8888: layer_buffer_format = kFormatRGBX8888; break;
        case GBM_FORMAT_BGR888: layer_buffer_format = kFormatRGB888; break;
        case GBM_FORMAT_BGR565: layer_buffer_format = kFormatRGB565; break;
@@ -53,9 +53,9 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format) {
        case GBM_FORMAT_XRGB8888: layer_buffer_format = kFormatBGRX8888; break;
        case GBM_FORMAT_NV12: layer_buffer_format = kFormatYCbCr420SemiPlanarVenus; break;
        case GBM_FORMAT_UYVY: layer_buffer_format = kFormatCbYCrY422H2V1Packed; break;
-       case GBM_FORMAT_VYUY: layer_buffer_format = kFormatCrYCbY422H2V1Packed; break;
-       case GBM_FORMAT_YUYV: layer_buffer_format = kFormatYCbYCr422H2V1Packed; break;
-       case GBM_FORMAT_YVYU: layer_buffer_format = kFormatYCrYCb422H2V1Packed; break;
+       //case GBM_FORMAT_VYUY: layer_buffer_format = kFormatCrYCbY422H2V1Packed; break;
+       //case GBM_FORMAT_YUYV: layer_buffer_format = kFormatYCbYCr422H2V1Packed; break;
+       //case GBM_FORMAT_YVYU: layer_buffer_format = kFormatYCrYCb422H2V1Packed; break;
        case GBM_FORMAT_YCbCr_420_TP10_UBWC: layer_buffer_format = kFormatYCbCr420TP10Ubwc; break;
        case GBM_FORMAT_YCbCr_420_P010_UBWC: layer_buffer_format = kFormatYCbCr420P010Ubwc; break;
        default:
@@ -162,7 +162,7 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
                                         break;
   case kFormatARGB8888:                 *target = GBM_FORMAT_BGRA8888;
                                         break;
-  case kFormatABGR8888:                 *target = GBM_FORMAT_RGBA8888;
+  //case kFormatABGR8888:                 *target = GBM_FORMAT_RGBA8888;
                                         break;
   case kFormatRGBX8888:                 *target = GBM_FORMAT_XBGR8888;
                                         break;
@@ -175,9 +175,9 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
   case kFormatYCbCr420SemiPlanarVenus:  *target = GBM_FORMAT_NV12;                 break;
   case kFormatYCbCr420SPVenusUbwc:      *target = GBM_FORMAT_NV12;                 break;
   case kFormatCbYCrY422H2V1Packed:      *target = GBM_FORMAT_UYVY;                 break;
-  case kFormatCrYCbY422H2V1Packed:      *target = GBM_FORMAT_VYUY;                 break;
-  case kFormatYCbYCr422H2V1Packed:      *target = GBM_FORMAT_YUYV;                 break;
-  case kFormatYCrYCb422H2V1Packed:      *target = GBM_FORMAT_YVYU;                 break;
+  //case kFormatCrYCbY422H2V1Packed:      *target = GBM_FORMAT_VYUY;                 break;
+  //case kFormatYCbYCr422H2V1Packed:      *target = GBM_FORMAT_YUYV;                 break;
+  //case kFormatYCrYCb422H2V1Packed:      *target = GBM_FORMAT_YVYU;                 break;
   case kFormatRGBA8888Ubwc:             *target = GBM_FORMAT_ABGR8888;
                                         *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
                                                  GBM_BO_USAGE_HW_RENDERING_QTI;

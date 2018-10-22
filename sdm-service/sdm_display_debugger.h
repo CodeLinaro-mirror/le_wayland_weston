@@ -26,7 +26,7 @@
 #define __SDM_DISPLAY_DEBUGGER_H__
 
 #include <core/sdm_types.h>
-#include <core/debug_interface.h>
+#include <debug_handler.h>
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -43,40 +43,41 @@ enum {
        VERBOSE
 };
 
-#define WLOG(tag, method, format, ...) SdmDisplayDebugger::Get()->method(tag, \
-                                                            __CLASS__ "::%s: " format, \
+#define WLOG(method, format, ...) SdmDisplayDebugger::Get()->method(__CLASS__ "::%s: " format, \
                                                             __FUNCTION__, ##__VA_ARGS__)
 
-#define WLOGE_IF(tag, format, ...) WLOG(tag, Error, format, ##__VA_ARGS__)
-#define WLOGW_IF(tag, format, ...) WLOG(tag, Warning, format, ##__VA_ARGS__)
-#define WLOGI_IF(tag, format, ...) WLOG(tag, Info, format, ##__VA_ARGS__)
-#define WLOGD_IF(tag, format, ...) WLOG(tag, Debug, format, ##__VA_ARGS__)
-#define WLOGV_IF(tag, format, ...) WLOG(tag, Verbose, format, ##__VA_ARGS__)
+#define WLOGE_IF(format, ...) WLOG(Error, format, ##__VA_ARGS__)
+#define WLOGW_IF(format, ...) WLOG(Warning, format, ##__VA_ARGS__)
+#define WLOGI_IF(format, ...) WLOG(Info, format, ##__VA_ARGS__)
+#define WLOGD_IF(format, ...) WLOG(Debug, format, ##__VA_ARGS__)
+#define WLOGV_IF(format, ...) WLOG(Verbose, format, ##__VA_ARGS__)
 
-#define DLOGE(format, ...) WLOGE_IF(kTagNone, format, ##__VA_ARGS__)
-#define DLOGD(format, ...) WLOGD_IF(kTagNone, format, ##__VA_ARGS__)
-#define DLOGW(format, ...) WLOGW_IF(kTagNone, format, ##__VA_ARGS__)
-#define DLOGI(format, ...) WLOGI_IF(kTagNone, format, ##__VA_ARGS__)
-#define DLOGV(format, ...) WLOGV_IF(kTagNone, format, ##__VA_ARGS__)
+#define DLOGE(format, ...) WLOGE_IF(format, ##__VA_ARGS__)
+#define DLOGD(format, ...) WLOGD_IF(format, ##__VA_ARGS__)
+#define DLOGW(format, ...) WLOGW_IF(format, ##__VA_ARGS__)
+#define DLOGI(format, ...) WLOGI_IF(format, ##__VA_ARGS__)
+#define DLOGV(format, ...) WLOGV_IF(format, ##__VA_ARGS__)
 
 namespace sdm {
 
+using display::DebugHandler;
+
 class SdmDisplayDebugger : public DebugHandler {
  public:
+  SdmDisplayDebugger();
   static inline SdmDisplayDebugger* Get() { return &debug_handler_; }
 
   // DebugHandler methods
-  virtual void Error(DebugTag tag, const char *format, ...);
-  virtual void Warning(DebugTag tag, const char *format, ...);
-  virtual void Info(DebugTag tag, const char *format, ...);
-  virtual void Debug(DebugTag tag, const char *format, ...);
-  virtual void Verbose(DebugTag tag, const char *format, ...);
+  virtual void Error(const char *format, ...);
+  virtual void Warning(const char *format, ...);
+  virtual void Info(const char *format, ...);
+  virtual void Debug(const char *format, ...);
+  virtual void Verbose(const char *format, ...);
   virtual void BeginTrace(const char *class_name, const char *function_name,
-                          const char *custom_string) { }
-  virtual void EndTrace() { }
-  virtual DisplayError GetProperty(const char *property_name, int *value);
-  virtual DisplayError GetProperty(const char *property_name, char *value);
-  virtual DisplayError SetProperty(const char *property_name, const char *value);
+                          const char *custom_string);
+  virtual void EndTrace();
+  virtual int GetProperty(const char *property_name, int *value);
+  virtual int GetProperty(const char *property_name, char *value);
 
   int debug_level_ = INFO;
 

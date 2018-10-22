@@ -1921,7 +1921,7 @@ create_output_for_connector(struct drm_backend *b, uint32_t display_id, int x, i
     /* TODO (user): To get make, model, serial no. from SDM interface */
     output->base.name = GetConnectorName(display_id);
     output->base.make = "unknown";
-    output->base.model = strdup(output->base.name);
+    output->base.model = GetConnectorName(display_id);
     output->base.serial_number = "unknown";
     wl_list_init(&output->base.mode_list);
     /* TODO (user): remove following line of code: */
@@ -2076,17 +2076,17 @@ create_outputs(struct drm_backend *b, uint32_t option_connector,
     int x=0, y=0;
     int idx, rc;
 
+    if (GetDisplayInfos()) {
+        weston_log("fail to get display info from SDM!\n");
+        return -1;
+    }
+
     display_count = GetDisplayCount();
     if (!display_count) {
         weston_log("fail to get display from SDM! count=%d \n", display_count);
         return -1;
     }
     weston_log("%d displays are connected\n", display_count);
-
-    if (GetDisplayInfos()) {
-        weston_log("fail to get display info from SDM!\n");
-        return -1;
-    }
 
     for (idx = 0; idx < display_count; idx++) {
         sdm_cbs_t sdm_cbs;
@@ -2096,7 +2096,6 @@ create_outputs(struct drm_backend *b, uint32_t option_connector,
         weston_log("CreateDisplay: %d successful\n", rc);
 
         /* Now register callbacks with SDM services */
-        sdm_cbs.pageflip_cb = pageflip_handler,
         sdm_cbs.hotplug_cb = hotplug_handler,
         RegisterCbs(idx, &sdm_cbs);
 

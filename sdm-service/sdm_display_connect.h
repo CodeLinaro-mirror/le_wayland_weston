@@ -64,17 +64,6 @@ int CreateCore();
 */
 int DestroyCore();
 
-/*! @brief Method to get characteristics of the first display.
-
-    @details Client shall use this method to determine type of the first display.
-
-    @param[in] display_id that this method will fill up with info.
-
-    @return \link DisplayError \endlink
-
-*/
-int GetFirstDisplayType(int *display_id);
-
 /*! @brief Method to create a display device for a given display id.
 
     @details Client shall use this method to create each of the display.
@@ -259,6 +248,18 @@ int EnablePllUpdate(int display_id, int enable);
     @sa
 */
 int UpdateDisplayPll(int display_id, int ppm);
+
+/*! @brief Method to get connector name.
+
+    @details weston backend shall use this method to obtain name.
+
+    @param[in] display_id \link int \endlink
+
+    @return \link char * \endlink
+
+    @sa
+*/
+char *GetConnectorName(uint32_t display_id);
 
 #ifdef __cplusplus
 }

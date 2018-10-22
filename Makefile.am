@@ -223,7 +223,7 @@ westoninclude_HEADERS =				\
 	shared/platform.h
 
 if  ENABLE_DRM_COMPOSITOR
-DRM_COMPOSITOR_CFLAGS += -DENABLE_EGL	-DADRENO_WAYLAND_PLATFORM
+DRM_COMPOSITOR_CFLAGS = -DENABLE_EGL	-DADRENO_WAYLAND_PLATFORM
 module_LTLIBRARIES += gl-renderer.la
 gl_renderer_la_LDFLAGS = -module -avoid-version
 gl_renderer_la_LIBADD = $(COMPOSITOR_LIBS) $(EGL_LIBS)

@@ -35,6 +35,9 @@ namespace sdm {
 
 #define SDM_DISPLAY_DEBUG 0
 
+// 32 displays are enough
+#define MAX_SUPPORT_DISPLAYS 32
+
 enum {
        FAIL,
        SUCCESS
@@ -44,8 +47,11 @@ CoreInterface *core_intf_ = NULL;
 SdmDisplayBufferAllocator buffer_allocator_;
 SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
-HWDisplayInterfaceInfo hw_disp_info_[kOrderMax] = {};
-SdmDisplayProxy *display_[kOrderMax] = {0};
+HWDisplayInterfaceInfo hw_disp_info_[MAX_SUPPORT_DISPLAYS] = {};
+SdmDisplayProxy *display_[MAX_SUPPORT_DISPLAYS] = {0};
+HWDisplaysInfo hw_displays_info_ = {};
+// ordered by output id
+SdmDisplaysInfo sdm_displays_info_ = {};
 
 int CreateCore()
 {
@@ -55,8 +61,7 @@ int CreateCore()
         return kErrorNone;
     }
 
-    error = CoreInterface::CreateCore(SdmDisplayDebugger::Get(),
-                                      &buffer_allocator_,
+    error = CoreInterface::CreateCore(&buffer_allocator_,
                                       &buffer_sync_handler_,
                                       &socket_handler_,
                                       &core_intf_);
@@ -68,6 +73,7 @@ int CreateCore()
     #if SDM_DISPLAY_DEBUG
     DLOGD("successfully created.");
     #endif
+
 
     return kErrorNone;
 }
@@ -81,7 +87,7 @@ int DestroyCore()
         return kErrorNone;
     }
 
-    for(int i = 0; i < kOrderMax; i++) {
+    for(int i = 0; i < MAX_SUPPORT_DISPLAYS; i++) {
         if (display_[i] != NULL) {
             error = display_[i]->DestroyDisplay();
             if (error != kErrorNone) {
@@ -108,48 +114,55 @@ int DestroyCore()
     return kErrorNone;
 }
 
-int GetFirstDisplayType(int *display_type)
-{
-    DisplayError error = kErrorNone;
-
-    *display_type = -1; /* Initialize with invalid display type */
-    if (!core_intf_) {
-        DLOGE("function failed as core was not created.");
-        return kErrorNotSupported;
-    }
-
-    error = core_intf_->GetFirstDisplayInterfaceType(&hw_disp_info_[0]);
-    if (error != kErrorNone) {
-        DLOGE("function GetFirstDisplayInterfaceType failed: error = %d",
-              error);
-        return error;
-    }
-    *display_type = hw_disp_info_[0].type;
-
-    #if SDM_DISPLAY_DEBUG
-    DLOGD("function successful: display type = %d", *display_type);
-    #endif
-
-    return kErrorNone;
-}
-
 uint32_t GetDisplayCount(void)
 {
     uint32_t count = 0;
 
-    core_intf_->GetDisplayCount(&count);
+    count = sdm_displays_info_.size();
+
     return count;
 }
 
 int GetDisplayInfos(void)
 {
     DisplayError error = kErrorNone;
+    int32_t count = 0;
+    HWDisplayInfo primary_disp_info = {};
+    int32_t primary_slot = -1;
+    bool has_ordered_display = false;
 
-    error = core_intf_->GetDisplayInterfaceTypeByOrder(hw_disp_info_);
+    error = core_intf_->GetDisplaysStatus(&hw_displays_info_);
     if (error != kErrorNone) {
-        DLOGE("function GetDisplayType failed: error = %d",
-              error);
+        DLOGE("function GetDisplaysStatus failed. Error = %d", error);
         return error;
+    }
+
+    // Only create non-virtual display first
+    HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
+    for (iter; iter != hw_displays_info_.end(); ++iter) {
+        if (iter->second.display_type == sdm::kVirtual)
+            continue;
+
+        if (!iter->second.is_connected)
+            continue;
+
+        // Find the primary display and reserve slot 0 for it later.
+        if (iter->second.is_primary) {
+            primary_disp_info = iter->second;
+            primary_slot = count;
+        }
+        sdm_displays_info_[count] = iter->second;
+        count++;
+    }
+
+    if (primary_slot != -1 && primary_slot != 0) {
+        auto iter = sdm_displays_info_.find(0);
+        // Swap value. TODO: need to refine if sdm supports more ordered displays than only primary display
+        if (iter != sdm_displays_info_.end()) {
+            HWDisplayInfo disp_info = iter->second;
+            sdm_displays_info_[0] = primary_disp_info;
+            sdm_displays_info_[primary_slot] = disp_info;
+        }
     }
 
     return 0;
@@ -157,27 +170,40 @@ int GetDisplayInfos(void)
 
 char *GetConnectorName(uint32_t display_id)
 {
-    return strdup(hw_disp_info_[display_id].name);
+    char name[100]={};
+    const char *type_name = NULL;
+    auto iter = sdm_displays_info_.find(display_id);
+
+    switch(iter->second.display_type) {
+        case kBuiltIn:
+            type_name = "DSI";
+            break;
+        case kPluggable:
+            type_name = "DP";
+            break;
+        default:
+            type_name = "unKnown";
+            break;
+    }
+
+    snprintf(name, sizeof name, "%s-%d", type_name, display_id);
+    return strdup(name);
 }
 
-static enum DisplayOrder GetDisplayOrder(int display_id)
+static HWDisplayInfo GetSdmDisplayInfo(int display_id)
 {
-    return hw_disp_info_[display_id].order;
-}
+    auto iter = sdm_displays_info_.find(display_id);
 
-static enum DisplayType GetDisplayType(int display_id)
-{
-    return hw_disp_info_[display_id].type;
+    return iter->second;
 }
 
 int CreateDisplay(int display_id)
 {
     DisplayError error = kErrorNone;
-    enum DisplayOrder display_order = kOrderMax;
     enum DisplayType display_type = kDisplayMax;
+    HWDisplayInfo display_info = {};
 
-
-    if (display_id >= kOrderMax || display_id < 0) {
+    if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
     }
@@ -192,9 +218,8 @@ int CreateDisplay(int display_id)
         return kErrorNotSupported;
     }
 
-    display_order = GetDisplayOrder(display_id);
-    display_type = GetDisplayType(display_id);
-    SdmDisplayProxy *sdm_display = new SdmDisplayProxy(display_order, display_type, core_intf_);
+    display_info = GetSdmDisplayInfo(display_id);
+    SdmDisplayProxy *sdm_display = new SdmDisplayProxy(display_info.display_id, display_info.display_type, core_intf_);
     display_[display_id] = sdm_display;
     error = display_[display_id]->CreateDisplay() ;
     if (error != kErrorNone) {
@@ -216,7 +241,7 @@ int Prepare(int display_id, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
 
-    if (display_id >= kOrderMax || display_id < 0) {
+    if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
     }
@@ -244,7 +269,7 @@ int Commit(int display_id, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
 
-    if (display_id >= kOrderMax || display_id < 0) {
+    if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
     }
@@ -272,7 +297,7 @@ int DestroyDisplay(int display_id)
 {
     DisplayError error = kErrorNone;
 
-    if (display_id >= kOrderMax || display_id < 0) {
+    if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
     }
@@ -303,7 +328,7 @@ bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_c
 {
     DisplayError error = kErrorNone;
 
-    if (display_id >= kOrderMax || display_id < 0) {
+    if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return FAIL;
     }
@@ -331,7 +356,7 @@ bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info)
 {
     DisplayError error = kErrorNone;
 
-    if (display_id >= kOrderMax || display_id < 0) {
+    if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return FAIL;
     }
@@ -358,7 +383,7 @@ bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info)
 int RegisterCbs(int display_id, sdm_cbs *cbs) {
     DisplayError error = kErrorNone;
 
-    if (display_id >= kOrderMax || display_id < 0) {
+    if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
     }
@@ -398,7 +423,7 @@ int get_drm_master_fd() {
 int SetDisplayState(int display_id, int power_mode) {
     DisplayError error = kErrorNone;
 
-    if (display_id >= kOrderMax || display_id < 0) {
+    if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
     }
@@ -432,7 +457,7 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
 
-    if (display_id >= kOrderMax || display_id < 0) {
+    if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
     }

@@ -31,12 +31,16 @@ namespace sdm {
 
 SdmDisplayDebugger SdmDisplayDebugger::debug_handler_;
 
+SdmDisplayDebugger::SdmDisplayDebugger() {
+  DebugHandler::Set(SdmDisplayDebugger::Get());
+}
+
 static void Log(const char *prefix, const char *format, va_list list) {
   vprintf(format, list);
   printf("\n");
 }
 
-void SdmDisplayDebugger::Error(DebugTag tag, const char *format, ...) {
+void SdmDisplayDebugger::Error(const char *format, ...) {
   if (debug_level_ > NONE) {
       va_list list;
       va_start(list, format);
@@ -45,7 +49,7 @@ void SdmDisplayDebugger::Error(DebugTag tag, const char *format, ...) {
   }
 }
 
-void SdmDisplayDebugger::Warning(DebugTag tag, const char *format, ...) {
+void SdmDisplayDebugger::Warning(const char *format, ...) {
   if (debug_level_ > ERROR) {
       va_list list;
       va_start(list, format);
@@ -54,7 +58,7 @@ void SdmDisplayDebugger::Warning(DebugTag tag, const char *format, ...) {
   }
 }
 
-void SdmDisplayDebugger::Info(DebugTag tag, const char *format, ...) {
+void SdmDisplayDebugger::Info(const char *format, ...) {
   if (debug_level_ > WARNING) {
       va_list list;
       va_start(list, format);
@@ -63,7 +67,7 @@ void SdmDisplayDebugger::Info(DebugTag tag, const char *format, ...) {
   }
 }
 
-void SdmDisplayDebugger::Debug(DebugTag tag, const char *format, ...) {
+void SdmDisplayDebugger::Debug(const char *format, ...) {
   if (debug_level_ > INFO) {
       va_list list;
       va_start(list, format);
@@ -72,7 +76,7 @@ void SdmDisplayDebugger::Debug(DebugTag tag, const char *format, ...) {
   }
 }
 
-void SdmDisplayDebugger::Verbose(DebugTag tag, const char *format, ...) {
+void SdmDisplayDebugger::Verbose(const char *format, ...) {
   if (debug_level_ > DEBUG) {
       va_list list;
       va_start(list, format);
@@ -81,7 +85,14 @@ void SdmDisplayDebugger::Verbose(DebugTag tag, const char *format, ...) {
   }
 }
 
-DisplayError SdmDisplayDebugger::GetProperty(const char *property_name, int *value) {
+void SdmDisplayDebugger::EndTrace() {
+}
+
+void SdmDisplayDebugger::BeginTrace(const char *class_name, const char *function_name,
+                          const char *custom_string) {
+}
+
+int SdmDisplayDebugger::GetProperty(const char *property_name, int *value) {
 /* mask the following code first */
 #ifdef ENABLE_PROPERTY_SERVICE
   char property[PROPERTY_VALUE_MAX];
@@ -95,21 +106,10 @@ DisplayError SdmDisplayDebugger::GetProperty(const char *property_name, int *val
   return kErrorNotSupported;
 }
 
-DisplayError SdmDisplayDebugger::GetProperty(const char *property_name, char *value) {
+int SdmDisplayDebugger::GetProperty(const char *property_name, char *value) {
 /* mask the following code first */
 #ifdef ENABLE_PROPERTY_SERVICE
   if (property_get(property_name, value, NULL) > 0) {
-    return kErrorNone;
-  }
-#endif
-
-  return kErrorNotSupported;
-}
-
-DisplayError SdmDisplayDebugger::SetProperty(const char *property_name, const char *value) {
-/* mask the following code first */
-#ifdef ENABLE_PROPERTY_SERVICE
-  if (property_set(property_name, value) == 0) {
     return kErrorNone;
   }
 #endif

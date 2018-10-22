@@ -100,15 +100,14 @@ void SdmDisplayInterface::UseExternalGemHandle() {
   DRMMaster *master = nullptr;
   int ret = DRMMaster::GetInstance(&master);
 
-  master->UseExternalGemHandle();
+  //master->UseExternalGemHandle();
 }
 
-SdmDisplay::SdmDisplay(DisplayOrder order, DisplayType type, CoreInterface *core_intf) {
-    display_order_ = order;
+SdmDisplay::SdmDisplay(int32_t display_id, DisplayType type, CoreInterface *core_intf) {
+    display_id_ = display_id;
     display_type_ = type;
     core_intf_    = core_intf;
     drm_output_   = NULL;
-    pageflip_cb_    = NULL;
 }
 
 SdmDisplay::~SdmDisplay() {
@@ -128,7 +127,7 @@ DisplayError SdmDisplay::CreateDisplay() {
     DisplayError error = kErrorNone;
     struct DisplayHdrInfo display_hdr_info;
 
-    error = core_intf_->CreateDisplay(display_order_, display_type_, sync_event_type_, this, &display_intf_);
+    error = core_intf_->CreateDisplay(display_id_, this, &display_intf_);
 
     if (error != kErrorNone) {
         DLOGE("Display creation failed. Error = %d", error);
@@ -163,21 +162,6 @@ DisplayError SdmDisplay::DestroyDisplay() {
 }
 
 DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
-    DLOGW("Not implemented");
-
-    return kErrorNone;
-}
-
-DisplayError SdmDisplay::VSync(int fd, unsigned int sequence, unsigned int tv_sec,
-                               unsigned int tv_usec, void *data) {
-    DLOGW("Not implemented");
-
-    return kErrorNone;
-}
-
-DisplayError SdmDisplay::PFlip(int fd, unsigned int sequence, unsigned int tv_sec,
-                               unsigned int tv_usec, void *data) {
-    pageflip_cb_(sequence, tv_sec, tv_usec, drm_output_);
     return kErrorNone;
 }
 
@@ -195,10 +179,26 @@ DisplayError SdmDisplay::CECMessage(char *message) {
     return kErrorNone;
 }
 
+DisplayError SdmDisplay::HandleEvent(DisplayEvent event) {
+    switch (event) {
+        case kIdleTimeout:
+        case kThermalEvent:
+        case kIdlePowerCollapse:
+        case kPanelDeadEvent:
+        case kDisplayPowerResetEvent:
+        default:
+            DLOGW("Not implemented for event: %d", event);
+            break;
+    }
+
+    return kErrorNone;
+}
+
 DisplayError SdmDisplay::SetDisplayState(DisplayState state) {
     DisplayError error;
+    int release_fence = -1;
 
-    error = display_intf_->SetDisplayState(state);
+    error = display_intf_->SetDisplayState(state, false /* teardown */, &release_fence);
     if (error != kErrorNone) {
         DLOGE("function failed. Error = %d", error);
      return error;
@@ -256,15 +256,6 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
     fps_                         = disp_config.fps;
 
     return kErrorNone;
-}
-
-DisplayError SdmDisplay::RegisterCb(int display_id, pageflip_cb_t pflipcb) {
-    DisplayError error = kErrorNone;
-
-    pageflip_cb_   = pflipcb;
-    display_id_  = display_id;
-
-    return error;
 }
 
 DisplayError SdmDisplay::FreeLayerStack() {
@@ -329,11 +320,15 @@ static uint32_t GetComposition(sdm::LayerComposition composition)
      case sdm::kCompositionGPU:
           ret = SDM_COMPOSITION_GPU;
           break;
-     case sdm::kCompositionHWCursor:
+     case sdm::kCompositionCursor:
           ret = SDM_COMPOSITION_HW_CURSOR;
           break;
-     default:
+     case sdm::kCompositionSDE:
           ret = SDM_COMPOSITION_OVERLAY;
+          break;
+     default:
+          DLOGI("Unknown composition %d", (uint32_t)composition);
+          ret = SDM_COMPOSITION_GPU;
           break;
     }
 
@@ -840,7 +835,7 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
         output->layer_none_commit = true;
     else
         output->layer_none_commit = false;
-    DumpInterface::GetDump(dump_buffer, sizeof(dump_buffer));
+    //DumpInterface::GetDump(dump_buffer, sizeof(dump_buffer));
     error = PostPrepare(output);
     if (error != kErrorNone)
      DLOGE("function failed Error= %d\n", error);
@@ -945,8 +940,8 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
         case SDM_BUFFER_FORMAT_ARGB_8888:
             format = sdm::kFormatARGB8888;
             break;
-        case SDM_BUFFER_FORMAT_ABGR_8888:
-            format = sdm::kFormatABGR8888;
+//        case SDM_BUFFER_FORMAT_ABGR_8888:
+//            format = sdm::kFormatABGR8888;
             break;
         case SDM_BUFFER_FORMAT_RGBA_5551:
             format = sdm::kFormatRGBA5551;
@@ -1006,15 +1001,15 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
         case SDM_BUFFER_FORMAT_CbYCrY_422_I:
             format = sdm::kFormatCbYCrY422H2V1Packed;
             break;
-        case SDM_BUFFER_FORMAT_CrYCbY_422_I:
-            format = sdm::kFormatCrYCbY422H2V1Packed;
-            break;
-        case SDM_BUFFER_FORMAT_YCbYCr_422_I:
-            format = sdm::kFormatYCbYCr422H2V1Packed;
-            break;
-        case SDM_BUFFER_FORMAT_YCrYCb_422_I:
-            format = sdm::kFormatYCrYCb422H2V1Packed;
-            break;
+//        case SDM_BUFFER_FORMAT_CrYCbY_422_I:
+//            format = sdm::kFormatCrYCbY422H2V1Packed;
+//            break;
+//        case SDM_BUFFER_FORMAT_YCbYCr_422_I:
+//            format = sdm::kFormatYCbYCr422H2V1Packed;
+//            break;
+//        case SDM_BUFFER_FORMAT_YCrYCb_422_I:
+//            format = sdm::kFormatYCrYCb422H2V1Packed;
+//            break;
         default:
             DLOGE("Unsupported format %d\n", src_fmt);
             return sdm::kFormatInvalid;
@@ -1389,28 +1384,11 @@ const char *SdmDisplay::GetDisplayString() {
 
 DisplayError SdmDisplay::EnablePllUpdate(int32_t enable)
 {
-  DisplayError error;
-
-  error = display_intf_->EnablePllUpdate(enable);
-  if (error != kErrorNone) {
-    DLOGE("%s pll update failed. Error = %d",
-      enable ? "enable" : "disable", error);
-    return error;
-  }
-
   return kErrorNone;
 }
 
 DisplayError SdmDisplay::UpdateDisplayPll(int32_t ppm)
 {
-  DisplayError error;
-
-  error = display_intf_->UpdateDisplayPll(ppm);
-  if (error != kErrorNone) {
-    DLOGE("Update display pll failed. Error = %d", error);
-    return error;
-  }
-
   return kErrorNone;
 }
 
@@ -1448,7 +1426,7 @@ DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
     return error;
 }
 
-SdmNullDisplay::SdmNullDisplay(DisplayOrder order, DisplayType type, CoreInterface *core_intf) {
+SdmNullDisplay::SdmNullDisplay(int32_t display_id, DisplayType type, CoreInterface *core_intf) {
 }
 
 SdmNullDisplay::~SdmNullDisplay() {
@@ -1477,9 +1455,6 @@ DisplayError SdmNullDisplay::SetVSyncState(bool enable, struct drm_output *outpu
 DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
   return kErrorNone;
 }
-DisplayError SdmNullDisplay::RegisterCb(int display_id, pageflip_cb_t pflipcb) {
-  return kErrorNone;
-}
 DisplayError SdmNullDisplay::EnablePllUpdate(int32_t enable) {
   return kErrorNone;
 }
@@ -1490,9 +1465,9 @@ DisplayError SdmNullDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info)
   return kErrorNone;
 }
 
-SdmDisplayProxy::SdmDisplayProxy(DisplayOrder order, DisplayType type, CoreInterface *core_intf)
-  : disp_order_(order), disp_type_(type), core_intf_(core_intf),
-    sdm_disp_(order, type, core_intf), null_disp_(order, type, core_intf) {
+SdmDisplayProxy::SdmDisplayProxy(int32_t display_id, DisplayType type, CoreInterface *core_intf)
+  : display_id_(display_id), disp_type_(type), core_intf_(core_intf),
+    sdm_disp_(display_id, type, core_intf), null_disp_(display_id, type, core_intf) {
     display_intf_ = &sdm_disp_;
 
     std::thread uevent_thread(UeventThread, this);
