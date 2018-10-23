@@ -757,7 +757,6 @@ fbdev_output_update(struct weston_output *base,
 	}
 
 	output->base.name = strdup("fbdev");
-	output->fb_device_fd = fb_fd;
 
 	/* only one static mode in list */
 	output->mode.flags =
@@ -775,7 +774,7 @@ fbdev_output_update(struct weston_output *base,
 
 	output->base.mm_width = output->fb_info.width_mm;
 	output->base.mm_height = output->fb_info.height_mm;
-
+	close(fb_fd);
 	return 0;
 
 out_free:
