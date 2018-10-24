@@ -142,9 +142,6 @@ drm_fb_destroy_callback(struct gbm_bo *bo, void *data)
     struct drm_fb *fb = data;
     struct gbm_device *gbm = gbm_bo_get_device(bo);
 
-    if (fb->fb_id)
-        drmModeRmFB(gbm_device_get_fd(gbm), fb->fb_id);
-
     weston_buffer_reference(&fb->buffer_ref, NULL);
 
     free(data);
@@ -244,14 +241,6 @@ drm_fb_get_from_bo(struct drm_output *output, struct gbm_bo *bo,
            struct drm_backend *backend)
 {
     struct drm_fb *fb = gbm_bo_get_user_data(bo);
-    uint32_t format = output->format;
-    uint32_t width, height;
-    uint32_t handles[4] = {0};
-    uint32_t pitches[4] = {0};
-    uint32_t offsets[4] = {0};
-    uint64_t modifier[4] = {0};
-    uint32_t flags = 0;
-    int ret;
 
     if (fb)
         return fb;
@@ -262,51 +251,15 @@ drm_fb_get_from_bo(struct drm_output *output, struct gbm_bo *bo,
 
     fb->bo = bo;
 
-    width = gbm_bo_get_width(bo);
-    height = gbm_bo_get_height(bo);
-    fb->stride = gbm_bo_get_stride(bo);
-    fb->handle = gbm_bo_get_handle(bo).u32;
-    fb->size = fb->stride * height;
-    fb->fd = backend->drm.fd;
     fb->ion_fd = gbm_bo_get_fd(bo);
-    ret = -1;
-
-    if (format && !backend->no_addfb3) {
-        handles[0] = fb->handle;
-        pitches[0] = fb->stride;
-        offsets[0] = 0;
-
-        if (output->framebuffer_ubwc) {
-            flags = DRM_MODE_FB_MODIFIERS;
-            modifier[0] = DRM_FORMAT_MOD_QCOM_COMPRESSED;
-        }
-
-        ret = drmModeAddFB3(backend->drm.fd, width, height,
-                    format, handles, pitches, offsets, modifier,
-                    &fb->fb_id, flags);
-
-        if (ret) {
-            weston_log("addfb3 failed: %m\n");
-            backend->no_addfb3 = 1;
-        }
-    }
-
-    if (ret)
-        ret = drmModeAddFB(backend->drm.fd, width, height, 24, 32,
-                   fb->stride, fb->handle, &fb->fb_id);
-
-    if (ret) {
-        weston_log("failed to create kms fb: %m\n");
-        goto err_free;
+    if (!fb->ion_fd) {
+        free(fb);
+        return NULL;
     }
 
     gbm_bo_set_user_data(bo, fb, drm_fb_destroy_callback);
 
     return fb;
-
-err_free:
-    free(fb);
-    return NULL;
 }
 
 static void
@@ -1227,6 +1180,13 @@ init_drm(struct drm_backend *b, struct udev_device *device)
         return -1;
     }
 
+    /* use render node to create gbm device */
+    b->render_fd = drmOpenWithType("msm_drm", 0, DRM_NODE_RENDER);
+    if (!b->render_fd) {
+        weston_log("failed to open drm render device\n");
+        return -1;
+    }
+
     return 0;
 }
 
@@ -1301,7 +1261,7 @@ drm_backend_create_gl_renderer(struct drm_backend *b)
 static int
 init_egl(struct drm_backend *b)
 {
-    b->gbm = create_gbm_device(b->drm.fd);
+    b->gbm = create_gbm_device(b->render_fd);
 
     if (!b->gbm)
         return -1;
@@ -2552,7 +2512,7 @@ switch_to_gl_renderer(struct drm_backend *b)
 
     weston_log("Switching to GL renderer\n");
 
-    b->gbm = create_gbm_device(b->drm.fd);
+    b->gbm = create_gbm_device(b->render_fd);
     if (!b->gbm) {
         weston_log("Failed to create gbm device. "
                "Aborting renderer switch\n");

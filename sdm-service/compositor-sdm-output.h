@@ -97,6 +97,7 @@ struct drm_backend {
                 int fd;
                 char *filename;
        } drm;
+       int render_fd; /* DRM render node file description */
        struct gbm_device *gbm;
        struct wl_listener session_listener;
        uint32_t format;
