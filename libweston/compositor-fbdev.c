@@ -1223,9 +1223,31 @@ buffer_destroy(struct buffer_allocator buf_alloc)
 }
 
 static void
+fbdev_set_wakelock(enum dpms_enum level)
+{
+	if (level == WESTON_DPMS_ON) {
+		int val = system("echo weston_server > /sys/power/wake_lock");
+		if(val < 0) {
+			weston_log("fbdev_set_dpms: Unable to acquire wake lock \n");
+		} else {
+				weston_log("fbdev_set_dpms: acquired wake lock \n");
+		}
+	} else {
+		int val = system("echo weston_server > /sys/power/wake_unlock");
+		if(val < 0) {
+			weston_log("fbdev_set_dpms: Unable to release wake lock \n");
+		} else {
+				weston_log("fbdev_set_dpms: released wake lock \n");
+		}
+	}
+}
+
+static void
 fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 {
 	weston_log("fbdev_set_dpms: Calling SetDisplayState weston dpms level = %d \n",level);
+	fbdev_set_wakelock(level);
+
 	/* Turn OFF HW Vsync before suspend
 	   Turn ON HW Vsync after resume
 	*/
@@ -1233,6 +1255,7 @@ fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 	if (level == WESTON_DPMS_ON) {
 		state = kDisplayStateOn;
 	}
+
 	if (state == kDisplayStateOff) {
 		SetVSyncState(false);
 	}
