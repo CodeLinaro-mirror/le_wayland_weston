@@ -141,6 +141,7 @@ static int fbdev_output_update(struct weston_output *base, const char *device);
 static int udev_fb_event(int fd, uint32_t mask, void *data);
 static int udev_event_is_hotplug(struct fbdev_backend *backend, struct udev_device *dev);
 static int ion_open();
+static bool ReadHDMISysfs();
 
 #ifdef USE_SDM
 int display_id = -1;
@@ -1073,7 +1074,6 @@ fbdev_backend_create(struct weston_compositor *compositor,
 		weston_log("failed to enable udev-monitor receiving\n");
 		goto out_compositor;
 	}
-
 	backend->use_pixman = param->use_pixman;
 	/* Set up the TTY. */
 	backend->session_listener.notify = session_notify;
@@ -1226,13 +1226,23 @@ static void
 fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 {
 	weston_log("fbdev_set_dpms: Calling SetDisplayState weston dpms level = %d \n",level);
+	/* Turn OFF HW Vsync before suspend
+	   Turn ON HW Vsync after resume
+	*/
 	int state = kDisplayStateOff;
 	if (level == WESTON_DPMS_ON) {
 		state = kDisplayStateOn;
 	}
+	if (state == kDisplayStateOff) {
+		SetVSyncState(false);
+	}
 	int ret = SetDisplayState(state);
 	if (ret) {
-		weston_log("fbdev_set_dpms: SetDisplaySatte failed. \n");
+		weston_log("fbdev_set_dpms: SetDisplayState failed. \n");
+		return;
+	}
+	if(state == kDisplayStateOn) {
+		SetVSyncState(true);
 	}
 }
 
@@ -1261,13 +1271,12 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 
 	dev = udev_monitor_receive_device(b->udev_monitor);
 	if (udev_event_is_hotplug(b, dev)) {
-		if (b->hdmi_connected) {
-			b->hdmi_connected = false;
+		b->hdmi_connected = ReadHDMISysfs();
+		if (!b->hdmi_connected) {
 			switch_display(SECONDARY_DISPLAY_ID, PRIMARY_DISPLAY_ID,
 				&b->output->base,PRIMARY_DISPLAY_NODE);
 			weston_log("HDMI is disconnected \n");
 		} else {
-			b->hdmi_connected = true;
 			switch_display(PRIMARY_DISPLAY_ID,SECONDARY_DISPLAY_ID,
 				&b->output->base, SECONDARY_DISPLAY_NODE);
 			weston_log("HDMI is connected \n");
@@ -1280,6 +1289,20 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 	return 1;
 }
 
+static bool
+ReadHDMISysfs() {
+	int fd = open(HDMI_SYSFS_NODE_CONNECTED, O_RDONLY);
+	if (fd < 0) {
+		weston_log(" %s node open failed.\n",HDMI_SYSFS_NODE_CONNECTED);
+	}
+	char line[32];
+	int read = pread(fd, line, sizeof(line),0);
+	int connected = atoi(line);
+	weston_log("HDMI connected = %d",connected);
+	close(fd);
+	return connected ? true : false;
+}
+
 static int
 udev_event_is_hotplug(struct fbdev_backend *backend, struct udev_device *dev)
 {
@@ -1288,7 +1311,7 @@ udev_event_is_hotplug(struct fbdev_backend *backend, struct udev_device *dev)
 
 	devpath = udev_device_get_devpath(dev);
 	devname = udev_device_get_sysname(dev);
-	int hpd = (strcmp(devpath, "/devices/virtual/graphics/fb1") == 0) &&
+	int hpd = (strcmp(devpath, HDMI_SYSFS_NODE) == 0) &&
 			  (strcmp(devname, "fb1")==0);
 	if(hpd) {
 		weston_log("HPD received \n");
