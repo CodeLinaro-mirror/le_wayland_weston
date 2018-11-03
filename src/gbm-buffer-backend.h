@@ -1,5 +1,5 @@
 /*
-*    Copyright (c) 2017, The Linux Foundation. All rights reserved.
+*    Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
 *
 *    Redistribution and use in source and binary forms, with or without
 *    modification, are permitted provided that the following conditions are
@@ -135,6 +135,17 @@ int gbm_buffer_backend_setup(struct weston_compositor *compositor);
  * \return The gbm_buffer if it exists, or NULL otherwise.
  */
 struct gbm_buffer *gbm_buffer_get(struct wl_resource *resource);
+
+/** Get renderer-private data
+ *
+ * Get the user data from the gbm_buffer.
+ *
+ * \param buffer The gbm_buffer to query.
+ * \return Renderer-private data pointer.
+ *
+ * \sa gbm_buffer_backend_get_user_data
+ */
+void *gbm_buffer_backend_get_user_data(struct gbm_buffer *buffer);
 
 #ifdef __cplusplus
 }
