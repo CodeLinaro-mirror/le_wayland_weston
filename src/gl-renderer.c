@@ -873,6 +873,8 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
   struct weston_compositor *compositor = output->compositor;
   struct weston_view *view;
   pixman_region32_t r;
+  bool is_yuv, have_primary_view = false;
+  struct gbm_buffer *buffer;
 
   wl_list_for_each_reverse(view, &compositor->view_list, link) {
     /* Skip screen capture buffer during GPU composition */
@@ -880,6 +882,7 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
         continue;
 
     if (view->plane == &compositor->primary_plane) {
+       have_primary_view = true;
        draw_view(view, output, damage);
     }
     else {
@@ -889,7 +892,20 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
                                view->surface->height);
       pixman_region32_subtract(&r, &r, &view->surface->opaque);
 
-      if (!pixman_region32_not_empty(&r) && (view->alpha == 1)) {
+      /* get gbm buffer info. Only GBM buffer can go through overlay */
+      buffer = gbm_buffer_get(view->surface->buffer_ref.buffer->resource);
+      is_yuv = false;
+      if (buffer)
+          is_yuv = is_yuv_format(buffer->format);
+
+      /* only can clear view by meeting all the three conditions:
+       * 1, have views on primary plane. If none of views composed by gpu,
+       * don't clear framebuffer becuase it had been cleared before.
+       * 2, the whole surface region is opaque or it's yuv region.
+       * 3, global alpha value is 1.
+       */
+      if (have_primary_view && (!pixman_region32_not_empty(&r) || is_yuv) &&
+          (view->alpha == 1)) {
         /* clear framebuffer with transparent pixels where this layer would be*/
          clear_view(view, output, damage);
       }

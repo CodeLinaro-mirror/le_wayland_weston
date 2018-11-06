@@ -147,6 +147,14 @@ struct gbm_buffer *gbm_buffer_get(struct wl_resource *resource);
  */
 void *gbm_buffer_backend_get_user_data(struct gbm_buffer *buffer);
 
+/** check whether the format is yuv
+ *
+ * \param fmt A DRM/GBM color format.
+ * \return true if the fmt is yuv.
+ * \return false if the fmt is not yuv.
+*/
+bool is_yuv_format(uint32_t fmt);
+
 #ifdef __cplusplus
 }
 #endif
