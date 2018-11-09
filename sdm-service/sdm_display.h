@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -69,6 +69,7 @@ class SdmDisplayInterface {
     virtual DisplayError DestroyDisplay() = 0;
     virtual DisplayError Prepare(struct drm_output *output) = 0;
     virtual DisplayError Commit(struct drm_output *output) = 0;
+    virtual DisplayError Flush() = 0;
     virtual DisplayError SetDisplayState(DisplayState state) = 0;
     virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
     virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
@@ -96,6 +97,7 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError DestroyDisplay();
     DisplayError Prepare(struct drm_output *output);
     DisplayError Commit(struct drm_output *output);
+    DisplayError Flush();
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
@@ -121,6 +123,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError DestroyDisplay();
     DisplayError Prepare(struct drm_output *output);
     DisplayError Commit(struct drm_output *output);
+    DisplayError Flush();
     DisplayError SetDisplayState(DisplayState state);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
@@ -225,6 +228,9 @@ class SdmDisplayProxy {
     }
     DisplayError Commit(struct drm_output *output) {
       return display_intf_->Commit(output);
+    }
+    DisplayError Flush() {
+      return display_intf_->Flush();
     }
     DisplayError SetDisplayState(DisplayState state) {
       return display_intf_->SetDisplayState(state);
