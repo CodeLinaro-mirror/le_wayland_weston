@@ -293,6 +293,33 @@ int Commit(int display_id, struct drm_output *output)
     return kErrorNone;
 }
 
+int Flush(int display_id)
+{
+    DisplayError error = kErrorNone;
+
+    if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
+        DLOGE("Display id(%d) out of range", display_id);
+        return kErrorParameters;
+    }
+
+    if (!display_[display_id]) {
+        DLOGE("display flush failed as Display(%d) not created yet",
+              display_id);
+        return kErrorNotSupported;
+    }
+
+    error = display_[display_id]->Flush();
+    if (error != kErrorNone) {
+        DLOGE("display flush failed with error = %d", error);
+        return error;
+    }
+
+#if SDM_DISPLAY_DEBUG
+    DLOGD("display flush successful");
+#endif
+    return kErrorNone;
+}
+
 int DestroyDisplay(int display_id)
 {
     DisplayError error = kErrorNone;

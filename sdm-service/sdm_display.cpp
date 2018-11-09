@@ -717,12 +717,12 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     /* compute whether this view has no blending */
     pixman_region32_init_rect(&r, 0, 0, ev->surface->width, ev->surface->height);
     pixman_region32_subtract(&r, &r, &ev->surface->opaque);
-
     if ((!pixman_region32_not_empty(&r) || layer->flags.video_present)
-                && (layer->plane_alpha == 0xFF))
+        && (layer->plane_alpha == 0xFF))
         layer->blending = SDM_BLENDING_NONE;
     else
         layer->blending = SDM_BLENDING_PREMULTIPLIED;
+
     pixman_region32_fini(&r);
 
     /* Initialize all views with GPU composition first, SDM will update them after prepare */
@@ -942,6 +942,11 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     PostCommit(&output->retire_fence_fd);
 
     return ret;
+}
+
+DisplayError SdmDisplay::Flush()
+{
+    return display_intf_->Flush(&layer_stack_);
 }
 
 /* Adding following  support functions */
@@ -1490,6 +1495,9 @@ DisplayError SdmNullDisplay::Prepare(struct drm_output *output) {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::Commit(struct drm_output *output) {
+  return kErrorNone;
+}
+DisplayError SdmNullDisplay::Flush() {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::SetDisplayState(DisplayState state) {

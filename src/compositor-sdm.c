@@ -469,6 +469,8 @@ output_repaint(struct weston_output *output_base,
     SetVSyncState(output->display_id, ENABLE, output);
     if (output->prev_layer_none_commit && output->layer_none_commit)
         weston_log("skip commit if two consecutive frames have no layers\n");
+    else if (output->layer_none_commit)
+        Flush(output->display_id);
     else {
         ret = Commit(output->display_id, output);
 
