@@ -147,7 +147,11 @@ weston_log_continue(const char *fmt, ...)
 WL_EXPORT void
 weston_place_marker(const char *name)
 {
+#ifdef ENABLE_EARLY_BOOT
 	int fd = open("/debug/bootkpi/kpi_values",O_WRONLY);
+#else
+	int fd = open("/sys/kernel/debug/bootkpi/kpi_values",O_WRONLY);
+#endif
 
 	if (fd > 0) {
 		write(fd, name, strlen(name));
