@@ -654,7 +654,6 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     uint32_t format = GBM_FORMAT_XBGR8888;
     struct linux_dmabuf_buffer *dmabuf;
     struct gbm_buffer *gbm_buf;
-    pixman_region32_t r;
 
     *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
                            (zalloc(sizeof *layer));
@@ -747,8 +746,14 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
         }
     }
 
-    if (NeedConvertGbmFormat(ev, format))
+    bool has_alpha = IsTransparentGbmFormat(format);
+    bool opaque = ViewIsOpaque(ev);
+
+    if (opaque && has_alpha) {
         format = ConvertToOpaqueGbmFormat(format);
+        has_alpha = IsTransparentGbmFormat(format);
+    }
+
     layer->format = GetMappedFormatFromGbm(format);
 
     /* Get src/dst rect */
@@ -772,14 +777,10 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->flags.is_cursor = is_cursor;
     layer->flags.video_present = GetVideoPresenceByFormatFromGbm(format);
 
-    /* compute whether this view has no blending */
-    pixman_region32_init_rect(&r, 0, 0, ev->surface->width, ev->surface->height);
-    pixman_region32_subtract(&r, &r, &ev->surface->opaque);
-
-    if (!pixman_region32_not_empty(&r) && (layer->plane_alpha == 0xFF))
+    if ((opaque || !has_alpha) && (layer->plane_alpha == 0xFF))
         layer->blending = SDM_BLENDING_NONE;
     else
-        layer->blending = SDM_BLENDING_COVERAGE;
+        layer->blending = SDM_BLENDING_PREMULTIPLIED;
 
     // Video layers are always opaque
     if (layer->flags.video_present) {
@@ -1148,9 +1149,6 @@ LayerBlending SdmDisplay::GetSDMBlending(uint32_t source)
     case SDM_BLENDING_PREMULTIPLIED:
          blending = sdm::kBlendingPremultiplied;
          break;
-    case SDM_BLENDING_COVERAGE:
-         blending = sdm::kBlendingCoverage;
-         break;
     case SDM_BLENDING_NONE:
     default:
          blending = sdm::kBlendingOpaque;
@@ -1243,46 +1241,60 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt)
     return ret;
 }
 
-bool SdmDisplay::NeedConvertGbmFormat(struct weston_view *ev, uint32_t format)
-{
-    pixman_region32_t r;
-    bool need_convert = false;
-
-    if (IsTransparentGbmFormat(format)) {
-     pixman_region32_init_rect(&r, 0, 0,
-             ev->surface->width,
-             ev->surface->height);
-     pixman_region32_subtract(&r, &r, &ev->surface->opaque);
-
-     if (!pixman_region32_not_empty(&r))
-         need_convert = true;
-
-     pixman_region32_fini(&r);
-    }
-
-    return need_convert;
-}
-
 uint32_t SdmDisplay::ConvertToOpaqueGbmFormat(uint32_t format)
 {
-    uint32_t ret = GBM_FORMAT_XRGB8888;
-
     switch (format) {
+    case GBM_FORMAT_ARGB4444:
+        return GBM_FORMAT_XRGB4444;
+    case GBM_FORMAT_ABGR4444:
+        return GBM_FORMAT_XBGR4444;
+    case GBM_FORMAT_RGBA4444:
+        return GBM_FORMAT_RGBX4444;
+    case GBM_FORMAT_BGRA4444:
+        return GBM_FORMAT_BGRX4444;
+    case GBM_FORMAT_ARGB1555:
+        return GBM_FORMAT_XRGB1555;
+    case GBM_FORMAT_ABGR1555:
+        return GBM_FORMAT_XBGR1555;
+    case GBM_FORMAT_RGBA5551:
+        return GBM_FORMAT_RGBX5551;
+    case GBM_FORMAT_BGRA5551:
+        return GBM_FORMAT_BGRX5551;
     case GBM_FORMAT_ARGB8888:
-     ret = GBM_FORMAT_XRGB8888;
-     break;
-    case GBM_FORMAT_BGRA8888:
-     ret = GBM_FORMAT_BGRX8888;
-     break;
-    case GBM_FORMAT_RGBA8888:
-     ret = GBM_FORMAT_RGBX8888;
-     break;
+        return GBM_FORMAT_XRGB8888;
     case GBM_FORMAT_ABGR8888:
-     ret = GBM_FORMAT_XBGR8888;
-     break;
+        return GBM_FORMAT_XBGR8888;
+    case GBM_FORMAT_RGBA8888:
+        return GBM_FORMAT_RGBX8888;
+    case GBM_FORMAT_BGRA8888:
+        return GBM_FORMAT_BGRX8888;
+    case GBM_FORMAT_ARGB2101010:
+        return GBM_FORMAT_XRGB2101010;
+    case GBM_FORMAT_ABGR2101010:
+        return GBM_FORMAT_XBGR2101010;
+    case GBM_FORMAT_RGBA1010102:
+        return GBM_FORMAT_RGBX1010102;
+    case GBM_FORMAT_BGRA1010102:
+        return GBM_FORMAT_BGRX1010102;
     default:
-     break;
+        return format;
     }
+}
+
+bool SdmDisplay::ViewIsOpaque(struct weston_view *ev)
+{
+    pixman_region32_t r;
+    bool ret = false;
+
+    pixman_region32_init_rect(&r, 0, 0,
+            ev->surface->width,
+            ev->surface->height);
+    pixman_region32_subtract(&r, &r, &ev->surface->opaque);
+
+    if (!pixman_region32_not_empty(&r))
+        ret = true;
+
+    pixman_region32_fini(&r);
 
     return ret;
 }
@@ -1366,12 +1378,12 @@ int SdmDisplay::ComputeDirtyRegion(struct weston_view *ev,
 
 uint8_t SdmDisplay::GetGlobalAlpha(struct weston_view *ev)
 {
-    if (ev->alpha > 1.0f)
-     return 0xFF;
-    else if (ev->alpha < 0.0f)
-     return 0;
-    else
-     return (uint8_t)(0xFF * ev->alpha);
+    int a = roundf(ev->alpha * 0xff);
+    if (a > 255)
+        return 255;
+    if (a < 0)
+        return 0;
+    return a;
 }
 
 int SdmDisplay::GetVisibleRegion(struct drm_output *output, struct weston_view *ev,
@@ -1413,7 +1425,28 @@ int SdmDisplay::GetVisibleRegion(struct drm_output *output, struct weston_view *
 
 bool SdmDisplay::IsTransparentGbmFormat(uint32_t format)
 {
-    return false;
+    switch (format) {
+    case GBM_FORMAT_ARGB4444:
+    case GBM_FORMAT_ABGR4444:
+    case GBM_FORMAT_RGBA4444:
+    case GBM_FORMAT_BGRA4444:
+    case GBM_FORMAT_ARGB1555:
+    case GBM_FORMAT_ABGR1555:
+    case GBM_FORMAT_RGBA5551:
+    case GBM_FORMAT_BGRA5551:
+    case GBM_FORMAT_ARGB8888:
+    case GBM_FORMAT_ABGR8888:
+    case GBM_FORMAT_RGBA8888:
+    case GBM_FORMAT_BGRA8888:
+    case GBM_FORMAT_ARGB2101010:
+    case GBM_FORMAT_ABGR2101010:
+    case GBM_FORMAT_RGBA1010102:
+    case GBM_FORMAT_BGRA1010102:
+    case GBM_FORMAT_AYUV:
+      return true;
+    default:
+      return false;
+    }
 }
 
 const char *SdmDisplay::GetDisplayString() {
