@@ -40,6 +40,7 @@
 #include <unistd.h>
 #include <linux/fb.h>
 #include <linux/input.h>
+#include <sys/eventfd.h>
 #ifdef USE_SDM
 #include <stdint.h>
 #include <linux/msm_mdp.h>
@@ -51,6 +52,7 @@
 #include <gbm_priv.h>
 #endif
 
+#include "shared/timespec-util.h"
 #include "shared/helpers.h"
 #include "compositor.h"
 #include "compositor-fbdev.h"
@@ -72,6 +74,10 @@ struct fbdev_backend {
 	struct wl_listener session_listener;
 	bool use_pixman;
 	void *buffer_alloc_dev;
+	struct udev_monitor *udev_monitor;
+	struct wl_event_source *udev_fb_source;
+	bool hdmi_connected;
+	struct fbdev_output *output;
 };
 
 struct fbdev_screeninfo {
@@ -92,7 +98,8 @@ struct fbdev_screeninfo {
 struct buffer_allocator {
 #ifdef USE_GBM
 	struct gbm_surface *surface;
-	struct gbm_bo *compositor_bo;
+	struct gbm_bo *last_bo;
+	struct gbm_bo *current_bo;
 #endif
 };
 
@@ -101,7 +108,6 @@ struct fbdev_output {
 	struct weston_output base;
 
 	struct weston_mode mode;
-	struct wl_event_source *finish_frame_timer;
 
 	/* Frame buffer details. */
 	char *device;
@@ -112,10 +118,17 @@ struct fbdev_output {
 	pixman_image_t *hw_surface;
 	uint8_t depth;
 	struct buffer_allocator buf_alloc;
+	int fb_device_fd;
+
+	/* vsync details. */
+	struct wl_event_source *vsync_ev_source;
+	bool frame_pending;
 };
 
+static int vsync_ev_fd = -1;
+static int64_t last_vsync_ns = -1;
+
 static struct gl_renderer_interface *gl_renderer;
-static int fb_device_fd;
 static const char default_seat[] = "seat0";
 static void surface_acquire_buffer(struct fbdev_output *output);
 static void surface_release_buffer(struct fbdev_output *output);
@@ -123,12 +136,64 @@ static void surface_create(struct fbdev_output *output, struct fbdev_backend *ba
 static void create_buff_alloc_device(int fb_fd, struct fbdev_backend * backend);
 static void fbdev_output_fini_egl(struct fbdev_output *output);
 static void fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level);
+static void fbdev_output_flush(struct weston_output *base);
+static int fbdev_output_update(struct weston_output *base, const char *device);
+static int udev_fb_event(int fd, uint32_t mask, void *data);
+static int udev_event_is_hotplug(struct fbdev_backend *backend, struct udev_device *dev);
+static int ion_open();
+static bool ReadHDMISysfs();
+
 #ifdef USE_SDM
 int display_id = -1;
 int line_length = -1;
 #endif
 static void buffer_destroy(struct buffer_allocator buf_alloc);
 
+static void
+vsync_handler(int64_t timestamp)
+{
+	uint64_t v = 1;
+
+	last_vsync_ns = timestamp;
+	/* Revisit: Event is queued to pollfd list,
+	 * Can cause inconsistent delays for higher FPS.
+	 */
+	write(vsync_ev_fd, &v, sizeof v);
+}
+
+static int
+on_vsync(int fd, uint32_t mask, void *data)
+{
+	struct fbdev_output *output = (struct fbdev_output *) data;
+	uint64_t v;
+	int ret = 0;
+	int ion_fd;
+	struct weston_compositor *ec = output->base.compositor;
+
+	read(fd, &v, sizeof v);
+
+	output_repaint_timer_handler(ec);
+	if (output->frame_pending) {
+		output->frame_pending = false;
+#ifdef USE_SDM
+		ion_fd = output->buf_alloc.current_bo->ion_fd;
+		ret = Commit(display_id, ion_fd);
+		if (ret) {
+			weston_log("fail to commit to sdm display! err=%d\n", ret);
+			output->frame_pending = true;
+			return 0;
+		}
+
+#else
+		fbdev_output_display(output);
+#endif
+		if(!output->backend->use_pixman) {
+			surface_release_buffer(output);
+		}
+	}
+
+	return 1;
+}
 
 static inline struct fbdev_output *
 to_fbdev_output(struct weston_output *base)
@@ -157,14 +222,14 @@ static void
 fbdev_output_display(struct fbdev_output *output)
 {
 	struct fb_var_screeninfo varinfo;
-	if (ioctl(fb_device_fd, FBIOGET_VSCREENINFO, &varinfo) < 0) {
+	if (ioctl(output->fb_device_fd, FBIOGET_VSCREENINFO, &varinfo) < 0) {
 		weston_log("FBIOGET_VSCREENINFO failure \n ");
 	}
 	varinfo.grayscale=0;
 	varinfo.yres_virtual = output->fb_info.y_resolution;
 	varinfo.yoffset = 0;
 	varinfo.bits_per_pixel = 32;
-	if (ioctl(fb_device_fd,  FBIOPUT_VSCREENINFO, &varinfo) < 0) {
+	if (ioctl(output->fb_device_fd,  FBIOPUT_VSCREENINFO, &varinfo) < 0) {
 		weston_log("FBIOPUT_VSCREENINFO failure \n ");
 	}
 }
@@ -200,7 +265,7 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 	struct fbdev_output *output = to_fbdev_output(base);
 	struct weston_compositor *ec = output->base.compositor;
 	struct fbdev_backend *fbb = output->backend;
-	static int fd = -1;
+
 	if (fbb->use_pixman) {
 		/* Repaint the damaged region onto the back buffer. */
 		pixman_renderer_output_set_buffer(base, output->hw_surface);
@@ -209,7 +274,6 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 	} else {
 		ec->renderer->repaint_output(base, damage);
 		surface_acquire_buffer(output);
-		fd = output->buf_alloc.compositor_bo->ion_fd;
 	}
 	/* Update the damage region. */
 		pixman_region32_subtract(&ec->primary_plane.damage,
@@ -222,34 +286,10 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 	 *
 	 * Finish the frame synchronised to the specified refresh rate. The
 	 * refresh rate is given in mHz and the interval in ms. */
-	wl_event_source_timer_update(output->finish_frame_timer,
-	                             1000000 / output->mode.refresh);
 
-#ifdef USE_SDM
-	int ret = 0;
-	ret = Commit(display_id, fd);
-	if (ret) {
-		weston_log("fail to commit to sdm display! err=%d\n", ret);
-	}
-#else
-	fbdev_output_display(output);
-#endif
+	output->frame_pending = true;
 
 	return 0;
-}
-
-static int
-finish_frame_handler(void *data)
-{
-	struct fbdev_output *output = data;
-	struct timespec ts;
-
-	weston_compositor_read_presentation_clock(output->base.compositor, &ts);
-	weston_output_finish_frame(&output->base, &ts, 0);
-	if(!output->backend->use_pixman) {
-		surface_release_buffer(output);
-	}
-	return 1;
 }
 
 static pixman_format_code_t
@@ -289,17 +329,6 @@ calculate_pixman_format(struct fb_var_screeninfo *vinfo,
 	/* We only handle packed formats at the moment. */
 	if (finfo->type != FB_TYPE_PACKED_PIXELS)
 		return 0;
-
-	/* We only handle true-colour frame buffers at the moment. */
-	switch(finfo->visual) {
-		case FB_VISUAL_TRUECOLOR:
-		case FB_VISUAL_DIRECTCOLOR:
-			if (vinfo->grayscale != 0)
-				return 0;
-		break;
-		default:
-			return 0;
-	}
 
 	/* We only support formats with MSBs on the left. */
 	if (vinfo->red.msb_right != 0 || vinfo->green.msb_right != 0 ||
@@ -522,6 +551,36 @@ fbdev_frame_buffer_destroy(struct fbdev_output *output)
 	output->fb = NULL;
 }
 
+static int
+fbdev_output_enable_vsync(struct fbdev_output *output)
+{
+     struct wl_event_loop *loop;
+
+     vsync_ev_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+     if (vsync_ev_fd < 0)
+        return -1;
+
+     loop = wl_display_get_event_loop(output->base.compositor->wl_display);
+     output->vsync_ev_source = wl_event_loop_add_fd(loop, vsync_ev_fd,
+                                                     WL_EVENT_READABLE, on_vsync, output);
+
+     return 0;
+}
+
+static void
+fbdev_output_disable_vsync(struct fbdev_output *output)
+{
+       if (output->vsync_ev_source != NULL) {
+               wl_event_source_remove(output->vsync_ev_source);
+               output->vsync_ev_source = NULL;
+       }
+
+       if (vsync_ev_fd != -1) {
+               close(vsync_ev_fd);
+               vsync_ev_fd = -1;
+       }
+}
+
 static void fbdev_output_destroy(struct weston_output *base);
 static void fbdev_output_disable(struct weston_output *base);
 
@@ -591,17 +650,19 @@ fbdev_output_enable(struct weston_output *base)
 		goto out_hw_surface;
 	}
 
-
+	if (fbdev_output_enable_vsync(output)) {
+		weston_log("Failed to create vsync event\n");
+		goto out_hw_surface;
+	}
 
 	loop = wl_display_get_event_loop(backend->compositor->wl_display);
-	output->finish_frame_timer =
-		wl_event_loop_add_timer(loop, finish_frame_handler, output);
 
 	weston_log("fbdev output %d×%d px\n",
 	           output->mode.width, output->mode.height);
 	weston_log_continue(STAMP_SPACE "guessing %d Hz and 96 dpi\n",
 	                    output->mode.refresh / 1000);
 
+	output->fb_device_fd = fb_fd;
 	return 0;
 
 out_hw_surface:
@@ -640,7 +701,7 @@ fbdev_output_create(struct fbdev_backend *backend,
 	output->base.disable = fbdev_output_disable;
 	output->base.enable = fbdev_output_enable;
 	output->base.set_dpms = fbdev_set_dpms;
-	fb_device_fd = fb_fd;
+
 	weston_output_init(&output->base, backend->compositor);
 
 	/* only one static mode in list */
@@ -659,10 +720,62 @@ fbdev_output_create(struct fbdev_backend *backend,
 
 	output->base.mm_width = output->fb_info.width_mm;
 	output->base.mm_height = output->fb_info.height_mm;
+	output->frame_pending = false;
 
 
 	weston_compositor_add_pending_output(&output->base, backend->compositor);
+	backend->output = output;
 
+	close(fb_fd);
+	return 0;
+
+out_free:
+	free(output->device);
+	free(output);
+
+	return -1;
+}
+
+static int
+fbdev_output_update(struct weston_output *base,
+                    const char *device)
+{
+	struct fbdev_output *output = to_fbdev_output(base);
+	int fb_fd;
+
+	weston_log("Updating fbdev output.\n");
+
+	if (output == NULL)
+		return -1;
+
+	output->device = strdup(device);
+
+	/* Create the frame buffer. */
+	fb_fd = fbdev_frame_buffer_open(output, device, &output->fb_info);
+	if (fb_fd < 0) {
+		weston_log("Creating frame buffer failed.\n");
+		goto out_free;
+	}
+
+	output->base.name = strdup("fbdev");
+
+	/* only one static mode in list */
+	output->mode.flags =
+		WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED;
+	output->mode.width = output->fb_info.x_resolution;
+	output->mode.height = output->fb_info.y_resolution;
+	output->mode.refresh = output->fb_info.refresh_rate;
+	wl_list_init(&output->base.mode_list);
+	wl_list_insert(&output->base.mode_list, &output->mode.link);
+
+	output->base.current_mode = &output->mode;
+	output->base.subpixel = WL_OUTPUT_SUBPIXEL_UNKNOWN;
+	output->base.make = "unknown";
+	output->base.model = output->fb_info.id;
+
+	output->base.mm_width = output->fb_info.width_mm;
+	output->base.mm_height = output->fb_info.height_mm;
+	close(fb_fd);
 	return 0;
 
 out_free:
@@ -675,6 +788,21 @@ out_free:
 static void
 fbdev_output_destroy(struct weston_output *base)
 {
+	fbdev_output_flush(base);;
+	struct fbdev_output *output = to_fbdev_output(base);
+
+#ifdef USE_SDM
+	SetVSyncState(false);
+#endif
+	fbdev_output_disable_vsync(output);
+	weston_output_destroy(&output->base);
+	free(output->device);
+	free(output);
+}
+
+static void
+fbdev_output_flush(struct weston_output *base)
+{
 	struct fbdev_output *output = to_fbdev_output(base);
 
 	weston_log("Destroying fbdev output.\n");
@@ -685,14 +813,11 @@ fbdev_output_destroy(struct weston_output *base)
 		if (output->backend->use_pixman) {
 			pixman_renderer_output_destroy(base);
 		}
-		else
+		else {
 			fbdev_output_fini_egl(output);
+		}
 	}
-	/* Remove the output. */
-	weston_output_destroy(&output->base);
-
-	free(output->device);
-	free(output);
+	close(output->fb_device_fd);
 }
 
 /* strcmp()-style return values. */
@@ -747,7 +872,6 @@ fbdev_output_reenable(struct fbdev_backend *backend,
 		 * the frame buffer X/Y resolution (such as the shadow buffer)
 		 * are re-initialised. */
 		device = strdup(output->device);
-		close(fb_device_fd);
 		fbdev_output_destroy(&output->base);
 		fbdev_output_create(backend, device);
 		free(device);
@@ -887,8 +1011,8 @@ init_egl(struct fbdev_backend *b)
 		weston_log("Unable to load gl-renderer \n");
 		return;
 	}
-
-	create_buff_alloc_device(fb_device_fd, b);
+	int fd = ion_open();
+	create_buff_alloc_device(fd, b);
 
 	if (!b->buffer_alloc_dev) {
 		weston_log("Buffer allocator is NULL \n");
@@ -932,6 +1056,22 @@ fbdev_backend_create(struct weston_compositor *compositor,
 	backend->udev = udev_new();
 	if (backend->udev == NULL) {
 		weston_log("Failed to initialize udev context.\n");
+		goto out_compositor;
+	}
+
+	backend->hdmi_connected = false;
+	backend->udev_monitor = udev_monitor_new_from_netlink(backend->udev, "udev");
+	if (backend->udev_monitor == NULL) {
+		weston_log("failed to initialize udev monitor\n");
+		goto out_compositor;
+	}
+	struct wl_event_loop *loop = wl_display_get_event_loop(compositor->wl_display);
+	backend->udev_fb_source = wl_event_loop_add_fd(loop,
+				udev_monitor_get_fd(backend->udev_monitor),
+				WL_EVENT_READABLE, udev_fb_event, backend);
+
+	if (udev_monitor_enable_receiving(backend->udev_monitor) < 0) {
+		weston_log("failed to enable udev-monitor receiving\n");
 		goto out_compositor;
 	}
 	backend->use_pixman = param->use_pixman;
@@ -980,6 +1120,9 @@ fbdev_backend_create(struct weston_compositor *compositor,
     rc = CreateDisplay(display_id);
     weston_log("CreateDisplay: ret = %d \n", rc);
     SetLineLength(line_length);
+    SetVSyncState(true);
+    weston_log("registerVSyncCb %u",vsync_handler);
+    RegisterVSyncCb(display_id, vsync_handler);
 #endif
 
 	compositor->backend = &backend->base;
@@ -1035,7 +1178,8 @@ static void
 surface_acquire_buffer(struct fbdev_output *output)
 {
 #ifdef USE_GBM
-	output->buf_alloc.compositor_bo = gbm_surface_lock_front_buffer(output->buf_alloc.surface);
+	output->buf_alloc.last_bo = output->buf_alloc.current_bo;
+	output->buf_alloc.current_bo = gbm_surface_lock_front_buffer(output->buf_alloc.surface);
 #endif
 }
 
@@ -1043,7 +1187,8 @@ static void
 surface_release_buffer(struct fbdev_output *output)
 {
 #ifdef USE_GBM
-	gbm_surface_release_buffer(output->buf_alloc.surface,output->buf_alloc.compositor_bo);
+	if (output->buf_alloc.last_bo)
+		gbm_surface_release_buffer(output->buf_alloc.surface, output->buf_alloc.last_bo);
 #endif
 }
 
@@ -1055,6 +1200,8 @@ surface_create(struct fbdev_output *output, struct fbdev_backend *backend)
 						GBM_FORMAT_RGB565 : GBM_FORMAT_ABGR8888;
 	output->buf_alloc.surface = gbm_surface_create(backend->buffer_alloc_dev, output->mode.width, output->mode.height,
 													format, GBM_BO_USE_SCANOUT |GBM_BO_USE_RENDERING);
+	output->buf_alloc.last_bo = NULL;
+	output->buf_alloc.current_bo = NULL;
 #endif
 }
 
@@ -1076,15 +1223,132 @@ buffer_destroy(struct buffer_allocator buf_alloc)
 }
 
 static void
+fbdev_set_wakelock(enum dpms_enum level)
+{
+	if (level == WESTON_DPMS_ON) {
+		int val = system("echo weston_server > /sys/power/wake_lock");
+		if(val < 0) {
+			weston_log("fbdev_set_dpms: Unable to acquire wake lock \n");
+		} else {
+				weston_log("fbdev_set_dpms: acquired wake lock \n");
+		}
+	} else {
+		int val = system("echo weston_server > /sys/power/wake_unlock");
+		if(val < 0) {
+			weston_log("fbdev_set_dpms: Unable to release wake lock \n");
+		} else {
+				weston_log("fbdev_set_dpms: released wake lock \n");
+		}
+	}
+}
+
+static void
 fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 {
 	weston_log("fbdev_set_dpms: Calling SetDisplayState weston dpms level = %d \n",level);
+	fbdev_set_wakelock(level);
+
+	/* Turn OFF HW Vsync before suspend
+	   Turn ON HW Vsync after resume
+	*/
 	int state = kDisplayStateOff;
 	if (level == WESTON_DPMS_ON) {
 		state = kDisplayStateOn;
 	}
+
+	if (state == kDisplayStateOff) {
+		SetVSyncState(false);
+	}
 	int ret = SetDisplayState(state);
 	if (ret) {
-		weston_log("fbdev_set_dpms: SetDisplaySatte failed. \n");
+		weston_log("fbdev_set_dpms: SetDisplayState failed. \n");
+		return;
 	}
+	if(state == kDisplayStateOn) {
+		SetVSyncState(true);
+	}
+}
+
+static void
+switch_display(int old_disp_id, int new_disp_id,
+		struct weston_output * output, const char * new_node)
+{
+	/*turn vsync off for old display*/
+	SetVSyncState(false);
+	DestroyDisplay(old_disp_id);
+	CreateDisplay(new_disp_id);
+	display_id = new_disp_id;
+	fbdev_output_flush(output);
+	fbdev_output_update(output, new_node);
+	fbdev_output_enable(output);
+	/*turn on vsync for new display*/
+	SetVSyncState(true);
+	RegisterVSyncCb(display_id, vsync_handler);
+}
+
+static int
+udev_fb_event(int fd, uint32_t mask, void *data)
+{
+	struct fbdev_backend *b = data;
+	struct udev_device *dev;
+
+	dev = udev_monitor_receive_device(b->udev_monitor);
+	if (udev_event_is_hotplug(b, dev)) {
+		b->hdmi_connected = ReadHDMISysfs();
+		if (!b->hdmi_connected) {
+			switch_display(SECONDARY_DISPLAY_ID, PRIMARY_DISPLAY_ID,
+				&b->output->base,PRIMARY_DISPLAY_NODE);
+			weston_log("HDMI is disconnected \n");
+		} else {
+			switch_display(PRIMARY_DISPLAY_ID,SECONDARY_DISPLAY_ID,
+				&b->output->base, SECONDARY_DISPLAY_NODE);
+			weston_log("HDMI is connected \n");
+		}
+		SetLineLength(line_length);
+		weston_compositor_schedule_repaint(b->compositor);
+	}
+	udev_device_unref(dev);
+
+	return 1;
+}
+
+static bool
+ReadHDMISysfs() {
+	int fd = open(HDMI_SYSFS_NODE_CONNECTED, O_RDONLY);
+	if (fd < 0) {
+		weston_log(" %s node open failed.\n",HDMI_SYSFS_NODE_CONNECTED);
+	}
+	char line[32];
+	int read = pread(fd, line, sizeof(line),0);
+	int connected = atoi(line);
+	weston_log("HDMI connected = %d",connected);
+	close(fd);
+	return connected ? true : false;
+}
+
+static int
+udev_event_is_hotplug(struct fbdev_backend *backend, struct udev_device *dev)
+{
+	const char *devname;
+	const char *devpath;
+
+	devpath = udev_device_get_devpath(dev);
+	devname = udev_device_get_sysname(dev);
+	int hpd = (strcmp(devpath, HDMI_SYSFS_NODE) == 0) &&
+			  (strcmp(devname, "fb1")==0);
+	if(hpd) {
+		weston_log("HPD received \n");
+		return 1;
+	}
+	return 0;
+}
+
+static int
+ion_open()
+{
+	int ion_fd = open("/dev/ion", O_RDWR | O_CLOEXEC);
+	if (ion_fd < 0) {
+		weston_log(" Ion node open failed.\n");
+	}
+	return ion_fd;
 }

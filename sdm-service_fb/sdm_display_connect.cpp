@@ -166,7 +166,9 @@ int Commit(int display_id, int fd)
 
 int DestroyDisplay(int display_id)
 {
-    
+	display_->DestroyDisplay();
+	delete display_;
+	display_ = NULL;
     return kErrorNone;
 }
 
@@ -190,6 +192,16 @@ int SetDisplayState(int power_mode) {
     DLOGD("function successful.");
     #endif
     return kErrorNone;
+}
+
+void SetVSyncState(bool state)
+{
+    display_->SetVSyncState(state);
+}
+
+void RegisterVSyncCb(int display_id, vsync_cb_t vsync_cb)
+{
+    display_->RegisterVSyncCb(vsync_cb);
 }
 
 

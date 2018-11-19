@@ -94,8 +94,8 @@ DisplayError SdmDisplay::CreateDisplay() {
 }
 
 DisplayError SdmDisplay::DestroyDisplay() {
-    
-    return kErrorNone;
+    display_intf_->SetDisplayState(kStateOff);
+    return core_intf_->DestroyDisplay(display_intf_);
 }
 
 void SdmDisplay::PrepareFbLayerGeometry()
@@ -124,6 +124,7 @@ void SdmDisplay::PrepareFbLayerGeometry()
     gpu_target_layer_->dst_rect.top = 0.0f;
     gpu_target_layer_->dst_rect.right = fb_config_.x_pixels;
     gpu_target_layer_->dst_rect.bottom = fb_config_.y_pixels;
+
     gpu_target_layer_->blending = kBlendingOpaque;
 }
 
@@ -158,6 +159,10 @@ void SdmDisplay::PostCommit()
 }
  DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync)
 {
+    if(vsync_cb) {
+	vsync_cb(vsync.timestamp);
+    }
+
     return kErrorNone;
 }
 
