@@ -1979,7 +1979,9 @@ weston_surface_attach(struct weston_surface *surface,
 			weston_surface_unmap(surface);
 	}
 
-	surface->compositor->renderer->attach(surface, buffer);
+	if (surface->compositor->renderer) {
+		surface->compositor->renderer->attach(surface, buffer);
+	}
 
 	weston_surface_calculate_size_from_buffer(surface);
 	weston_presentation_feedback_discard_list(&surface->feedback_list);
