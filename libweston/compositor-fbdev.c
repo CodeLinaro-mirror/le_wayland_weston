@@ -145,7 +145,6 @@ static bool ReadHDMISysfs();
 
 #ifdef USE_SDM
 int display_id = -1;
-int line_length = -1;
 #endif
 static void buffer_destroy(struct buffer_allocator buf_alloc);
 
@@ -406,9 +405,6 @@ fbdev_query_screen_info(struct fbdev_output *output, int fd,
 
 	info->buffer_length = fixinfo.smem_len;
 	info->line_length = fixinfo.line_length;
-#ifdef USE_SDM
-	line_length = fixinfo.line_length;
-#endif
 	strncpy(info->id, fixinfo.id, sizeof(info->id));
 	info->id[sizeof(info->id)-1] = '\0';
 
@@ -1118,7 +1114,6 @@ fbdev_backend_create(struct weston_compositor *compositor,
 			}
 		}
 #ifdef USE_SDM
-		SetLineLength(line_length);
 		SetVSyncState(true);
 		RegisterVSyncCb(display_id, vsync_handler);
 #endif
@@ -1219,6 +1214,10 @@ surface_create(struct fbdev_output *output, struct fbdev_backend *backend)
 													format, GBM_BO_USE_SCANOUT |GBM_BO_USE_RENDERING);
 	output->buf_alloc.last_bo = NULL;
 	output->buf_alloc.current_bo = NULL;
+	uint32_t stride = 0;
+	gbm_perform(GBM_PERFORM_GET_SURFACE_STRIDE, output->buf_alloc.surface, &stride);
+	weston_log("FBT stride = %d \n",stride);
+	SetLineLength(stride);
 #endif
 }
 
@@ -1318,7 +1317,6 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 		if (connected) {
 			switch_display(SECONDARY_DISPLAY_ID, PRIMARY_DISPLAY_ID,
 						&b->output->base, b, PRIMARY_DISPLAY_NODE);
-			SetLineLength(line_length);
 			weston_compositor_schedule_repaint(b->compositor);
 			b->secondary_connected = true;
 			weston_log("HDMI is connected \n");
