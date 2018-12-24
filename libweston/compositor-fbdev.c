@@ -76,8 +76,8 @@ struct fbdev_backend {
 	void *buffer_alloc_dev;
 	struct udev_monitor *udev_monitor;
 	struct wl_event_source *udev_fb_source;
-	bool hdmi_connected;
 	struct fbdev_output *output;
+	bool secondary_connected;
 };
 
 struct fbdev_screeninfo {
@@ -145,7 +145,6 @@ static bool ReadHDMISysfs();
 
 #ifdef USE_SDM
 int display_id = -1;
-int line_length = -1;
 #endif
 static void buffer_destroy(struct buffer_allocator buf_alloc);
 
@@ -406,9 +405,6 @@ fbdev_query_screen_info(struct fbdev_output *output, int fd,
 
 	info->buffer_length = fixinfo.smem_len;
 	info->line_length = fixinfo.line_length;
-#ifdef USE_SDM
-	line_length = fixinfo.line_length;
-#endif
 	strncpy(info->id, fixinfo.id, sizeof(info->id));
 	info->id[sizeof(info->id)-1] = '\0';
 
@@ -793,6 +789,7 @@ fbdev_output_destroy(struct weston_output *base)
 
 #ifdef USE_SDM
 	SetVSyncState(false);
+	DestroyDisplay(display_id);
 #endif
 	fbdev_output_disable_vsync(output);
 	weston_output_destroy(&output->base);
@@ -921,7 +918,10 @@ fbdev_backend_destroy(struct weston_compositor *base)
 
 	/* Chain up. */
 	weston_launcher_destroy(base->launcher);
-
+#ifdef USE_SDM
+	DestroyDisplay(display_id);
+	DestroyCore();
+#endif
 	free(backend);
 }
 
@@ -1039,6 +1039,11 @@ static struct fbdev_backend *
 fbdev_backend_create(struct weston_compositor *compositor,
                      struct weston_fbdev_backend_config *param)
 {
+	if (strcmp(param->device, PRIMARY_DISPLAY_NODE)!=0 &&
+		strcmp(param->device, SECONDARY_DISPLAY_NODE)!=0) {
+		weston_log("Incorrect argument \n");
+		return NULL;
+	}
 	struct fbdev_backend *backend;
 	const char *seat_id = default_seat;
 
@@ -1053,27 +1058,7 @@ fbdev_backend_create(struct weston_compositor *compositor,
 							compositor) < 0)
 		goto out_compositor;
 
-	backend->udev = udev_new();
-	if (backend->udev == NULL) {
-		weston_log("Failed to initialize udev context.\n");
-		goto out_compositor;
-	}
 
-	backend->hdmi_connected = false;
-	backend->udev_monitor = udev_monitor_new_from_netlink(backend->udev, "udev");
-	if (backend->udev_monitor == NULL) {
-		weston_log("failed to initialize udev monitor\n");
-		goto out_compositor;
-	}
-	struct wl_event_loop *loop = wl_display_get_event_loop(compositor->wl_display);
-	backend->udev_fb_source = wl_event_loop_add_fd(loop,
-				udev_monitor_get_fd(backend->udev_monitor),
-				WL_EVENT_READABLE, udev_fb_event, backend);
-
-	if (udev_monitor_enable_receiving(backend->udev_monitor) < 0) {
-		weston_log("failed to enable udev-monitor receiving\n");
-		goto out_compositor;
-	}
 	backend->use_pixman = param->use_pixman;
 	/* Set up the TTY. */
 	backend->session_listener.notify = session_notify;
@@ -1094,37 +1079,64 @@ fbdev_backend_create(struct weston_compositor *compositor,
 
 	weston_setup_vt_switch_bindings(compositor);
 
-	if (fbdev_output_create(backend, param->device) < 0)
-		goto out_launcher;
-
-	if (backend->use_pixman) {
-		if (pixman_renderer_init(compositor) < 0) {
-			weston_log("failed to initialize pixman renderer\n");
-			goto out_launcher;
-		}
-	} else {
-		if (init_egl(backend) < 0) {
-			weston_log("failed to initialize egl\n");
-			goto out_launcher;
-		}
-	}
-
 	udev_input_init(&backend->input, compositor, backend->udev,
 			seat_id, param->configure_device);
 #ifdef USE_SDM
     /* begin SDM initialization */
     int rc = CreateCore();
-    rc = GetFirstDisplayType(&display_id);
-    weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
-    /* and create default display */
-    rc = CreateDisplay(display_id);
-    weston_log("CreateDisplay: ret = %d \n", rc);
-    SetLineLength(line_length);
-    SetVSyncState(true);
-    weston_log("registerVSyncCb %u",vsync_handler);
-    RegisterVSyncCb(display_id, vsync_handler);
+	weston_log("CreateCore : returned  %d \n",rc);
+	int ret = GetFirstDisplayType(&display_id);
+	weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
+	/* TODO : Remove default primary creation.
+		HPD event is not received until primary display
+		is created. So create primary display always even if
+		in command line argument is requested to create
+		secondary display. Upon receiving HPD destroy primary and
+		then create a secondary display.
+	*/
+	ret = CreateDisplay(display_id);
+	weston_log("CreateDisplay: ret = %d \n", ret);
 #endif
+	backend->secondary_connected = false;
+	if (strcmp(param->device, PRIMARY_DISPLAY_NODE)==0) {
+		if (fbdev_output_create(backend, param->device) < 0)
+		goto out_launcher;
 
+		if (backend->use_pixman) {
+			if (pixman_renderer_init(compositor) < 0) {
+				weston_log("failed to initialize pixman renderer\n");
+				goto out_launcher;
+			}
+		} else {
+			if (init_egl(backend) < 0) {
+				weston_log("failed to initialize egl\n");
+				goto out_launcher;
+			}
+		}
+#ifdef USE_SDM
+		SetVSyncState(true);
+		RegisterVSyncCb(display_id, vsync_handler);
+#endif
+	} else {
+		backend->udev = udev_new();
+		if (backend->udev == NULL) {
+			weston_log("Failed to initialize udev context.\n");
+			goto out_compositor;
+		}
+		backend->udev_monitor = udev_monitor_new_from_netlink(backend->udev, "udev");
+		if (backend->udev_monitor == NULL) {
+			weston_log("failed to initialize udev monitor\n");
+			goto out_compositor;
+		}
+		struct wl_event_loop *loop = wl_display_get_event_loop(compositor->wl_display);
+		backend->udev_fb_source = wl_event_loop_add_fd(loop,
+					udev_monitor_get_fd(backend->udev_monitor),
+					WL_EVENT_READABLE, udev_fb_event, backend);
+		if (udev_monitor_enable_receiving(backend->udev_monitor) < 0) {
+			weston_log("failed to enable udev-monitor receiving\n");
+			goto out_compositor;
+		}
+	}
 	compositor->backend = &backend->base;
 	return backend;
 
@@ -1202,6 +1214,10 @@ surface_create(struct fbdev_output *output, struct fbdev_backend *backend)
 													format, GBM_BO_USE_SCANOUT |GBM_BO_USE_RENDERING);
 	output->buf_alloc.last_bo = NULL;
 	output->buf_alloc.current_bo = NULL;
+	uint32_t stride = 0;
+	gbm_perform(GBM_PERFORM_GET_SURFACE_STRIDE, output->buf_alloc.surface, &stride);
+	weston_log("FBT stride = %d \n",stride);
+	SetLineLength(stride);
 #endif
 }
 
@@ -1271,16 +1287,16 @@ fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 
 static void
 switch_display(int old_disp_id, int new_disp_id,
-		struct weston_output * output, const char * new_node)
+			struct weston_output * output,
+			struct fbdev_backend *backend, const char * new_node)
 {
-	/*turn vsync off for old display*/
-	SetVSyncState(false);
-	DestroyDisplay(old_disp_id);
-	CreateDisplay(new_disp_id);
-	display_id = new_disp_id;
-	fbdev_output_flush(output);
-	fbdev_output_update(output, new_node);
-	fbdev_output_enable(output);
+	DestroyDisplay(PRIMARY_DISPLAY_ID);
+	CreateDisplay(SECONDARY_DISPLAY_ID);
+	display_id = SECONDARY_DISPLAY_ID;
+	if (init_egl(backend) < 0) {
+		weston_log("failed to initialize egl \n");
+	}
+	fbdev_output_create(backend, SECONDARY_DISPLAY_NODE);
 	/*turn on vsync for new display*/
 	SetVSyncState(true);
 	RegisterVSyncCb(display_id, vsync_handler);
@@ -1294,18 +1310,17 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 
 	dev = udev_monitor_receive_device(b->udev_monitor);
 	if (udev_event_is_hotplug(b, dev)) {
-		b->hdmi_connected = ReadHDMISysfs();
-		if (!b->hdmi_connected) {
+		if(b->secondary_connected) {
+			return 1;
+		}
+		bool connected = ReadHDMISysfs();
+		if (connected) {
 			switch_display(SECONDARY_DISPLAY_ID, PRIMARY_DISPLAY_ID,
-				&b->output->base,PRIMARY_DISPLAY_NODE);
-			weston_log("HDMI is disconnected \n");
-		} else {
-			switch_display(PRIMARY_DISPLAY_ID,SECONDARY_DISPLAY_ID,
-				&b->output->base, SECONDARY_DISPLAY_NODE);
+						&b->output->base, b, PRIMARY_DISPLAY_NODE);
+			weston_compositor_schedule_repaint(b->compositor);
+			b->secondary_connected = true;
 			weston_log("HDMI is connected \n");
 		}
-		SetLineLength(line_length);
-		weston_compositor_schedule_repaint(b->compositor);
 	}
 	udev_device_unref(dev);
 
@@ -1321,7 +1336,7 @@ ReadHDMISysfs() {
 	char line[32];
 	int read = pread(fd, line, sizeof(line),0);
 	int connected = atoi(line);
-	weston_log("HDMI connected = %d",connected);
+	weston_log("HDMI connected = %d \n",connected);
 	close(fd);
 	return connected ? true : false;
 }

@@ -74,6 +74,10 @@ int CreateCore()
 
 int DestroyCore()
 {
+    if (core_intf_) {
+        core_intf_->DestroyCore();
+    }
+
     return kErrorNone;
 }
 
