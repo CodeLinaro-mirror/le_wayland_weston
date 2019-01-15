@@ -742,6 +742,7 @@ do_screen_capture(struct screen_capture *screen_cap,
                                                          damage);
         /* Release the buffer once GPU composition is completed */
         weston_buffer_reference(&screen_cap->buf_ref, NULL);
+
         free(cap_buf);
         screen_cap->next = NULL;
         screen_cap->view = NULL;
@@ -1171,8 +1172,15 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
         }
 
         /* Skip the screen capture view as it's not used for display */
-        if (is_screen_capture_view(ev))
+        if (is_screen_capture_view(ev)) {
+            /* surface of screen capture don't need to keep its buffer, it keeps
+             * in screencapture attached_buf_list. screen_capture_attach increase
+             * increase the buffer refcount and do_screen_capture decrease the
+             * buffer refcount.
+             */
+            es->keep_buffer = false;
             continue;
+        }
 
         pixman_region32_init(&surface_overlap);
         pixman_region32_intersect(&surface_overlap, &overlap,
