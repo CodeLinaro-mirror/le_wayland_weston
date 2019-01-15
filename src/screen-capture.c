@@ -248,6 +248,7 @@ screen_capture_attach(struct weston_compositor *compositor,
     struct gbm_buffer *gbm_buf = NULL;
     struct drm_backend *b = (struct drm_backend *)compositor->backend;
     struct screen_capture *screen_cap = b->screen_cap;
+    struct screen_capture_buffer *cap_buf;
 
     /* Skip attach buffer if screen capture is not enabled */
     if (!screen_cap || !screen_cap->enabled)
@@ -264,6 +265,17 @@ screen_capture_attach(struct weston_compositor *compositor,
     gbm_buf = gbm_buffer_get(buffer->resource);
     if (!gbm_buf) {
         return;
+    }
+
+    wl_list_for_each(cap_buf, &screen_cap->attached_buf_list, link) {
+        /* skip buffer which have already in the buffer list, this situation happends on
+         * gl_renderer_create_surface which call gl_renderer_attach first, weston_surface_attach
+         * call gl_renderer_attach second time for the same buffer.
+         */
+        if(cap_buf->buffer == buffer) {
+           SC_PROTOCOL_LOG(SC_LOG_DBG,"attach the existed capture buffer!\n");
+           return;
+        }
     }
 
     if (gbm_buf->flags & GBM_BUFFER_PARAMS_FLAGS_SCREEN_CAPTURE) {
@@ -291,6 +303,23 @@ screen_capture_attach(struct weston_compositor *compositor,
         weston_buffer_reference(&capture_buf->buf_ref, buffer);
         SC_PROTOCOL_LOG(SC_LOG_DBG,"screen capture buffer is attached!\n");
     }
+}
+
+WL_EXPORT bool
+is_screen_capture_buffer(struct weston_buffer *buffer)
+{
+
+    if (buffer) {
+        struct gbm_buffer *gbm_buf =
+                    gbm_buffer_get(buffer->resource);
+
+        if (gbm_buf &&
+                gbm_buf->flags & GBM_BUFFER_PARAMS_FLAGS_SCREEN_CAPTURE) {
+                return true;
+        }
+    }
+
+    return false;
 }
 
 WL_EXPORT bool
