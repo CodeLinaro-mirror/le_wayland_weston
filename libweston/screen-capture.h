@@ -100,6 +100,18 @@ struct screen_capture_buffer {
  */
 int screen_capture_setup(struct weston_compositor *compositor);
 
+/** Ensure if it is screen capture buffer or not
+*
+*\param buffer to judge whether this buffer is from screen capture client.
+*\return true on scree capture buffer,  otherwise false .
+*/
+bool is_screen_capture_buffer(struct weston_buffer *buffer);
+
+/** Ensure if it is screen capture view or not
+*
+*\param ev Get the capture view state from ev.
+*\return true on scree capture view,  otherwise false .
+*/
 bool is_screen_capture_view(struct weston_view *ev);
 
 void screen_capture_attach(struct weston_compositor *compositor,
