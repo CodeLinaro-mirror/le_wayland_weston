@@ -1378,12 +1378,12 @@ int SdmDisplay::ComputeDirtyRegion(struct weston_view *ev,
 
 uint8_t SdmDisplay::GetGlobalAlpha(struct weston_view *ev)
 {
-    int a = roundf(ev->alpha * 0xff);
-    if (a > 255)
-        return 255;
-    if (a < 0)
-        return 0;
-    return a;
+    if (ev->alpha > 1.0f)
+     return 0xFF;
+    else if (ev->alpha < 0.0f)
+     return 0;
+    else
+     return (uint8_t)(0xFF * ev->alpha);
 }
 
 int SdmDisplay::GetVisibleRegion(struct drm_output *output, struct weston_view *ev,
