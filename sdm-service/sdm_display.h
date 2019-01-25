@@ -202,6 +202,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     uint32_t GetMappedFormatFromGbm(uint32_t fmt);
     bool GetVideoPresenceByFormatFromGbm(uint32_t fmt);
     uint32_t GetMappedFormatFromShm(uint32_t fmt);
+    bool NeedConvertGbmFormat(struct weston_view *ev, uint32_t format);
     uint32_t ConvertToOpaqueGbmFormat(uint32_t format);
     void ComputeSrcDstRect(struct drm_output *output, struct weston_view *ev,
                                   struct Rect *src_ret, struct Rect *dst_ret);
@@ -209,7 +210,6 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     uint8_t GetGlobalAlpha(struct weston_view *ev);
     int GetVisibleRegion(struct drm_output *output, struct weston_view *ev,
                          pixman_region32_t *aboved_opaque, struct RectArray *visible);
-    bool ViewIsOpaque(struct weston_view *ev);
     bool IsTransparentGbmFormat(uint32_t format);
     CoreInterface *core_intf_ = NULL;
     SdmDisplayBufferAllocator *buffer_allocator_;
