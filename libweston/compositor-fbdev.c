@@ -1039,6 +1039,7 @@ static struct fbdev_backend *
 fbdev_backend_create(struct weston_compositor *compositor,
                      struct weston_fbdev_backend_config *param)
 {
+	int rc = -1;
 	if (strcmp(param->device, PRIMARY_DISPLAY_NODE)!=0 &&
 		strcmp(param->device, SECONDARY_DISPLAY_NODE)!=0) {
 		weston_log("Incorrect argument \n");
@@ -1079,11 +1080,22 @@ fbdev_backend_create(struct weston_compositor *compositor,
 
 	weston_setup_vt_switch_bindings(compositor);
 
-	udev_input_init(&backend->input, compositor, backend->udev,
+	backend->udev = udev_new();
+	if (backend->udev == NULL) {
+		weston_log("Failed to initialize udev context.\n");
+		goto out_compositor;
+	}
+
+	rc = udev_input_init(&backend->input, compositor, backend->udev,
 			seat_id, param->configure_device);
+	if (rc != 0) {
+		weston_log("udev_input_init: failed %d\n",rc);
+		goto out_compositor;
+	}
+
 #ifdef USE_SDM
     /* begin SDM initialization */
-    int rc = CreateCore();
+	rc = CreateCore();
 	weston_log("CreateCore : returned  %d \n",rc);
 	int ret = GetFirstDisplayType(&display_id);
 	weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
@@ -1118,11 +1130,6 @@ fbdev_backend_create(struct weston_compositor *compositor,
 		RegisterVSyncCb(display_id, vsync_handler);
 #endif
 	} else {
-		backend->udev = udev_new();
-		if (backend->udev == NULL) {
-			weston_log("Failed to initialize udev context.\n");
-			goto out_compositor;
-		}
 		backend->udev_monitor = udev_monitor_new_from_netlink(backend->udev, "udev");
 		if (backend->udev_monitor == NULL) {
 			weston_log("failed to initialize udev monitor\n");
