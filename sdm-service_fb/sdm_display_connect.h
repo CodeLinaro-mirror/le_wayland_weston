@@ -136,6 +136,10 @@ typedef void (*vsync_cb_t)(int64_t timestamp);
 
 void RegisterVSyncCb(int display_id, vsync_cb_t vsync_cb);
 
+void SetBrightness(int brightness);
+
+void GetBrightness(int* brightness);
+
 
 #ifdef __cplusplus
 }

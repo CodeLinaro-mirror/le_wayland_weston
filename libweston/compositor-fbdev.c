@@ -136,6 +136,8 @@ static void surface_create(struct fbdev_output *output, struct fbdev_backend *ba
 static void create_buff_alloc_device(int fb_fd, struct fbdev_backend * backend);
 static void fbdev_output_fini_egl(struct fbdev_output *output);
 static void fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level);
+static void fbdev_set_backlight(struct weston_output *output_base, uint32_t value);
+static int fbdev_get_backlight();
 static void fbdev_output_flush(struct weston_output *base);
 static int fbdev_output_update(struct weston_output *base, const char *device);
 static int udev_fb_event(int fd, uint32_t mask, void *data);
@@ -697,6 +699,8 @@ fbdev_output_create(struct fbdev_backend *backend,
 	output->base.disable = fbdev_output_disable;
 	output->base.enable = fbdev_output_enable;
 	output->base.set_dpms = fbdev_set_dpms;
+	output->base.set_backlight = fbdev_set_backlight;
+	output->base.backlight_current = fbdev_get_backlight();
 
 	weston_output_init(&output->base, backend->compositor);
 
@@ -1374,3 +1378,20 @@ ion_open()
 	}
 	return ion_fd;
 }
+
+static void fbdev_set_backlight(struct weston_output *output_base, uint32_t value)
+{
+	if (value > 255)
+		return;
+
+	SetBrightness(value);
+}
+
+static int fbdev_get_backlight()
+{
+	int brightness = 0;
+	GetBrightness(&brightness);
+	return brightness;
+
+}
+

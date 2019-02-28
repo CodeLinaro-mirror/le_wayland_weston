@@ -208,6 +208,16 @@ void RegisterVSyncCb(int display_id, vsync_cb_t vsync_cb)
     display_->RegisterVSyncCb(vsync_cb);
 }
 
+void SetBrightness(int brightness)
+{
+    display_->SetBrightness(brightness);
+}
+
+void GetBrightness(int* brightness)
+{
+    display_->GetBrightness(brightness);
+}
+
 
 }// namespace sdm
 #ifdef __cplusplus

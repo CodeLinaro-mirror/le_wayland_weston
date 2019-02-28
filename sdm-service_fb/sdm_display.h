@@ -70,6 +70,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
                              void *data);
 
     DisplayError Refresh();
+    void SetBrightness(int brightness);
+    void GetBrightness(int * brightness);
     DisplayError CECMessage(char *message);
     void SetFBTStride(int stride);
     DisplayError SetDisplayState(DisplayState state);
