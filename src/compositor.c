@@ -50,6 +50,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <errno.h>
+#include <cutils/trace.h>
 
 #include "timeline.h"
 
@@ -2354,6 +2355,7 @@ weston_output_finish_frame(struct weston_output *output,
 	struct timespec gone;
 	int msec;
 
+	ATRACE_BEGIN(__func__);
 	TL_POINT("core_repaint_finished", TLP_OUTPUT(output),
 		 TLP_VBLANK(stamp), TLP_END);
 
@@ -2392,6 +2394,7 @@ weston_output_finish_frame(struct weston_output *output,
 		output_repaint_timer_handler(output);
 	else
 		wl_event_source_timer_update(output->repaint_timer, msec);
+	ATRACE_END();
 }
 
 static void

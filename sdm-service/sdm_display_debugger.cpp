@@ -126,4 +126,13 @@ DisplayError SdmDisplayDebugger::SetProperty(const char *property_name, const ch
   return kErrorNotSupported;
 }
 
+void SdmDisplayDebugger::BeginTrace(const char *class_name, const char *function_name,
+                                                  const char *custom_string) {
+	ATRACE_BEGIN(function_name);
+}
+
+void SdmDisplayDebugger::EndTrace() {
+	ATRACE_END();
+}
+
 }  // namespace sdm

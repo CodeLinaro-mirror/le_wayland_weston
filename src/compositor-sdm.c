@@ -57,6 +57,7 @@
 #include <sys/eventfd.h>
 #include <dlfcn.h>
 #include <time.h>
+#include <cutils/trace.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -430,6 +431,7 @@ drm_output_repaint(struct weston_output *output_base,
     if (output->destroy_pending)
         return -1;
 
+    ATRACE_BEGIN(__func__);
     weston_output_refresh_metadata(output_base);
     weston_output_notify_updates(output_base);
 
@@ -449,6 +451,7 @@ drm_output_repaint(struct weston_output *output_base,
 
     output->frame_pending = 1;
 
+    ATRACE_END();
     return 0;
 }
 
@@ -567,6 +570,7 @@ on_vblank(int fd, uint32_t mask, void *data)
                     PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
    struct sdm_layer *sdm_layer, *next_sdm_layer;
 
+   ATRACE_BEGIN(__func__);
    read(fd, &v, sizeof v);
 
    if (output->frame_pending) {
@@ -588,6 +592,7 @@ on_vblank(int fd, uint32_t mask, void *data)
        weston_output_finish_frame(&output->base, &ts, flags);
    }
 
+   ATRACE_END();
    return 1;
 }
 
@@ -606,6 +611,7 @@ page_flip_handler(int fd, unsigned int frame,
              PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
              PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
 
+    ATRACE_BEGIN(__func__);
     drm_output_update_msc(output, frame);
 
     /* We don't set page_flip_pending on start_repaint_loop, in that case
@@ -631,6 +637,7 @@ page_flip_handler(int fd, unsigned int frame,
         if (output->recorder)
             weston_output_schedule_repaint(&output->base);
     }
+    ATRACE_END();
 }
 
 static int
@@ -1684,6 +1691,7 @@ hotplug_handler(int disp, bool connected, void *data)
     struct drm_output *output = (struct drm_output *) data;
     struct timespec ts;
 
+    ATRACE_BEGIN(__func__);
     if (connected) {
 	output->base.start_repaint_loop = drm_output_start_repaint_loop;
 	output->base.repaint = drm_output_repaint;
@@ -1704,6 +1712,7 @@ hotplug_handler(int disp, bool connected, void *data)
     }
 
     weston_output_schedule_repaint(&output->base);
+    ATRACE_END();
 }
 
 /**
@@ -1722,6 +1731,7 @@ weston_output_refresh_metadata(struct weston_output *output){
     uint32_t hdcp_version = 0;
     uint32_t hdcp_interface_type = 0;
 
+    ATRACE_BEGIN(__func__);
     bool rc_hdr = GetDisplayHdrInfo(display_id, &display_hdr_info);
     bool rc_hdcp = GetDisplayHdcpProtocol(display_id, &display_hdcp_protocol);
     if (rc_hdr) {
@@ -1736,6 +1746,7 @@ weston_output_refresh_metadata(struct weston_output *output){
         weston_log("WARN: Failed to Get Display HDCP Protocol\n");
     }
     weston_output_update_metadata(output, hdr_supported, hdcp_version, hdcp_interface_type);
+    ATRACE_END();
 }
 
 /**

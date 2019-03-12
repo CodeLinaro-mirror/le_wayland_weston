@@ -851,6 +851,7 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
 
 DisplayError SdmDisplay::Prepare(struct drm_output *output)
 {
+    DTRACE_SCOPED();
     DisplayError error = kErrorNone;
     char dump_buffer[8192] = {0};
 
@@ -872,6 +873,7 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
 
 DisplayError SdmDisplay::PreCommit()
 {
+    DTRACE_SCOPED();
     DisplayError error = kErrorNone;
 
     if (layer_stack_.flags.hdr_present) {
@@ -896,6 +898,7 @@ DisplayError SdmDisplay::PreCommit()
 
 DisplayError SdmDisplay::PostCommit()
 {
+    DTRACE_SCOPED();
     DisplayError error = kErrorNone;
 
     if (tone_mapper_ && tone_mapper_->IsActive()) {
@@ -924,6 +927,7 @@ DisplayError SdmDisplay::PostCommit()
 
 DisplayError SdmDisplay::Commit(struct drm_output *output)
 {
+    DTRACE_SCOPED();
     DisplayError ret = kErrorNone;
 
     uint32_t layer_count = layer_stack_.layers.size();
