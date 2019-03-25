@@ -25,7 +25,9 @@
 #include <stdlib.h>
 #include "sdm_display_debugger.h"
 #include <cutils/properties.h>
-
+extern "C" {
+#include <compositor.h>
+}
 #define __CLASS__ "SdmDisplayDebugger"
 
 namespace sdm {
@@ -35,6 +37,8 @@ SdmDisplayDebugger SdmDisplayDebugger::debug_handler_;
 static void Log(const char *prefix, const char *format, va_list list) {
   vprintf(format, list);
   printf("\n");
+  weston_vlog(format, list);
+  weston_log("\n ");
 }
 
 void SdmDisplayDebugger::config_debug_level(void) {
