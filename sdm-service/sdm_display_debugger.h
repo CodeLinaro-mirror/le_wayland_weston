@@ -29,10 +29,13 @@
 #include <core/debug_interface.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <cutils/trace.h>
 
 #include <cstdlib>
 #include <cassert>
 #include <stdint.h>
+
+#define ATRACE_TAG (ATRACE_TAG_GRAPHICS | ATRACE_TAG_HAL)
 
 enum {
        NONE,
@@ -60,6 +63,8 @@ enum {
 #define DLOGI(format, ...) WLOGI_IF(kTagNone, format, ##__VA_ARGS__)
 #define DLOGV(format, ...) WLOGV_IF(kTagNone, format, ##__VA_ARGS__)
 
+#define DTRACE_SCOPED() ScopeTracer <SdmDisplayDebugger> scope_tracer(__CLASS__, __FUNCTION__)
+
 namespace sdm {
 
 class SdmDisplayDebugger : public DebugHandler {
@@ -74,8 +79,8 @@ class SdmDisplayDebugger : public DebugHandler {
   virtual void Debug(DebugTag tag, const char *format, ...);
   virtual void Verbose(DebugTag tag, const char *format, ...);
   virtual void BeginTrace(const char *class_name, const char *function_name,
-                          const char *custom_string) { }
-  virtual void EndTrace() { }
+                          const char *custom_string);
+  virtual void EndTrace();
   virtual DisplayError GetProperty(const char *property_name, int *value);
   virtual DisplayError GetProperty(const char *property_name, char *value);
   virtual DisplayError SetProperty(const char *property_name, const char *value);

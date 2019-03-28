@@ -45,6 +45,8 @@ extern "C" {
 #include "zalloc.h"
 #include "timeline-object.h"
 
+#define ATRACE_TAG (ATRACE_TAG_GRAPHICS | ATRACE_TAG_HAL)
+
 struct weston_transform {
 	struct weston_matrix matrix;
 	struct wl_list link;
