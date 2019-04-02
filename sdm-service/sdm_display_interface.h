@@ -126,6 +126,7 @@ struct LayerGeometryFlags {
        uint32_t video_present: 1;
        uint32_t secure_present: 1;
        uint32_t hdr_present: 1;
+       uint32_t metadata_present: 1;
 };
 
 
