@@ -207,6 +207,15 @@ DisplayError SdmDisplay::SetDisplayState(DisplayState state)
     return display_intf_->SetDisplayState(state);
 }
 
+void SdmDisplay::SetBrightness(int brightness) {
+    display_intf_->SetPanelBrightness(brightness);
+}
+
+void SdmDisplay::GetBrightness(int * brightness)
+{
+    display_intf_->GetPanelBrightness(brightness);
+}
+
 #ifdef __cplusplus
 }
 #endif
