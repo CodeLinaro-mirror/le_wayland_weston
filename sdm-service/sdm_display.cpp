@@ -377,10 +377,6 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
 
     if (NeedUpdateColorMetaData(layer_geometry)) {
       layer_buffer->color_metadata = layer_geometry->color_metadata;
-
-       DLOGI("color_metadata: ColorPrimaries: %d", layer_buffer->color_metadata.colorPrimaries);
-       DLOGI("color_metadata: Transfer: %d", layer_buffer->color_metadata.transfer);
-       DLOGI("color_metadata: ColorRange: %d", layer_buffer->color_metadata.range);
     }
 
     layer_buffer->flags.macro_tile = false;
