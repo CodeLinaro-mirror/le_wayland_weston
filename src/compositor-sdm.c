@@ -122,6 +122,7 @@ struct drm_parameters {
     int tty;
     int use_pixman;
     const char *seat_id;
+    const char *device;
 };
 int display_id = -1;
 
@@ -1947,6 +1948,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
     output->base.native_scale = output->base.current_scale;
 
     SetDisplayState(display_id, WESTON_DPMS_ON);
+    b->output = output;
     return 0;
 
 err_output:
@@ -1991,6 +1993,20 @@ update_outputs(struct drm_backend *b, struct udev_device *drm_device)
     create_output_for_connector(b, x, y, drm_device);
 }
 
+
+static int
+udev_event_is_disconnected(struct drm_backend *b, struct udev_device *device) {
+    const char *status = udev_device_get_property_value(device, "status");
+    return strcmp(status, "disconnected") == 0;
+}
+
+static int
+udev_event_is_connected(struct drm_backend *b, struct udev_device *device) {
+    const char *status = udev_device_get_property_value(device, "status");
+    return strcmp(status, "connected") == 0;
+}
+
+
 static int
 udev_event_is_hotplug(struct drm_backend *b, struct udev_device *device)
 {
@@ -2013,12 +2029,38 @@ udev_drm_event(int fd, uint32_t mask, void *data)
 {
     struct drm_backend *b = data;
     struct udev_device *event;
-
+    sdm_cbs_t sdm_cbs;
     event = udev_monitor_receive_device(b->udev_monitor);
-    /* TODO (user): Need to hook this with SDM for hotplug support. */
-    // TODO (user): if (udev_event_is_hotplug(b, event))
-    // TODO (user):     update_outputs(b, event);
+    static bool display_created = false;
 
+    if (udev_event_is_hotplug(b, event) || udev_event_is_connected(b, event)) {
+        if (display_created) {
+            SetVSyncState(display_id, true,b->output );
+            udev_device_unref(event);
+            return 1;
+      }
+      int rc = CreateDisplay(display_id);
+      if (!rc) {
+          weston_log("CreateDisplay: success %d \n", rc);
+      } else {
+          weston_log("CreateDisplay: fail %d \n", rc);
+          udev_device_unref(event);
+          return 0;
+      }
+          /* Now register callbacks with SDM services */
+      sdm_cbs.vblank_cb = vblank_handler;
+      sdm_cbs.hotplug_cb = hotplug_handler;
+      RegisterCbs(display_id, &sdm_cbs);
+      if (create_outputs(b, 0, b->drm_device) < 0) {
+            weston_log("failed to create output\n");
+            udev_device_unref(event);
+            return 0;
+      }
+      weston_log("create output successful \n");
+      display_created = true;
+    } else if(udev_event_is_disconnected(b, event)) {
+      SetVSyncState(display_id, false,b->output );
+    }
     udev_device_unref(event);
 
     return 1;
@@ -2407,6 +2449,7 @@ drm_backend_create(struct weston_compositor *compositor,
     wl_signal_add(&compositor->session_signal, &b->session_listener);
 
     drm_device = find_primary_gpu(b, param->seat_id);
+    b->drm_device = drm_device;
     if (drm_device == NULL) {
         weston_log("no drm device found\n");
         goto err_udev;
@@ -2444,26 +2487,29 @@ drm_backend_create(struct weston_compositor *compositor,
     rc = GetFirstDisplayType(&display_id);
     weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
 
-    /* and create default display */
-    rc = CreateDisplay(display_id);
-    weston_log("CreateDisplay: %d successful\n", rc);
-
-    /* Now register callbacks with SDM services */
-    sdm_cbs.vblank_cb = vblank_handler,
-    sdm_cbs.hotplug_cb = hotplug_handler,
-    RegisterCbs(display_id, &sdm_cbs);
-
-    if (udev_input_init(&b->input, compositor, b->udev, param->seat_id) < 0) {
-        weston_log("failed to create input devices\n");
-    }
-
-    if (create_outputs(b, param->connector, drm_device) < 0) {
+    if (strcmp(param->device,"hdmi") != 0) {
+        /* and create default display */
+        rc = CreateDisplay(display_id);
+        if (!rc) {
+            weston_log("CreateDisplay: successfuless %d \n", rc);
+        } else {
+              weston_log("CreateDisplay: failed %d \n", rc);
+              goto err_udev_dev;
+        }
+        /* Now register callbacks with SDM services */
+        sdm_cbs.vblank_cb = vblank_handler,
+        sdm_cbs.hotplug_cb = hotplug_handler,
+        RegisterCbs(display_id, &sdm_cbs);
+        if (create_outputs(b, param->connector, drm_device) < 0) {
             weston_log("failed to create output for %s\n", path);
             // TODO (user): need code to fix it.
             // goto err_udev_input;
+        }
+        weston_log("create output successful for %s\n", path);
     }
-    weston_log("create output successful for %s\n", path);
-
+    if (udev_input_init(&b->input, compositor, b->udev, param->seat_id) < 0) {
+        weston_log("failed to create input devices\n");
+    }
     path = NULL;
 
     loop = wl_display_get_event_loop(compositor->wl_display);
@@ -2478,6 +2524,7 @@ drm_backend_create(struct weston_compositor *compositor,
     }
     udev_monitor_filter_add_match_subsystem_devtype(b->udev_monitor,
                             "drm", NULL);
+
     b->udev_drm_source =
         wl_event_loop_add_fd(loop,
                      udev_monitor_get_fd(b->udev_monitor),
@@ -2550,6 +2597,7 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
         { WESTON_OPTION_INTEGER, "tty", 0, &param.tty },
         { WESTON_OPTION_BOOLEAN, "current-mode", 0, &option_current_mode },
         { WESTON_OPTION_BOOLEAN, "use-pixman", 0, &param.use_pixman },
+        { WESTON_OPTION_STRING, "device", 0, &param.device },
     };
 
     param.seat_id = default_seat;
