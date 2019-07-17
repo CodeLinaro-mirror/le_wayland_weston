@@ -2488,7 +2488,7 @@ drm_backend_create(struct weston_compositor *compositor,
     rc = GetFirstDisplayType(&display_id);
     weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
 
-    if (strcmp(param->device,"hdmi") != 0) {
+    if (param->device != NULL && strcmp(param->device,"hdmi") != 0) {
         /* and create default display */
         rc = CreateDisplay(display_id);
         if (!rc) {
