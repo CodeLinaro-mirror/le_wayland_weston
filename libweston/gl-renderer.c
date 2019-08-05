@@ -951,41 +951,57 @@ gl_renderer_surface_set_color(struct weston_surface *surface,
 */
 static void
 clear_view(struct weston_view *ev, struct weston_output *output,
-           pixman_region32_t *damage) /* in global coordinates */
+	   pixman_region32_t *damage) /* in global coordinates */
 {
-        struct weston_compositor *ec = ev->surface->compositor;
-        struct gl_renderer *gr = get_renderer(ec);
-        struct gl_surface_state *gs = get_surface_state(ev->surface);
-        /* repaint bounding region in global coordinates: */
-        pixman_region32_t repaint;
-        /* non-opaque region in surface coordinates: */
-        pixman_region32_t surface_blend;
+	struct weston_compositor *ec = ev->surface->compositor;
+	struct gl_renderer *gr = get_renderer(ec);
+	struct gl_surface_state *gs = get_surface_state(ev->surface);
+	/* repaint bounding region in global coordinates: */
+	pixman_region32_t repaint;
+	/* non-opaque region in surface coordinates: */
+	pixman_region32_t surface_blend;
+	struct gl_shader *shader;
+	int pitch, height;
+	enum buffer_type buffer_type;
 
-        if (!gs->shader) {
-            return;
-        }
+	if (!gs->shader) {
+		return;
+	}
 
-        pixman_region32_init(&repaint);
-        pixman_region32_intersect(&repaint, &ev->transform.boundingbox, damage);
-        pixman_region32_subtract(&repaint, &repaint, &ev->clip);
+	/* gl_renderer_surface_set_color() called below will reset the surface_state,
+	 * so we save the original ones here. */
+	shader = gs->shader;
+	buffer_type =  gs->buffer_type;
+	pitch = gs->pitch;
+	height = gs->height;
 
-        if (!pixman_region32_not_empty(&repaint))
-            goto out_clear_view;
+	pixman_region32_init(&repaint);
+	pixman_region32_intersect(&repaint, &ev->transform.boundingbox, damage);
+	pixman_region32_subtract(&repaint, &repaint, &ev->clip);
 
-        glDisable(GL_BLEND);
-        gl_renderer_surface_set_color(ev->surface, 0.0f, 0.0f, 0.0f, 0.0f);
+	if (!pixman_region32_not_empty(&repaint))
+		goto out_clear_view;
 
-        use_shader(gr, &gr->solid_shader);
-        shader_uniforms(&gr->solid_shader, ev, output);
+	glDisable(GL_BLEND);
+	gl_renderer_surface_set_color(ev->surface, 0.0f, 0.0f, 0.0f, 0.0f);
 
-        pixman_region32_init_rect(&surface_blend, 0, 0,
-                                  ev->surface->width, ev->surface->height);
-        repaint_region(ev, &repaint, &surface_blend);
+	use_shader(gr, &gr->solid_shader);
+	shader_uniforms(&gr->solid_shader, ev, output);
 
-        pixman_region32_fini(&surface_blend);
+	pixman_region32_init_rect(&surface_blend, 0, 0,
+	                          ev->surface->width, ev->surface->height);
+	repaint_region(ev, &repaint, &surface_blend);
+
+	pixman_region32_fini(&surface_blend);
+
+	/* restore gs setting */
+	gs->shader = shader;
+	gs->buffer_type = buffer_type;
+	gs->pitch = pitch;
+	gs->height = height;
 
 out_clear_view:
-        pixman_region32_fini(&repaint);
+	pixman_region32_fini(&repaint);
 }
 
 
