@@ -109,6 +109,8 @@ struct drm_backend {
        //TODO(user): these are not required. Need to remove
        uint32_t min_width, max_width;
        uint32_t min_height, max_height;
+       struct drm_output *output;
+       struct udev_device *drm_device;
 };
 
 struct drm_edid {
