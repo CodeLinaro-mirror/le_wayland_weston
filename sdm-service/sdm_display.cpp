@@ -333,6 +333,7 @@ static uint32_t GetComposition(sdm::LayerComposition composition)
     }
 
     return ret;
+}
 
 static bool NeedUpdateColorMetaData(struct LayerGeometry *layer_geometry)
 {
