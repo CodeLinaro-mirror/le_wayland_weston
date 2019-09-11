@@ -82,7 +82,6 @@ namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
 #define GET_CURSOR_SLOT(max_layers) ((max_layers) - 2)
-#define LEN_LOCAL 2048
 
 #define SDM_DISPLAY_DEBUG 0
 
@@ -834,36 +833,34 @@ static void GetLayerStackDump(void *layerStack)
         layer_stack->layers.size(), layer_stack->flags.flags);
 
     for (uint32_t i = 0; i < layer_stack->layers.size(); i++) {
-        char buf[LEN_LOCAL] = {0};
         struct Layer *layer;
         struct LayerBuffer buffer;
         layer = layer_stack->layers.at(i);
         buffer = layer->input_buffer;
 
-        memset(buf, '\0', LEN_LOCAL);
-        sprintf(buf, "Layer: %d\n width  = %d, height = %d", i,
+        fprintf(stderr, "\nLayer: %d\n width  = %d, height = %d", i,
             layer->input_buffer.width, layer->input_buffer.height);
-        sprintf(buf, "%s\n LayerComposition = %s", buf,
+        fprintf(stderr, "\n LayerComposition = %s",
             GetLayerCompositionName(layer->composition));
-        sprintf(buf, "%s\n src_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f",
-            buf, layer->src_rect.left, layer->src_rect.top,
+        fprintf(stderr, "\n src_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f",
+            layer->src_rect.left, layer->src_rect.top,
             layer->src_rect.right, layer->src_rect.bottom);
-        sprintf(buf, "%s\n dst_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f", buf,
+        fprintf(stderr, "\n dst_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f",
             layer->dst_rect.left, layer->dst_rect.top, layer->dst_rect.right,
             layer->dst_rect.bottom);
-        sprintf(buf, "%s\n LayerBlending = %s", buf,
+        fprintf(stderr, "\n LayerBlending = %s",
             GetLayerBlendingName(layer->blending));
-        sprintf(buf,"%s\n LayerTransform:rotation= %f,flip_horizontal=%s,flip_vertical=%s",
-            buf, layer->transform.rotation, (layer->transform.flip_horizontal ? \
+        fprintf(stderr,"\n LayerTransform:rotation= %f,flip_horizontal=%s,flip_vertical=%s",
+            layer->transform.rotation, (layer->transform.flip_horizontal ? \
             "true" : "false"), (layer->transform.flip_vertical ? "true" : "false"));
-        sprintf(buf, "%s\n Plane Alpha = %#x, frame_rate = %d, solid_fill_color = %d",
-            buf, layer->plane_alpha, layer->frame_rate, layer->solid_fill_color);
-        sprintf(buf, "%s\n LayerFlags = %#x", buf, layer->flags.flags);
-        sprintf(buf, "%s\t LayerFlags.skip = %d", buf, layer->flags.skip);
-        sprintf(buf, "%s\n LayerBuffer Flags: hdr:%d secure:%d video:%d format:%s",
-            buf, buffer.flags.hdr, buffer.flags.secure, buffer.flags.video,
+        fprintf(stderr, "\n Plane Alpha = %#x, frame_rate = %d, solid_fill_color = %d",
+            layer->plane_alpha, layer->frame_rate, layer->solid_fill_color);
+        fprintf(stderr, "\n LayerFlags = %#x", layer->flags.flags);
+        fprintf(stderr, "\t LayerFlags.skip = %d", layer->flags.skip);
+        fprintf(stderr, "\n LayerBuffer Flags: hdr:%d secure:%d video:%d format:%s",
+            buffer.flags.hdr, buffer.flags.secure, buffer.flags.video,
             GetFormatString(buffer.format));
-        weston_log("\n%s\n", buf);
+        fprintf(stderr, "\n");
     }
 
     return;
