@@ -57,6 +57,7 @@
 #ifdef BUILD_DRM_COMPOSITOR
 
 #include <xf86drm.h>
+#include "drm_display.h"
 
 static inline int
 is_drm_master(int drm_fd)
@@ -221,7 +222,7 @@ launcher_direct_open(struct weston_launcher *launcher_base, const char *path, in
 	int fd;
 
 	if (!strcmp(path, "/dev/dri/card0"))
-		fd = get_drm_master_fd();
+		fd = early_get_drm_master();
 	else
 		fd = open(path, flags | O_CLOEXEC);
 

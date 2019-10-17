@@ -41,6 +41,7 @@ AM_CPPFLAGS = 					\
 	-I$(top_srcdir)/shared			\
 	-I$(top_builddir)/protocol		\
 	-I$(top_srcdir)/sdm-service		\
+	-I$(top_srcdir)/drm-service		\
 	-DLIBWESTON_MODULEDIR='"$(libweston_moduledir)"' \
 	-DLIBEXECDIR='"$(libexecdir)"'		\
 	-DBINDIR='"$(bindir)"'
@@ -52,9 +53,8 @@ CLEANFILES = weston.ini				\
 
 bin_PROGRAMS += weston
 if ENABLE_DRM_COMPOSITOR
-COMPOSITOR_LIBS += -lgbm -lEGL_adreno -lGLESv2_adreno
+COMPOSITOR_LIBS += -lgbm -ldrmutils -lsdedrm
 COMPOSITOR_CFLAGS += -DENABLE_EGL $(AM_CPPFLAGS)
-COMPOSITOR_LIBS += -lsdmutils -lhdr_tm -lsdmcore -lsdedrm
 endif
 
 # Libtool race fix
@@ -391,7 +391,7 @@ drm_backend_la_LIBADD =				\
 	$(INPUT_BACKEND_LIBS)			\
 	libshared.la -lrt			\
 	$(CLOCK_GETTIME_LIBS)
-drm_backend_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service --std=c++11 -std=c++11 \
+drm_backend_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service  -I$(top_src_dir)/drm-service --std=c++11 -std=c++11 \
        $(COMPOSITOR_CFLAGS)                    \
        $(EGL_CFLAGS)                           \
        $(DRM_COMPOSITOR_CFLAGS)                \
@@ -411,14 +411,9 @@ drm_backend_la_SOURCES =			\
 	shared/timespec-util.h			\
 	libweston/libbacklight.c		\
 	libweston/libbacklight.h		\
-	sdm-service/sdm_display.cpp             \
-	sdm-service/sdm_display_debugger.cpp    \
-	sdm-service/sdm_display_buffer_allocator.cpp \
-	sdm-service/sdm_display_buffer_sync_handler.cpp \
-	sdm-service/sdm_display_socket_handler.cpp \
-	sdm-service/sdm_display_connect.cpp \
-	sdm-service/uevent.c
-
+	drm-service/drm_display.cpp             \
+	drm-service/drm_display.h    \
+	libweston/early-renderer.c
 
 if ENABLE_VAAPI_RECORDER
 drm_backend_la_SOURCES += libweston/vaapi-recorder.c libweston/vaapi-recorder.h
@@ -426,6 +421,31 @@ drm_backend_la_LIBADD += $(LIBVA_LIBS)
 drm_backend_la_LDFLAGS += -pthread
 drm_backend_la_CFLAGS += $(LIBVA_CFLAGS)
 endif
+endif
+
+if ENABLE_DRM_COMPOSITOR
+libweston_module_LTLIBRARIES += sdm-service.la
+sdm_service_la_LDFLAGS = -module -avoid-version
+sdm_service_la_LIBADD = $(COMPOSITOR_LIBS)
+sdm_service_la_LIBADD += -lsdmutils -lhdr_tm -lsdmcore
+sdm_service_la_CPPFLAGS = -Wundef -Wno-trigraphs -I$(top_src_dir)/sdm-service  --std=c++11 -std=c++11 \
+	-Wall -Wextra -Wno-unused-parameter \
+	-Wno-missing-field-initializers -g -fvisibility=hidden -Wsign-compare \
+	$(COMPOSITOR_CFLAGS)                   \
+	$(DRM_COMPOSITOR_CFLAGS)
+sdm_service_la_CFLAGS =                        \
+	$(COMPOSITOR_CFLAGS)                   \
+	$(DRM_COMPOSITOR_CFLAGS)               \
+	$(AM_CFLAGS)
+
+sdm_service_la_SOURCES =			\
+	sdm-service/sdm_display.cpp             \
+	sdm-service/sdm_display_debugger.cpp    \
+	sdm-service/sdm_display_buffer_allocator.cpp \
+	sdm-service/sdm_display_buffer_sync_handler.cpp \
+	sdm-service/sdm_display_socket_handler.cpp \
+	sdm-service/sdm_display_connect.cpp \
+	sdm-service/uevent.c
 endif
 
 if ENABLE_WAYLAND_COMPOSITOR

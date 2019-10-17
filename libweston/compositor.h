@@ -59,6 +59,11 @@ struct weston_size {
 	int32_t width, height;
 };
 
+struct surface_color {
+	bool is_pended;
+	float red, blue, green, alpha;
+};
+
 struct weston_transform {
 	struct weston_matrix matrix;
 	struct wl_list link;
@@ -1498,6 +1503,7 @@ struct weston_surface {
 
 	/* An list of per seat pointer constraints. */
 	struct wl_list pointer_constraints;
+	struct surface_color surf_color;
 };
 
 struct weston_subsurface {

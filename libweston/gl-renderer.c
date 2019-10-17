@@ -2877,12 +2877,23 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 	 * Here we release the cache reference which has to be final.
 	 */
 	image = gbm_buffer_backend_get_user_data(gbmbuf);
-	/* The gbmbuf_image should have been created during the import */
-	assert(image != NULL);
+	/* The gbmbuf_image should have been created during the import except early gbm buffer */
+	//assert(image != NULL);
 
-	for (i = 0; i < image->num_images; ++i) {
-		ret = egl_image_unref(image->images[i]);
-		assert(ret == 0);
+	if (image) {
+		for (i = 0; i < image->num_images; ++i) {
+			ret = egl_image_unref(image->images[i]);
+			assert(ret == 0);
+		}
+		if (!import_known_gbmbuf(gr, image)) {
+			gbm_buffer_send_server_error(gbmbuf,
+			          "EGL gbmbuf import failed");
+			return;
+		}
+	} else {
+		image = import_gbm_buffer(gr, gbmbuf);
+		if (!image)
+			return;
 	}
 
 	if (!import_known_gbmbuf(gr, image)) {
@@ -3208,6 +3219,22 @@ gl_renderer_create_surface(struct weston_surface *surface)
 	if (surface->buffer_ref.buffer) {
 		gl_renderer_attach(surface, surface->buffer_ref.buffer);
 		gl_renderer_flush_damage(surface);
+	} else if (surface->surf_color.is_pended) {
+		/*
+		 * if weston_surface_set_color is called before
+		 * gl renderer is initialized, surface color is stored
+		 * in surf_color and is_pended is set to true. Here,
+		 * gs color is set accordingly.
+		 */
+		gs->color[0] = surface->surf_color.red;
+		gs->color[1] = surface->surf_color.green;
+		gs->color[2] = surface->surf_color.blue;
+		gs->color[3] = surface->surf_color.alpha;
+		gs->buffer_type = BUFFER_TYPE_SOLID;
+		gs->pitch = 1;
+		gs->height = 1;
+		gs->shader = &gr->solid_shader;
+		surface->surf_color.is_pended = false;
 	}
 
 	return 0;

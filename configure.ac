@@ -207,6 +207,11 @@ if test x$enable_x11_compositor = xyes; then
   AC_DEFINE([BUILD_X11_COMPOSITOR], [1], [Build the X11 compositor])
 fi
 
+AC_ARG_ENABLE(early-boot, [  --enable-early-boot],,
+	      enable_early_boot=no)
+if test x$enable_early_boot = xyes; then
+  AC_DEFINE(ENABLE_EARLY_BOOT, [1], [Enable backend early boot])
+fi
 
 AC_ARG_ENABLE(drm-compositor, [  --enable-drm-compositor],,
 	      enable_drm_compositor=yes)
