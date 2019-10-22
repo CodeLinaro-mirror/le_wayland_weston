@@ -245,6 +245,23 @@ AS_IF([test x$enable_fbdev_compositor = xyes], [
   PKG_CHECK_MODULES([FBDEV_COMPOSITOR], [libudev >= 136 mtdev >= 1.1.0])
 ])
 
+AC_ARG_WITH(sanitized-headers,
+   AS_HELP_STRING([--with-sanitized-headers=DIR],
+       [Specify the location of the sanitized Linux headers]),
+       [sanitized_headers=$withval], [with_sanitized_headers=no])
+if test "x${sanitized_headers}" != "xno"; then
+   CFLAGS="${CFLAGS} -I${sanitized_headers}"
+   CPPFLAGS="${CPPFLAGS} -I${sanitized_headers}"
+fi
+
+AC_ARG_WITH([gbm], [--with-gbm], [gbm="${enableval}"], [gbm="no"])
+
+if test "x$gbm" = "xyes"; then
+CPPFLAGS="${CPPFLAGS} -D__GBM__"
+fi
+
+AC_ARG_WITH([sdm], [--with-sdm=DIR], [CPPFLAGS="$CPPFLAGS -I${with_sdm} -I${with_sdm}/core"])
+
 AC_ARG_ENABLE([rdp-compositor], [  --enable-rdp-compositor],,
               enable_rdp_compositor=no)
 AM_CONDITIONAL([ENABLE_RDP_COMPOSITOR],
