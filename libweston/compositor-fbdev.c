@@ -61,6 +61,8 @@
 #include "libinput-seat.h"
 #include "presentation-time-server-protocol.h"
 #include "gl-renderer.h"
+#include "src/gbm-buffer-backend.h"
+#include "gbm-buffer-backend-server-protocol.h"
 
 
 struct fbdev_backend {
@@ -1148,6 +1150,13 @@ fbdev_backend_create(struct weston_compositor *compositor,
 			goto out_compositor;
 		}
 	}
+
+	if (compositor->renderer->import_gbm_buffer) {
+		if (gbm_buffer_backend_setup(compositor) < 0) {
+			weston_log("Error: initializing gbm_buffer_backend_setup support failed.\n");
+		}
+	}
+
 	compositor->backend = &backend->base;
 	return backend;
 

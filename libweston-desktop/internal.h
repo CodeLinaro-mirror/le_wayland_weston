@@ -200,6 +200,10 @@ weston_desktop_surface_set_relative_to(struct weston_desktop_surface *surface,
 				       struct weston_desktop_surface *parent,
 				       int32_t x, int32_t y, bool use_geometry);
 void
+weston_desktop_surface_set_position(struct weston_desktop *desktop,
+					struct weston_desktop_surface *dsurface,
+				    uint32_t x, uint32_t y);
+void
 weston_desktop_surface_unset_relative_to(struct weston_desktop_surface *surface);
 void
 weston_desktop_surface_popup_grab(struct weston_desktop_surface *popup,
