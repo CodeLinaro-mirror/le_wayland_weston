@@ -1821,6 +1821,9 @@ drm_output_init_egl(struct drm_output *output, struct drm_backend *b)
     output->framebuffer_ubwc = false;
     //Query whether allocated BOs are UBWC or not
     gbm_perform(GBM_PERFORM_GET_SURFACE_UBWC_STATUS, output->surface, &output->framebuffer_ubwc);
+    //Check the output secure status
+    output->is_secure = false;
+    gbm_perform(GBM_PERFORM_GET_SURFACE_SECURE_STATUS, output->surface, &output->is_secure);
 
     if (!output->surface) {
         weston_log("failed to create gbm surface\n");
