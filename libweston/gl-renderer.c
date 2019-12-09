@@ -2897,12 +2897,6 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 			return;
 	}
 
-	if (!import_known_gbmbuf(gr, image)) {
-		gbm_buffer_send_server_error(gbmbuf,
-		          "EGL gbmbuf import failed");
-		return;
-	}
-
 	gs->num_images = image->num_images;
 	for (i = 0; i < gs->num_images; ++i)
 		gs->images[i] = egl_image_ref(image->images[i]);
