@@ -251,6 +251,8 @@ struct drm_output {
        } last_vblank;
        // Indicate whether allocation of framebuffer is UBWC or not
        int framebuffer_ubwc;
+       // Indicate whether output is secure
+       bool is_secure;
        // Indicate whether commit layers or not
        bool layer_none_commit;
        // Indicate previous frame whether commit layers or not, record previous layer_none_commit
