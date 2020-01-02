@@ -1005,6 +1005,12 @@ fbdev_backend_create_gl_renderer(struct fbdev_backend *b)
 		return -1;
 	}
 
+	if (b->compositor->renderer->import_gbm_buffer) {
+		if (gbm_buffer_backend_setup(b->compositor) < 0) {
+			weston_log("Error: initializing gbm_buffer_backend_setup support failed.\n");
+		}
+	}
+
 	return 0;
 }
 
@@ -1148,12 +1154,6 @@ fbdev_backend_create(struct weston_compositor *compositor,
 		if (udev_monitor_enable_receiving(backend->udev_monitor) < 0) {
 			weston_log("failed to enable udev-monitor receiving\n");
 			goto out_compositor;
-		}
-	}
-
-	if (compositor->renderer->import_gbm_buffer) {
-		if (gbm_buffer_backend_setup(compositor) < 0) {
-			weston_log("Error: initializing gbm_buffer_backend_setup support failed.\n");
 		}
 	}
 
