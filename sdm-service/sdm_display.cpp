@@ -363,8 +363,7 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
     // TODO: (user)      return kErrorUndefined;
     // TODO: (user)  }
 
-    if (index != layer_stack_.layers.size()-1)
-        layer_buffer->planes[0].fd = layer_geometry->ion_fd;
+    layer_buffer->planes[0].fd = layer_geometry->ion_fd;
 
     /* TODO: Below information should be set according to the real user scenario */
     layer_buffer->flags.secure = layer_geometry->flags.secure_present;
@@ -526,6 +525,12 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
     fb_layer->flags.is_cursor = 0;
     fb_layer->flags.has_ubwc_buf = output->framebuffer_ubwc;
     fb_layer->flags.secure_present = output->is_secure;
+    /* set previous frame's fd for Validate() */
+    if (output->current) {
+        fb_layer->ion_fd = output->current->ion_fd;
+    } else {
+        fb_layer->ion_fd = -1;
+    }
 
     return 0;
 }
