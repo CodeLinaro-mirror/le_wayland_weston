@@ -504,6 +504,7 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 	EGLint rect[4];
 	EGLint buffer_age = 0;
 	struct timeval tv;
+	static int first_frame = 1;
 
 	assert(window->callback == callback);
 	window->callback = NULL;
@@ -575,6 +576,11 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 						  rect, 1);
 	} else {
 		eglSwapBuffers(display->egl.dpy, window->egl_surface);
+		if (first_frame) {
+			system("echo -n 'W - simple_egl_first_frame'"
+				" > /sys/kernel/debug/bootkpi/kpi_values");
+			first_frame = 0;
+		}
 	}
 	window->frames++;
 }
