@@ -64,6 +64,7 @@
 #include <time.h>
 #include <linux/sync_file.h>
 #include <pthread.h>
+#include <cutils/properties.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -1808,22 +1809,27 @@ drm_output_init_egl(struct drm_output *output, struct drm_backend *b)
         fallback_format_for(output->format),
     };
     int i, flags, n_formats = 1;
+    flags = GBM_BO_USE_SCANOUT |
+            GBM_BO_USE_RENDERING |
+            GBM_BO_USAGE_UBWC_ALIGNED_QTI |
+            GBM_BO_USAGE_HW_RENDERING_QTI;
+    if (property_get_bool("weston.protected_context", false)) {
+        flags |= GBM_BO_USAGE_PROTECTED_QTI;
+    }
 
     output->surface = gbm_surface_create(b->gbm,
                          output->base.current_mode->width,
                          output->base.current_mode->height,
                          format[0],
-                         GBM_BO_USE_SCANOUT |
-                         GBM_BO_USE_RENDERING |
-                         GBM_BO_USAGE_UBWC_ALIGNED_QTI |
-                         GBM_BO_USAGE_HW_RENDERING_QTI);
+                         flags);
 
     output->framebuffer_ubwc = false;
     //Query whether allocated BOs are UBWC or not
     gbm_perform(GBM_PERFORM_GET_SURFACE_UBWC_STATUS, output->surface, &output->framebuffer_ubwc);
     //Check the output secure status
-    output->is_secure = false;
-    gbm_perform(GBM_PERFORM_GET_SURFACE_SECURE_STATUS, output->surface, &output->is_secure);
+    int secure_status = 0;
+    gbm_perform(GBM_PERFORM_GET_SURFACE_SECURE_STATUS, output->surface, &secure_status);
+    output->is_secure = (bool)secure_status;
 
     if (!output->surface) {
         weston_log("failed to create gbm surface\n");

@@ -2401,6 +2401,8 @@ int main(int argc, char *argv[])
 		{ WESTON_OPTION_BOOLEAN, "wait-for-debugger", 0, &wait_for_debugger },
 	};
 
+	weston_place_marker("W - weston main begin");
+
 	wl_list_init(&wet.layoutput_list);
 
 	if (os_fd_set_cloexec(fileno(stdin))) {
