@@ -113,7 +113,9 @@ libweston_@LIBWESTON_MAJOR@_la_SOURCES =			\
 	shared/timespec-util.h				\
 	shared/zalloc.h					\
 	shared/platform.h				\
-	shared/weston-egl-ext.h
+	shared/weston-egl-ext.h				\
+	src/gbm-buffer-backend.h			\
+	src/gbm-buffer-backend.c
 
 lib_LTLIBRARIES += libweston-desktop-@LIBWESTON_MAJOR@.la
 libweston_desktop_@LIBWESTON_MAJOR@_la_CPPFLAGS = $(AM_CPPFLAGS) -DIN_WESTON
@@ -180,7 +182,9 @@ nodist_libweston_@LIBWESTON_MAJOR@_la_SOURCES =				\
 	protocol/relative-pointer-unstable-v1-protocol.c		\
 	protocol/relative-pointer-unstable-v1-server-protocol.h		\
 	protocol/pointer-constraints-unstable-v1-protocol.c		\
-	protocol/pointer-constraints-unstable-v1-server-protocol.h
+	protocol/pointer-constraints-unstable-v1-server-protocol.h	\
+	protocol/gbm-buffer-backend-protocol.c				\
+	protocol/gbm-buffer-backend-server-protocol.h
 
 BUILT_SOURCES += $(nodist_libweston_@LIBWESTON_MAJOR@_la_SOURCES)
 
