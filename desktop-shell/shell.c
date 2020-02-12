@@ -3912,6 +3912,18 @@ xdg_surface_move(struct wl_client *client, struct wl_resource *resource,
 }
 
 static void
+xdg_surface_set_pos(struct wl_client *client, struct wl_resource *resource, int x, int y)
+{
+	struct shell_surface *shsurf = wl_resource_get_user_data(resource);
+
+	if (shsurf->state.fullscreen == true || shsurf->state.maximized == true) {
+		return;
+	}
+
+	weston_view_set_position(shsurf->view, x, y);
+}
+
+static void
 xdg_surface_resize(struct wl_client *client, struct wl_resource *resource,
 		   struct wl_resource *seat_resource, uint32_t serial,
 		   uint32_t edges)
@@ -4036,6 +4048,7 @@ static const struct xdg_surface_interface xdg_surface_implementation = {
 	xdg_surface_set_app_id,
 	xdg_surface_show_window_menu,
 	xdg_surface_move,
+	xdg_surface_set_pos,
 	xdg_surface_resize,
 	xdg_surface_ack_configure,
 	xdg_surface_set_window_geometry,

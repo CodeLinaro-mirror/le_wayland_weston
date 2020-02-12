@@ -264,6 +264,23 @@
       <arg name="serial" type="uint" summary="the serial of the user event"/>
     </request>
 
+    <request name="set_pos">
+      <description summary="start an automated move">
+	This extension of upstream xdg-shell protocol helps in window movement,
+	where input devices are not available.
+	Start an automated, script-driven move of the surface.
+
+	There is no user action (button press, key press, touch event)
+	required to move surface.
+
+	The server may ignore move requests depending on the state of
+	the surface (e.g. fullscreen or maximized).
+
+      </description>
+      <arg name="x" type="int" summary="new top left x co-ordinate of surface"/>
+      <arg name="y" type="int" summary="new top left y co-ordinate of surface"/>
+    </request>
+
     <enum name="resize_edge">
       <description summary="edge values for resizing">
 	These values are used to indicate which edge of a surface
