@@ -287,6 +287,7 @@ static const struct pixel_format_info pixel_format_table[] = {
 		.hsub = 2,
 		.vsub = 1,
 	},
+#if 0
 	{
 		.format = DRM_FORMAT_NV24,
 		SAMPLER_TYPE(EGL_TEXTURE_Y_UV_WL),
@@ -298,6 +299,7 @@ static const struct pixel_format_info pixel_format_table[] = {
 		.num_planes = 2,
 		.chroma_order = ORDER_VU,
 	},
+#endif
 	{
 		.format = DRM_FORMAT_YUV410,
 		SAMPLER_TYPE(EGL_TEXTURE_Y_U_V_WL),

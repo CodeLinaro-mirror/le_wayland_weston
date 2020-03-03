@@ -69,6 +69,9 @@ CLEANFILES = weston.ini				\
 # targets. See http://debbugs.gnu.org/cgi/bugreport.cgi?bug=7328
 install-libweston_moduleLTLIBRARIES install-moduleLTLIBRARIES: install-libLTLIBRARIES
 
+if ENABLE_DRM_COMPOSITOR
+COMPOSITOR_CFLAGS += -DCOMPILE_WITH_DRM
+endif
 lib_LTLIBRARIES = libweston-@LIBWESTON_MAJOR@.la
 libweston_@LIBWESTON_MAJOR@_la_CPPFLAGS = $(AM_CPPFLAGS) -DIN_WESTON -DENABLE_EGL
 libweston_@LIBWESTON_MAJOR@_la_CFLAGS = $(AM_CFLAGS) \
@@ -106,6 +109,7 @@ libweston_@LIBWESTON_MAJOR@_la_SOURCES =			\
 	libweston/timeline-object.h			\
 	libweston/linux-dmabuf.c			\
 	libweston/linux-dmabuf.h			\
+	libweston/pixel-formats.c			\
 	libweston/pixel-formats.h			\
 	shared/helpers.h				\
 	shared/matrix.c					\
@@ -365,6 +369,8 @@ INPUT_BACKEND_SOURCES =				\
 	shared/helpers.h
 
 if ENABLE_DRM_COMPOSITOR
+COMPOSITOR_LIBS += -lgbm
+DRM_COMPOSITOR_CFLAGS += -DCOMPILE_WITH_DRM
 libweston_module_LTLIBRARIES += drm-backend.la
 drm_backend_la_LDFLAGS = -module -avoid-version
 drm_backend_la_LIBADD =				\

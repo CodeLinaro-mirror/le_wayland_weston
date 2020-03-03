@@ -2348,9 +2348,19 @@ weston_output_maybe_repaint(struct weston_output *output, struct timespec *now,
 	struct weston_compositor *compositor = output->compositor;
 	int ret = 0;
 
+#ifdef COMPILE_WITH_DRM
+	int64_t msec_to_repaint;
+#endif
+
 	/* We're not ready yet; come back to make a decision later. */
 	if (output->repaint_status != REPAINT_SCHEDULED)
 		return ret;
+
+#ifdef COMPILE_WITH_DRM
+	msec_to_repaint = timespec_sub_to_msec(&output->next_repaint, now);
+	if (msec_to_repaint > 1)
+		return ret;
+#endif
 
 	/* If we're sleeping, drop the repaint machinery entirely; we will
 	 * explicitly repaint all outputs when we come back. */
@@ -2388,12 +2398,24 @@ output_repaint_timer_arm(struct weston_compositor *compositor)
 	struct weston_output *output;
 	bool any_should_repaint = false;
 	int64_t msec_to_next = INT64_MAX;
+#ifdef COMPILE_WITH_DRM
+	struct timespec now;
 
+	weston_compositor_read_presentation_clock(compositor, &now);
+#endif
 	wl_list_for_each(output, &compositor->output_list, link) {
 
+#ifdef COMPILE_WITH_DRM
+		int64_t msec_to_this;
+#endif
 		if (output->repaint_status != REPAINT_SCHEDULED)
 			continue;
 
+#ifdef COMPILE_WITH_DRM
+		msec_to_this = timespec_sub_to_msec(&output->next_repaint,&now);
+		if (!any_should_repaint || msec_to_this < msec_to_next)
+			msec_to_next = msec_to_this;
+#endif
 		any_should_repaint = true;
 	}
 
@@ -2402,6 +2424,17 @@ output_repaint_timer_arm(struct weston_compositor *compositor)
 	/* Revisit: Removed timer for driving through vsync on fbdev.
 	 * Need corresponding changes on other compositer.
 	 */
+#ifdef COMPILE_WITH_DRM
+	/* Even if we should repaint immediately, add the minimum 1 ms delay.
+	 * This is a workaround to allow coalescing multiple output repaints
+	 * particularly from weston_output_finish_frame()
+	 * into the same call, which would not happen if we called
+	 * output_repaint_timer_handler() directly.
+	 */
+	if (msec_to_next < 1)
+		msec_to_next = 1;
+	wl_event_source_timer_update(compositor->repaint_timer, msec_to_next);
+#endif
 }
 
 WL_EXPORT int
@@ -2413,6 +2446,9 @@ output_repaint_timer_handler(void *data)
 	void *repaint_data = NULL;
 	int ret;
 
+#ifdef COMPILE_WITH_DRM
+	weston_compositor_read_presentation_clock(compositor, &now);
+#endif
 	if (compositor->backend->repaint_begin)
 		repaint_data = compositor->backend->repaint_begin(compositor);
 
@@ -2438,6 +2474,9 @@ output_repaint_timer_handler(void *data)
 						        repaint_data);
 	}
 
+#ifdef COMPILE_WITH_DRM
+	output_repaint_timer_arm(compositor);
+#endif
 	return 0;
 }
 
@@ -2474,9 +2513,33 @@ weston_output_finish_frame(struct weston_output *output,
 						  presented_flags);
 
 	output->frame_time = timespec_to_msec(stamp);
+#ifdef COMPILE_WITH_DRM
+	timespec_add_nsec(&output->next_repaint, stamp, refresh_nsec);
+	timespec_add_msec(&output->next_repaint, &output->next_repaint, -compositor->repaint_msec);
+	msec_rel = timespec_sub_to_msec(&output->next_repaint, &now);
+	if (msec_rel < -1000 || msec_rel > 1000) {
+		static bool warned;
+		if (!warned)
+			weston_log("Warning: computed repaint delay is insane: %lld msec\n", (long long) msec_rel);
+		warned = true;
+		output->next_repaint = now;
+	}
 
+	/* Called from restart_repaint_loop and restart happens already after
+	 * the deadline given by repaint_msec? In that case we delay until
+	 * the deadline of the next frame, to give clients a more predictable
+	 * timing of the repaint cycle to lock on. */
+	if (presented_flags == WP_PRESENTATION_FEEDBACK_INVALID && msec_rel < 0) {
+		while (timespec_sub_to_nsec(&output->next_repaint, &now) < 0) {
+			timespec_add_nsec(&output->next_repaint, &output->next_repaint, refresh_nsec);
+		}
+	}
+#endif
 out:
 	output->repaint_status = REPAINT_SCHEDULED;
+#ifdef COMPILE_WITH_DRM
+	output_repaint_timer_arm(compositor);
+#endif
 }
 
 static void
@@ -5258,6 +5321,9 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 	loop = wl_display_get_event_loop(ec->wl_display);
 	ec->idle_source = wl_event_loop_add_timer(loop, idle_handler, ec);
 
+#ifdef COMPILE_WITH_DRM
+	ec->repaint_timer = wl_event_loop_add_timer(loop, output_repaint_timer_handler,ec);
+#endif
 	weston_layer_init(&ec->fade_layer, ec);
 	weston_layer_init(&ec->cursor_layer, ec);
 
@@ -5431,6 +5497,32 @@ weston_compositor_import_dmabuf(struct weston_compositor *compositor,
 	return renderer->import_dmabuf(compositor, buffer);
 }
 
+/** Import gbmbuf buffer into current renderer
+ *
+ * \param compositor
+ * \param buffer the gbmbuf buffer to import
+ * \return true on usable buffers, false otherwise
+ *
+ * This function tests that the gbm_buffer is usable
+ * for the current renderer. Returns false on unusable buffers. Usually
+ * usability is tested by importing the gbmbuf for composition.
+ *
+ * This hook is also used for detecting if the renderer supports
+ * gbmbuf at all. If the renderer hook is NULL, dmabufs are not
+ * supported.
+ * */
+/*
+WL_EXPORT bool
+weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
+				    struct gbm_buffer *buffer)
+{
+	struct weston_renderer *renderer;
+	renderer = compositor->renderer;
+	if (renderer->import_gbm_buffer == NULL)
+		return false;
+	return renderer->import_gbm_buffer(compositor, buffer);
+}
+*/
 WL_EXPORT void
 weston_version(int *major, int *minor, int *micro)
 {
