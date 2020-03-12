@@ -62,6 +62,7 @@
 #include "presentation-time-server-protocol.h"
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-unstable-v1-server-protocol.h"
+#include "src/gbm-buffer-backend.h"
 
 #ifndef DRM_CAP_TIMESTAMP_MONOTONIC
 #define DRM_CAP_TIMESTAMP_MONOTONIC 0x6
@@ -3656,6 +3657,15 @@ drm_backend_create(struct weston_compositor *compositor,
 		if (linux_dmabuf_setup(compositor) < 0)
 			weston_log("Error: initializing dmabuf "
 				   "support failed.\n");
+	}
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buf import=%p",
+			compositor->renderer->import_gbm_buffer);
+
+	if (compositor->renderer->import_gbm_buffer) {
+		if (gbm_buffer_backend_setup(compositor) < 0)
+		weston_log("Error: initializing gbm_buffer_backend_setup "
+			"support failed.\n");
 	}
 
 	compositor->backend = &b->base;

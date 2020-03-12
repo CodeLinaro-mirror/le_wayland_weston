@@ -5511,7 +5511,7 @@ weston_compositor_import_dmabuf(struct weston_compositor *compositor,
  * gbmbuf at all. If the renderer hook is NULL, dmabufs are not
  * supported.
  * */
-/*
+
 WL_EXPORT bool
 weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
 				    struct gbm_buffer *buffer)
@@ -5522,7 +5522,7 @@ weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
 		return false;
 	return renderer->import_gbm_buffer(compositor, buffer);
 }
-*/
+
 WL_EXPORT void
 weston_version(int *major, int *minor, int *micro)
 {
