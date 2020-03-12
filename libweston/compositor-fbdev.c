@@ -1327,19 +1327,37 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 {
 	struct fbdev_backend *b = data;
 	struct udev_device *dev;
-
+	static bool first_time = true;
 	dev = udev_monitor_receive_device(b->udev_monitor);
+	bool connected = ReadHDMISysfs();
 	if (udev_event_is_hotplug(b, dev)) {
-		if(b->secondary_connected) {
-			return 1;
+		if (b->secondary_connected && !connected) {
+			DestroyDisplay(SECONDARY_DISPLAY_ID);
+			CreateDisplay(PRIMARY_DISPLAY_ID);
+			display_id = PRIMARY_DISPLAY_ID;
+			fbdev_output_flush(&b->output->base);
+			b->secondary_connected = false;
+			weston_log("HDMI got disconnected \n");
 		}
-		bool connected = ReadHDMISysfs();
-		if (connected) {
+		if (connected && first_time) {
 			switch_display(SECONDARY_DISPLAY_ID, PRIMARY_DISPLAY_ID,
 						&b->output->base, b, PRIMARY_DISPLAY_NODE);
 			weston_compositor_schedule_repaint(b->compositor);
 			b->secondary_connected = true;
+			first_time = false;
 			weston_log("HDMI is connected \n");
+		}
+		if (!b->secondary_connected && connected && !first_time) {
+			DestroyDisplay(PRIMARY_DISPLAY_ID);
+			CreateDisplay(SECONDARY_DISPLAY_ID);
+			display_id = SECONDARY_DISPLAY_ID;
+			fbdev_output_update(&b->output->base, SECONDARY_DISPLAY_NODE);
+			fbdev_output_enable(&b->output->base);
+			SetVSyncState(true);
+			weston_compositor_schedule_repaint(b->compositor);
+			RegisterVSyncCb(display_id, vsync_handler);
+			b->secondary_connected = true;
+			weston_log("HDMI is connected again! \n");
 		}
 	}
 	udev_device_unref(dev);
