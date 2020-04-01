@@ -1955,8 +1955,13 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 
 	buffer->width = gbmbuf->width;
 	buffer->height = gbmbuf->height;
+	/*
+	 * GL-renderer uses the OpenGL convention of texture coordinates, where
+	 * the origin is at bottom-left. Because gbmbuf buffers have the origin
+	 * at top-left, we must invert the Y_INVERT flag to get the image right.
+	 */
 	buffer->y_inverted =
-		!!(gbmbuf->flags & ZLINUX_BUFFER_PARAMS_FLAGS_Y_INVERT);
+		!(gbmbuf->flags & ZLINUX_BUFFER_PARAMS_FLAGS_Y_INVERT);
 	unsigned int secure_status = 0;
 	gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbmbuf->bo, &secure_status);
 	if ((gbmbuf->format != GBM_FORMAT_P010) &&
