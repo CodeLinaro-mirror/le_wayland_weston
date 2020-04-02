@@ -178,6 +178,8 @@ uint32_t early_get_connector_id(uint32_t display_id) {
 
 int early_get_connector_count(uint32_t *count) {
 	int i = 0;
+	int primary_slot = -1;
+	int temp_id = 0;
 
 	if (!drm_mgr_intf_)
 		return -1;
@@ -203,6 +205,8 @@ int early_get_connector_count(uint32_t *count) {
 			case DRM_MODE_CONNECTOR_HDMIB:
 			case DRM_MODE_CONNECTOR_DisplayPort:
 			case DRM_MODE_CONNECTOR_VGA:
+				if (iter.second.is_primary)
+					primary_slot = i;
 				display_id_connid[i] = iter.first;
 				i++;
 				break;
@@ -210,8 +214,17 @@ int early_get_connector_count(uint32_t *count) {
 				break;
 		}
 	}
+
+	/* reserve slot 0 for primary display*/
+	if (primary_slot > 0) {
+		temp_id = display_id_connid[0];
+		display_id_connid[0] = display_id_connid[primary_slot];
+		display_id_connid[primary_slot] = temp_id;
+	}
+
 	*count = i;
-	weston_log("find %d display in early phase\n", i);
+	weston_log("find %d display in early phase primary slot is %d\n", i, primary_slot);
+
 	return 0;
 }
 
