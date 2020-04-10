@@ -74,7 +74,6 @@ early_renderer_import_gbm_buffer(struct weston_compositor *ec,
 
 	int ret=gbm_perform(GBM_PERFORM_GET_PLANE_INFO,bo,&buf_lyt);
 	if(ret == GBM_ERROR_NONE){
-		weston_log("GET Plane Info success\n");
 		gbm_buf->num_planes = buf_lyt.num_planes;
 		for(j = 0;j < buf_lyt.num_planes; j++){
 			gbm_buf->offset[j] = buf_lyt.planes[j].offset;
