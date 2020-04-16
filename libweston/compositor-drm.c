@@ -2754,6 +2754,10 @@ drm_output_destroy(struct weston_output *base)
 		drmModeFreeCrtc(origcrtc);
 	}
 
+	drmModeSetCrtc(b->drm.fd, output->crtc_id, 0,
+		0, 0,
+		0, 0, NULL);
+
 	if (output->pageflip_timer)
 		wl_event_source_remove(output->pageflip_timer);
 
