@@ -128,6 +128,43 @@ uint32_t GetDisplayCount(void)
     return count;
 }
 
+
+void HandlePrimaryDisplayInfo()
+{
+	HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
+	int slot = sdm_displays_info_.size();
+
+	for (iter; iter != hw_displays_info_.end(); ++iter) {
+		if (!iter->second.is_primary)
+			continue;
+		if (iter->second.display_type == sdm::kVirtual)
+			continue;
+		if (!iter->second.is_connected)
+			continue;
+
+		// only one primary display
+		sdm_displays_info_[slot] = iter->second;
+		break;
+	}
+}
+
+void HandleNonPrimaryDisplayInfos(DisplayType type)
+{
+	HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
+	int slot = sdm_displays_info_.size();
+
+	for (iter; iter != hw_displays_info_.end(); ++iter) {
+		if (iter->second.is_primary)
+			continue;
+		if (iter->second.display_type != type)
+			continue;
+		if (!iter->second.is_connected)
+			continue;
+		sdm_displays_info_[slot] = iter->second;
+		slot++;
+	}
+}
+
 int GetDisplayInfos(void)
 {
     DisplayError error = kErrorNone;
@@ -143,33 +180,12 @@ int GetDisplayInfos(void)
     }
 
     // Only create non-virtual display first
-    HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
-    for (iter; iter != hw_displays_info_.end(); ++iter) {
-        if (iter->second.display_type == sdm::kVirtual)
-            continue;
-
-        if (!iter->second.is_connected)
-            continue;
-
-        // Find the primary display and reserve slot 0 for it later.
-        if (iter->second.is_primary) {
-            primary_disp_info = iter->second;
-            primary_slot = count;
-        }
-        sdm_displays_info_[count] = iter->second;
-        count++;
-    }
-
-    if (primary_slot != -1 && primary_slot != 0) {
-        auto iter = sdm_displays_info_.find(0);
-        // Swap value. TODO: need to refine if sdm supports more ordered displays than only primary display
-        if (iter != sdm_displays_info_.end()) {
-            HWDisplayInfo disp_info = iter->second;
-            sdm_displays_info_[0] = primary_disp_info;
-            sdm_displays_info_[primary_slot] = disp_info;
-        }
-    }
-
+    /* primary display*/
+    HandlePrimaryDisplayInfo();
+    /* builtin display*/
+    HandleNonPrimaryDisplayInfos(sdm::kBuiltIn);
+    /* pluggable display*/
+    HandleNonPrimaryDisplayInfos(sdm::kPluggable);
     return 0;
 }
 
