@@ -178,8 +178,8 @@ uint32_t early_get_connector_id(uint32_t display_id) {
 
 int early_get_connector_count(uint32_t *count) {
 	int i = 0;
-	int primary_slot = -1;
-	int temp_id = 0;
+	int32_t conn_id;
+	bool is_connected;
 
 	if (!drm_mgr_intf_)
 		return -1;
@@ -191,39 +191,66 @@ int early_get_connector_count(uint32_t *count) {
 		return -1;
 	}
 
+	/* primary display*/
 	for (auto &iter : conns_info) {
-		int32_t conn_id = ((0 == iter.first) || (iter.first > INT32_MAX)) ? -1 : (int32_t)(iter.first);
+		conn_id = ((0 == iter.first) || (iter.first > INT32_MAX)) ? -1 : (int32_t)(iter.first);
 		if (conn_id < 0)
 			continue;
-		bool is_connected = iter.second.is_connected ? 1 : 0;
+		if (!iter.second.is_primary)
+			continue;
+		is_connected = iter.second.is_connected ? 1 : 0;
 		if (!is_connected)
 			continue;
+		display_id_connid[i] = iter.first;
+		i++;
+		/* only have one primary display*/
+		break;
+	}
+
+	/* builtIn display*/
+	for (auto &iter : conns_info) {
+		conn_id = ((0 == iter.first) || (iter.first > INT32_MAX)) ? -1 : (int32_t)(iter.first);
+		if (conn_id < 0)
+			continue;
+		if (iter.second.is_primary)
+			continue;
+		is_connected = iter.second.is_connected ? 1 : 0;
+		if (!is_connected)
+                        continue;
 		switch (iter.second.type) {
 			case DRM_MODE_CONNECTOR_DSI:
+				display_id_connid[i] = iter.first;
+				i++;
+			default:
+				continue;
+		}
+	}
+
+	/* Pluggable display*/
+	for (auto &iter : conns_info) {
+		conn_id = ((0 == iter.first) || (iter.first > INT32_MAX)) ? -1 : (int32_t)(iter.first);
+		if (conn_id < 0)
+			continue;
+		if (iter.second.is_primary)
+			continue;
+		is_connected = iter.second.is_connected ? 1 : 0;
+		if (!is_connected)
+                        continue;
+		switch (iter.second.type) {
 			case DRM_MODE_CONNECTOR_TV:
 			case DRM_MODE_CONNECTOR_HDMIA:
 			case DRM_MODE_CONNECTOR_HDMIB:
 			case DRM_MODE_CONNECTOR_DisplayPort:
 			case DRM_MODE_CONNECTOR_VGA:
-				if (iter.second.is_primary)
-					primary_slot = i;
 				display_id_connid[i] = iter.first;
 				i++;
 				break;
 			default:
-				break;
+				continue;
 		}
 	}
 
-	/* reserve slot 0 for primary display*/
-	if (primary_slot > 0) {
-		temp_id = display_id_connid[0];
-		display_id_connid[0] = display_id_connid[primary_slot];
-		display_id_connid[primary_slot] = temp_id;
-	}
-
 	*count = i;
-	weston_log("find %d display in early phase primary slot is %d\n", i, primary_slot);
 
 	return 0;
 }
