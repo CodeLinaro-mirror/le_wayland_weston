@@ -51,7 +51,7 @@ class SdmDisplayBufferAllocator : public BufferAllocator {
 
   DisplayError GetAllocatedBufferInfo(const BufferConfig &buffer_config,
                                       AllocatedBufferInfo *allocated_buffer_info);
-  int SetBufferInfo(LayerBufferFormat format, uint32_t *target, uint64_t *flags);
+  int SetBufferInfo(LayerBufferFormat format, uint32_t *target, uint32_t *flags);
   DisplayError GetBufferLayout(const AllocatedBufferInfo &buf_info,
                                uint32_t stride[4], uint32_t offset[4],
                                uint32_t *num_planes);

@@ -92,7 +92,7 @@ DisplayError SdmDisplayBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) 
   uint32_t height = buffer_config.height;
   uint32_t format;
   int metadata_fd = -1;
-  uint64_t alloc_flags = 0;
+  uint32_t alloc_flags = 0;
   uint32_t ubwc_status;
   int error = SetBufferInfo(buffer_config.format, &format, &alloc_flags);
   if (error != 0) {
@@ -161,7 +161,7 @@ uint32_t SdmDisplayBufferAllocator::GetBufferSize(BufferInfo *buffer_info) {
 
   uint32_t size = 0;
   const BufferConfig &bufferConfig = buffer_info->buffer_config;
-  uint64_t usageFlags = 0;
+  uint32_t usageFlags = 0;
   uint32_t gbmFormat = 0;
   struct gbm_buf_info bufInfo;
 
@@ -184,7 +184,7 @@ uint32_t SdmDisplayBufferAllocator::GetBufferSize(BufferInfo *buffer_info) {
   return size;
 }
 
-int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t *target, uint64_t *flags) {
+int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t *target, uint32_t *flags) {
   switch (format) {
   case kFormatRGBA8888:                 *target = GBM_FORMAT_ABGR8888;
                                         break;
@@ -240,7 +240,7 @@ DisplayError SdmDisplayBufferAllocator::GetAllocatedBufferInfo(const BufferConfi
                                                                AllocatedBufferInfo \
                                                                *allocated_buffer_info) {
   /* This API does not fill or provide stride to the caller in AllocatedBufferInfo structure */
-  uint64_t usageFlags = 0;
+  uint32_t usageFlags = 0;
   uint32_t gbmFormat = 0;
   struct gbm_buf_info bufInfo;
   uint32_t alignedWidth = 0;
@@ -334,7 +334,7 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     struct gbm_bo *bo;
     struct gbm_import_fd_data import_fd_data;
     uint32_t format1 = GBM_FORMAT_ARGB8888;
-    uint64_t flags = 0;
+    uint32_t flags = 0;
     uint32_t ubwc_status = 0;
     generic_buf_layout_t buf_layout;
 
