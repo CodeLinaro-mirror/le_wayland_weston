@@ -35,15 +35,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <systemd/sd-login.h>
 #include <unistd.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
+#include "backend.h"
 #include "dbus.h"
 #include "launcher-impl.h"
 
 #define DRM_MAJOR 226
+
+/* major()/minor() */
+#ifdef MAJOR_IN_MKDEV
+#include <sys/mkdev.h>
+#endif
+#ifdef MAJOR_IN_SYSMACROS
+#include <sys/sysmacros.h>
+#endif
 
 struct launcher_logind {
 	struct weston_launcher base;
@@ -218,7 +226,7 @@ launcher_logind_close(struct weston_launcher *launcher, int fd)
 	r = fstat(fd, &st);
 	close(fd);
 	if (r < 0) {
-		weston_log("logind: cannot fstat fd: %m\n");
+		weston_log("logind: cannot fstat fd: %s\n", strerror(errno));
 		return;
 	}
 
@@ -229,11 +237,6 @@ launcher_logind_close(struct weston_launcher *launcher, int fd)
 
 	launcher_logind_release_device(wl, major(st.st_rdev),
 				     minor(st.st_rdev));
-}
-
-static void
-launcher_logind_restore(struct weston_launcher *launcher)
-{
 }
 
 static int
@@ -270,7 +273,7 @@ launcher_logind_activate_vt(struct weston_launcher *launcher, int vt)
 static void
 launcher_logind_set_active(struct launcher_logind *wl, bool active)
 {
-	if (!wl->compositor->session_active == !active)
+	if (wl->compositor->session_active == active)
 		return;
 
 	wl->compositor->session_active = active;
@@ -375,7 +378,6 @@ static void
 disconnected_dbus(struct launcher_logind *wl)
 {
 	weston_log("logind: dbus connection lost, exiting..\n");
-	launcher_logind_restore(&wl->base);
 	exit(-1);
 }
 
@@ -396,7 +398,6 @@ session_removed(struct launcher_logind *wl, DBusMessage *m)
 
 	if (!strcmp(name, wl->sid)) {
 		weston_log("logind: our session got closed, exiting..\n");
-		launcher_logind_restore(&wl->base);
 		exit(-1);
 	}
 }
@@ -488,20 +489,21 @@ device_paused(struct launcher_logind *wl, DBusMessage *m)
 	if (!strcmp(type, "pause"))
 		launcher_logind_pause_device_complete(wl, major, minor);
 
-	if (wl->sync_drm && major == DRM_MAJOR)
-		launcher_logind_set_active(wl, false);
+	if (wl->sync_drm && wl->compositor->backend->device_changed)
+		wl->compositor->backend->device_changed(wl->compositor,
+							makedev(major,minor),
+							false);
 }
 
 static void
 device_resumed(struct launcher_logind *wl, DBusMessage *m)
 {
 	bool r;
-	uint32_t major;
+	uint32_t major, minor;
 
 	r = dbus_message_get_args(m, NULL,
 				  DBUS_TYPE_UINT32, &major,
-				  /*DBUS_TYPE_UINT32, &minor,
-				  DBUS_TYPE_UNIX_FD, &fd,*/
+				  DBUS_TYPE_UINT32, &minor,
 				  DBUS_TYPE_INVALID);
 	if (!r) {
 		weston_log("logind: cannot parse ResumeDevice dbus signal\n");
@@ -514,8 +516,10 @@ device_resumed(struct launcher_logind *wl, DBusMessage *m)
 	 * there is no need for us to handle this event for evdev. For DRM, we
 	 * notify the compositor to wake up. */
 
-	if (wl->sync_drm && major == DRM_MAJOR)
-		launcher_logind_set_active(wl, true);
+	if (wl->sync_drm && wl->compositor->backend->device_changed)
+		wl->compositor->backend->device_changed(wl->compositor,
+							makedev(major,minor),
+							true);
 }
 
 static DBusHandlerResult
@@ -762,17 +766,20 @@ launcher_logind_connect(struct weston_launcher **out, struct weston_compositor *
 		free(t);
 		goto err_session;
 	}
-	free(t);
 
-	r = weston_sd_session_get_vt(wl->sid, &wl->vtnr);
-	if (r < 0) {
-		weston_log("logind: session not running on a VT\n");
-		goto err_session;
-	} else if (tty > 0 && wl->vtnr != (unsigned int )tty) {
-		weston_log("logind: requested VT --tty=%d differs from real session VT %u\n",
-			   tty, wl->vtnr);
-		r = -EINVAL;
-		goto err_session;
+	r = strcmp(t, "seat0");
+	free(t);
+	if (r == 0) {
+		r = weston_sd_session_get_vt(wl->sid, &wl->vtnr);
+		if (r < 0) {
+			weston_log("logind: session not running on a VT\n");
+			goto err_session;
+		} else if (tty > 0 && wl->vtnr != (unsigned int )tty) {
+			weston_log("logind: requested VT --tty=%d differs from real session VT %u\n",
+				   tty, wl->vtnr);
+			r = -EINVAL;
+			goto err_session;
+		}
 	}
 
 	loop = wl_display_get_event_loop(compositor->wl_display);
@@ -845,6 +852,5 @@ const struct launcher_interface launcher_logind_iface = {
 	.open = launcher_logind_open,
 	.close = launcher_logind_close,
 	.activate_vt = launcher_logind_activate_vt,
-	.restore = launcher_logind_restore,
 	.get_vt = launcher_logind_get_vt,
 };

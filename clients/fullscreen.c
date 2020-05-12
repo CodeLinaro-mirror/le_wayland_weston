@@ -30,13 +30,14 @@
 #include <stdarg.h>
 #include <string.h>
 #include <math.h>
+#include <errno.h>
 #include <cairo.h>
 
 #include <linux/input.h>
 #include <wayland-client.h>
 #include "window.h"
 #include "fullscreen-shell-unstable-v1-client-protocol.h"
-#include "shared/zalloc.h"
+#include <libweston/zalloc.h>
 
 struct fs_output {
 	struct wl_list link;
@@ -279,6 +280,9 @@ key_handler(struct window *window, struct input *input, uint32_t time,
 		break;
 
 	case XKB_KEY_z:
+		if (fullscreen->fullscreen)
+			break;
+
 		current_size = (current_size + 1) % 4;
 		fullscreen->width = widths[current_size];
 		fullscreen->height = heights[current_size];
@@ -518,7 +522,8 @@ int main(int argc, char *argv[])
 
 	d = display_create(&argc, argv);
 	if (d == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 

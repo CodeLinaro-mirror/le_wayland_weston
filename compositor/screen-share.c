@@ -40,13 +40,14 @@
 
 #include <wayland-client.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
+#include "backend.h"
+#include "libweston-internal.h"
 #include "weston.h"
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
+#include "shared/timespec-util.h"
 #include "fullscreen-shell-unstable-v1-client-protocol.h"
-
-#define WL_BACKEND_OUTPUT_VERSION 1
 
 struct shared_output {
 	struct weston_output *output;
@@ -86,6 +87,7 @@ struct ss_seat {
 	struct weston_seat base;
 	struct shared_output *output;
 	struct wl_list link;
+	uint32_t id;
 
 	struct {
 		struct wl_seat *seat;
@@ -112,6 +114,9 @@ struct ss_shm_buffer {
 
 struct screen_share {
 	struct weston_compositor *compositor;
+	/* XXX: missing compositor destroy listener
+	 * https://gitlab.freedesktop.org/wayland/weston/issues/298
+	 */
 	char *command;
 };
 
@@ -142,11 +147,14 @@ ss_seat_handle_motion(void *data, struct wl_pointer *pointer,
 		      uint32_t time, wl_fixed_t x, wl_fixed_t y)
 {
 	struct ss_seat *seat = data;
+	struct timespec ts;
+
+	timespec_from_msec(&ts, time);
 
 	/* No transformation of input position is required here because we are
 	 * always receiving the input in the same coordinates as the output. */
 
-	notify_motion_absolute(&seat->base, time,
+	notify_motion_absolute(&seat->base, &ts,
 			       wl_fixed_to_double(x), wl_fixed_to_double(y));
 	notify_pointer_frame(&seat->base);
 }
@@ -157,8 +165,11 @@ ss_seat_handle_button(void *data, struct wl_pointer *pointer,
 		      uint32_t state)
 {
 	struct ss_seat *seat = data;
+	struct timespec ts;
 
-	notify_button(&seat->base, time, button, state);
+	timespec_from_msec(&ts, time);
+
+	notify_button(&seat->base, &ts, button, state);
 	notify_pointer_frame(&seat->base);
 }
 
@@ -168,12 +179,15 @@ ss_seat_handle_axis(void *data, struct wl_pointer *pointer,
 {
 	struct ss_seat *seat = data;
 	struct weston_pointer_axis_event weston_event;
+	struct timespec ts;
 
 	weston_event.axis = axis;
 	weston_event.value = wl_fixed_to_double(value);
 	weston_event.has_discrete = false;
 
-	notify_axis(&seat->base, time, &weston_event);
+	timespec_from_msec(&ts, time);
+
+	notify_axis(&seat->base, &ts, &weston_event);
 	notify_pointer_frame(&seat->base);
 }
 
@@ -199,7 +213,7 @@ ss_seat_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
 	if (format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
 		map_str = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
 		if (map_str == MAP_FAILED) {
-			weston_log("mmap failed: %m\n");
+			weston_log("mmap failed: %s\n", strerror(errno));
 			goto error;
 		}
 
@@ -269,9 +283,11 @@ ss_seat_handle_key(void *data, struct wl_keyboard *keyboard,
 		   uint32_t key, uint32_t state)
 {
 	struct ss_seat *seat = data;
+	struct timespec ts;
 
+	timespec_from_msec(&ts, time);
 	seat->key_serial = serial;
-	notify_key(&seat->base, time, key,
+	notify_key(&seat->base, &ts, key,
 		   state ? WL_KEYBOARD_KEY_STATE_PRESSED :
 			   WL_KEYBOARD_KEY_STATE_RELEASED,
 		   seat->keyboard_state_update);
@@ -354,6 +370,7 @@ ss_seat_create(struct shared_output *so, uint32_t id)
 
 	weston_seat_init(&seat->base, so->output->compositor, "default");
 	seat->output = so;
+	seat->id = id;
 	seat->parent.seat = wl_registry_bind(so->parent.registry, id,
 					     &wl_seat_interface, 1);
 	wl_list_insert(so->seat_list.prev, &seat->link);
@@ -452,13 +469,13 @@ shared_output_get_shm_buffer(struct shared_output *so)
 
 	fd = os_create_anonymous_file(height * stride);
 	if (fd < 0) {
-		weston_log("os_create_anonymous_file: %m\n");
+		weston_log("os_create_anonymous_file: %s\n", strerror(errno));
 		return NULL;
 	}
 
 	data = mmap(NULL, height * stride, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (data == MAP_FAILED) {
-		weston_log("mmap: %m\n");
+		weston_log("mmap: %s\n", strerror(errno));
 		goto out_close;
 	}
 
@@ -703,7 +720,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
 	} else if (strcmp(interface, "wl_output") == 0 && !so->parent.output) {
 		so->parent.output =
 			wl_registry_bind(registry,
-					 id, &wl_output_interface, WL_BACKEND_OUTPUT_VERSION);
+					 id, &wl_output_interface, 1);
 	} else if (strcmp(interface, "wl_seat") == 0) {
 		ss_seat_create(so, id);
 	} else if (strcmp(interface, "wl_shm") == 0) {
@@ -724,6 +741,12 @@ static void
 registry_handle_global_remove(void *data, struct wl_registry *registry,
 			      uint32_t name)
 {
+	struct shared_output *so = data;
+	struct ss_seat *seat, *next;
+
+	wl_list_for_each_safe(seat, next, &so->seat_list, link)
+		if (seat->id == name)
+			ss_seat_destroy(seat);
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -796,27 +819,13 @@ shared_output_repainted(struct wl_listener *listener, void *data)
 	struct shared_output *so =
 		container_of(listener, struct shared_output, frame_listener);
 	pixman_region32_t damage;
+	pixman_region32_t *current_damage = data;
 	struct ss_shm_buffer *sb;
 	int32_t x, y, width, height, stride;
-	int i, nrects, do_yflip;
+	int i, nrects, do_yflip, y_orig;
 	pixman_box32_t *r;
-	uint32_t *cache_data;
-
-	/* Damage in output coordinates */
-	pixman_region32_init(&damage);
-	pixman_region32_intersect(&damage, &so->output->region,
-				  &so->output->previous_damage);
-	pixman_region32_translate(&damage, -so->output->x, -so->output->y);
-
-	/* Apply damage to all buffers */
-	wl_list_for_each(sb, &so->shm.buffers, link)
-		pixman_region32_union(&sb->damage, &sb->damage, &damage);
-
-	/* Transform to buffer coordinates */
-	weston_transformed_region(so->output->width, so->output->height,
-				  so->output->transform,
-				  so->output->current_scale,
-				  &damage, &damage);
+	pixman_image_t *damaged_image;
+	pixman_transform_t transform;
 
 	width = so->output->current_mode->width;
 	height = so->output->current_mode->height;
@@ -832,23 +841,32 @@ shared_output_repainted(struct wl_listener *listener, void *data)
 			pixman_image_create_bits(PIXMAN_a8r8g8b8,
 						 width, height, NULL,
 						 stride);
-		if (!so->cache_image) {
-			shared_output_destroy(so);
-			return;
-		}
+		if (!so->cache_image)
+			goto err_shared_output;
 
-		pixman_region32_fini(&damage);
 		pixman_region32_init_rect(&damage, 0, 0, width, height);
+	} else {
+		/* Damage in output coordinates */
+		pixman_region32_init(&damage);
+		pixman_region32_intersect(&damage, &so->output->region, current_damage);
+		pixman_region32_translate(&damage, -so->output->x, -so->output->y);
 	}
 
-	if (shared_output_ensure_tmp_data(so, &damage) < 0) {
-		shared_output_destroy(so);
-		return;
-	}
+	/* Apply damage to all buffers */
+	wl_list_for_each(sb, &so->shm.buffers, link)
+		pixman_region32_union(&sb->damage, &sb->damage, &damage);
+
+	/* Transform to buffer coordinates */
+	weston_transformed_region(so->output->width, so->output->height,
+				  so->output->transform,
+				  so->output->current_scale,
+				  &damage, &damage);
+
+	if (shared_output_ensure_tmp_data(so, &damage) < 0)
+		goto err_pixman_init;
 
 	do_yflip = !!(so->output->compositor->capabilities & WESTON_CAP_CAPTURE_YFLIP);
 
-	cache_data = pixman_image_get_data(so->cache_image);
 	r = pixman_region32_rectangles(&damage, &nrects);
 	for (i = 0; i < nrects; ++i) {
 		x = r[i].x1;
@@ -856,29 +874,56 @@ shared_output_repainted(struct wl_listener *listener, void *data)
 		width = r[i].x2 - r[i].x1;
 		height = r[i].y2 - r[i].y1;
 
+		if (do_yflip)
+			y_orig = so->output->current_mode->height - r[i].y2;
+		else
+			y_orig = y;
+
+		so->output->compositor->renderer->read_pixels(
+			so->output, PIXMAN_a8r8g8b8, so->tmp_data,
+			x, y_orig, width, height);
+
+		damaged_image = pixman_image_create_bits(PIXMAN_a8r8g8b8,
+							 width, height,
+							 so->tmp_data,
+				(PIXMAN_FORMAT_BPP(PIXMAN_a8r8g8b8) / 8) * width);
+		if (!damaged_image)
+			goto err_pixman_init;
+
 		if (do_yflip) {
-			so->output->compositor->renderer->read_pixels(
-				so->output, PIXMAN_a8r8g8b8, so->tmp_data,
-				x, so->output->current_mode->height - r[i].y2,
-				width, height);
+			pixman_transform_init_scale(&transform,
+						    pixman_fixed_1,
+						    pixman_fixed_minus_1);
 
-			pixman_blt(so->tmp_data, cache_data, -width, stride,
-				   32, 32, 0, 1 - height, x, y, width, height);
-		} else {
-			so->output->compositor->renderer->read_pixels(
-				so->output, PIXMAN_a8r8g8b8, so->tmp_data,
-				x, y, width, height);
+			pixman_transform_translate(&transform, NULL,
+						   0,
+						   pixman_int_to_fixed(height));
 
-			pixman_blt(so->tmp_data, cache_data, width, stride,
-				   32, 32, 0, 0, x, y, width, height);
+			pixman_image_set_transform(damaged_image, &transform);
 		}
-	}
 
-	pixman_region32_fini(&damage);
+		pixman_image_composite32(PIXMAN_OP_SRC,
+					 damaged_image,
+					 NULL,
+					 so->cache_image,
+					 0, 0,
+					 0, 0,
+					 x, y,
+					 width, height);
+		pixman_image_unref(damaged_image);
+	}
 
 	so->cache_dirty = 1;
 
+	pixman_region32_fini(&damage);
 	shared_output_update(so);
+
+	return;
+
+err_pixman_init:
+	pixman_region32_fini(&damage);
+err_shared_output:
+	shared_output_destroy(so);
 }
 
 static struct shared_output *
@@ -930,7 +975,7 @@ shared_output_create(struct weston_output *output, int parent_fd)
 	so->parent.surface =
 		wl_compositor_create_surface(so->parent.compositor);
 	if (!so->parent.surface) {
-		weston_log("Screen share failed: %m\n");
+		weston_log("Screen share failed: %s\n", strerror(errno));
 		goto err_display;
 	}
 
@@ -940,7 +985,7 @@ shared_output_create(struct weston_output *output, int parent_fd)
 								 so->parent.output,
 								 output->current_mode->refresh);
 	if (!so->parent.mode_feedback) {
-		weston_log("Screen share failed: %m\n");
+		weston_log("Screen share failed: %s\n", strerror(errno));
 		goto err_display;
 	}
 	zwp_fullscreen_shell_mode_feedback_v1_add_listener(so->parent.mode_feedback,
@@ -954,7 +999,7 @@ shared_output_create(struct weston_output *output, int parent_fd)
 		wl_event_loop_add_fd(loop, epoll_fd, WL_EVENT_READABLE,
 				     shared_output_handle_event, so);
 	if (!so->event_source) {
-		weston_log("Screen share failed: %m\n");
+		weston_log("Screen share failed: %s\n", strerror(errno));
 		goto err_display;
 	}
 
@@ -968,7 +1013,7 @@ shared_output_create(struct weston_output *output, int parent_fd)
 
 	so->frame_listener.notify = shared_output_repainted;
 	wl_signal_add(&output->frame_signal, &so->frame_listener);
-	output->disable_planes++;
+	weston_output_disable_planes_incr(output);
 	weston_output_damage(output);
 
 	return so;
@@ -989,7 +1034,7 @@ shared_output_destroy(struct shared_output *so)
 {
 	struct ss_shm_buffer *buffer, *bnext;
 
-	so->output->disable_planes--;
+	weston_output_disable_planes_decr(so->output);
 
 	wl_list_for_each_safe(buffer, bnext, &so->shm.buffers, link)
 		ss_shm_buffer_destroy(buffer);
@@ -1023,7 +1068,8 @@ weston_output_share(struct weston_output *output, const char* command)
 	};
 
 	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv) < 0) {
-		weston_log("weston_output_share: socketpair failed: %m\n");
+		weston_log("weston_output_share: socketpair failed: %s\n",
+			   strerror(errno));
 		return NULL;
 	}
 
@@ -1032,7 +1078,8 @@ weston_output_share(struct weston_output *output, const char* command)
 	if (pid == -1) {
 		close(sv[0]);
 		close(sv[1]);
-		weston_log("weston_output_share: fork failed: %m\n");
+		weston_log("weston_output_share: fork failed: %s\n",
+			   strerror(errno));
 		return NULL;
 	}
 
@@ -1044,13 +1091,15 @@ weston_output_share(struct weston_output *output, const char* command)
 		/* Launch clients as the user. Do not launch clients with
 		 * wrong euid. */
 		if (seteuid(getuid()) == -1) {
-			weston_log("weston_output_share: setuid failed: %m\n");
+			weston_log("weston_output_share: setuid failed: %s\n",
+				   strerror(errno));
 			abort();
 		}
 
 		sv[1] = dup(sv[1]);
 		if (sv[1] == -1) {
-			weston_log("weston_output_share: dup failed: %m\n");
+			weston_log("weston_output_share: dup failed: %s\n",
+				   strerror(errno));
 			abort();
 		}
 
@@ -1058,7 +1107,8 @@ weston_output_share(struct weston_output *output, const char* command)
 		setenv("WAYLAND_SERVER_SOCKET", str, 1);
 
 		execv(argv[0], argv);
-		weston_log("weston_output_share: exec failed: %m\n");
+		weston_log("weston_output_share: exec failed: %s\n",
+			   strerror(errno));
 		abort();
 	} else {
 		close(sv[1]);
@@ -1084,8 +1134,8 @@ weston_output_find(struct weston_compositor *c, int32_t x, int32_t y)
 }
 
 static void
-share_output_binding(struct weston_keyboard *keyboard, uint32_t time, uint32_t key,
-		     void *data)
+share_output_binding(struct weston_keyboard *keyboard,
+		     const struct timespec *time, uint32_t key, void *data)
 {
 	struct weston_output *output;
 	struct weston_pointer *pointer;

@@ -40,7 +40,7 @@
 
 char __attribute__((weak)) *server_parameters="";
 
-extern const struct weston_test __start_test_section, __stop_test_section;
+extern const struct weston_test_entry __start_test_section, __stop_test_section;
 
 static const char *test_name_;
 
@@ -50,10 +50,20 @@ get_test_name(void)
 	return test_name_;
 }
 
-static const struct weston_test *
+void
+testlog(const char *fmt, ...)
+{
+	va_list argp;
+
+	va_start(argp, fmt);
+	vfprintf(stderr, fmt, argp);
+	va_end(argp);
+}
+
+static const struct weston_test_entry *
 find_test(const char *name)
 {
-	const struct weston_test *t;
+	const struct weston_test_entry *t;
 
 	for (t = &__start_test_section; t < &__stop_test_section; t++)
 		if (strcmp(t->name, name) == 0)
@@ -63,7 +73,7 @@ find_test(const char *name)
 }
 
 static void
-run_test(const struct weston_test *t, void *data, int iteration)
+run_test(const struct weston_test_entry *t, void *data, int iteration)
 {
 	char str[512];
 
@@ -81,7 +91,7 @@ run_test(const struct weston_test *t, void *data, int iteration)
 static void
 list_tests(void)
 {
-	const struct weston_test *t;
+	const struct weston_test_entry *t;
 
 	fprintf(stderr, "Available test names:\n");
 	for (t = &__start_test_section; t < &__stop_test_section; t++)
@@ -90,7 +100,8 @@ list_tests(void)
 
 /* iteration is valid only if test_data is not NULL */
 static int
-exec_and_report_test(const struct weston_test *t, void *test_data, int iteration)
+exec_and_report_test(const struct weston_test_entry *t,
+		     void *test_data, int iteration)
 {
 	int success = 0;
 	int skip = 0;
@@ -104,7 +115,7 @@ exec_and_report_test(const struct weston_test *t, void *test_data, int iteration
 		run_test(t, test_data, iteration); /* never returns */
 
 	if (waitid(P_ALL, 0, &info, WEXITED)) {
-		fprintf(stderr, "waitid failed: %m\n");
+		fprintf(stderr, "waitid failed: %s\n", strerror(errno));
 		abort();
 	}
 
@@ -129,9 +140,6 @@ exec_and_report_test(const struct weston_test *t, void *test_data, int iteration
 		break;
 	}
 
-	if (t->must_fail)
-		success = !success;
-
 	if (success && !hardfail) {
 		fprintf(stderr, ", pass.\n");
 		return 1;
@@ -149,7 +157,7 @@ exec_and_report_test(const struct weston_test *t, void *test_data, int iteration
  * table_data = NULL.
  */
 static int
-iterate_test(const struct weston_test *t, int *passed, int *skipped)
+iterate_test(const struct weston_test_entry *t, int *passed, int *skipped)
 {
 	int ret, i;
 	void *current_test_data = (void *) t->table_data;
@@ -167,7 +175,7 @@ iterate_test(const struct weston_test *t, int *passed, int *skipped)
 
 int main(int argc, char *argv[])
 {
-	const struct weston_test *t;
+	const struct weston_test_entry *t;
 	int total = 0;
 	int pass = 0;
 	int skip = 0;

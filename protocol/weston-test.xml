@@ -40,17 +40,33 @@
       <arg name="y" type="int"/>
     </request>
     <request name="move_pointer">
+      <arg name="tv_sec_hi" type="uint"/>
+      <arg name="tv_sec_lo" type="uint"/>
+      <arg name="tv_nsec" type="uint"/>
       <arg name="x" type="int"/>
       <arg name="y" type="int"/>
     </request>
     <request name="send_button">
+      <arg name="tv_sec_hi" type="uint"/>
+      <arg name="tv_sec_lo" type="uint"/>
+      <arg name="tv_nsec" type="uint"/>
       <arg name="button" type="int"/>
       <arg name="state" type="uint"/>
+    </request>
+    <request name="send_axis">
+      <arg name="tv_sec_hi" type="uint"/>
+      <arg name="tv_sec_lo" type="uint"/>
+      <arg name="tv_nsec" type="uint"/>
+      <arg name="axis" type="uint"/>
+      <arg name="value" type="fixed"/>
     </request>
     <request name="activate_surface">
       <arg name="surface" type="object" interface="wl_surface" allow-null="true"/>
     </request>
     <request name="send_key">
+      <arg name="tv_sec_hi" type="uint"/>
+      <arg name="tv_sec_lo" type="uint"/>
+      <arg name="tv_nsec" type="uint"/>
       <arg name="key" type="uint"/>
       <arg name="state" type="uint"/>
     </request>
@@ -80,6 +96,15 @@
 		provided buffer.
 	  </description>
     </event>
+    <request name="send_touch">
+      <arg name="tv_sec_hi" type="uint"/>
+      <arg name="tv_sec_lo" type="uint"/>
+      <arg name="tv_nsec" type="uint"/>
+      <arg name="touch_id" type="int"/>
+      <arg name="x" type="fixed"/>
+      <arg name="y" type="fixed"/>
+      <arg name="touch_type" type="uint"/>
+    </request>
   </interface>
 
   <interface name="weston_test_runner" version="1">

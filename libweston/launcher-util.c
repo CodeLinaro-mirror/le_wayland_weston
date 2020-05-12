@@ -26,7 +26,7 @@
 
 #include "config.h"
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 
 #include "launcher-util.h"
 #include "launcher-impl.h"
@@ -86,16 +86,9 @@ weston_launcher_activate_vt(struct weston_launcher *launcher, int vt)
 	return launcher->iface->activate_vt(launcher, vt);
 }
 
-WL_EXPORT void
-weston_launcher_restore(struct weston_launcher *launcher)
-{
-	launcher->iface->restore(launcher);
-}
-
-
 static void
 switch_vt_binding(struct weston_keyboard *keyboard,
-		  uint32_t time, uint32_t key, void *data)
+		  const struct timespec *time, uint32_t key, void *data)
 {
 	struct weston_compositor *compositor = data;
 	struct weston_launcher *launcher = compositor->launcher;
@@ -111,6 +104,10 @@ WL_EXPORT void
 weston_setup_vt_switch_bindings(struct weston_compositor *compositor)
 {
 	uint32_t key;
+	struct weston_launcher *launcher = compositor->launcher;
+
+	if (launcher->iface->get_vt(launcher) <= 0)
+		return;
 
 	if (compositor->vt_switching == false)
 		return;

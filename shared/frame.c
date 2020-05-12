@@ -34,6 +34,7 @@
 #include <linux/input.h>
 
 #include "cairo-util.h"
+#include "shared/file-util.h"
 
 enum frame_button_flags {
 	FRAME_BUTTON_ALIGN_RIGHT = 0x1,
@@ -98,6 +99,8 @@ struct frame {
 	int opaque_margin;
 	int geometry_dirty;
 
+	cairo_rectangle_int_t title_rect;
+
 	uint32_t status;
 
 	struct wl_list buttons;
@@ -106,9 +109,9 @@ struct frame {
 };
 
 static struct frame_button *
-frame_button_create(struct frame *frame, const char *icon,
-		    enum frame_status status_effect,
-		    enum frame_button_flags flags)
+frame_button_create_from_surface(struct frame *frame, cairo_surface_t *icon,
+                                 enum frame_status status_effect,
+                                 enum frame_button_flags flags)
 {
 	struct frame_button *button;
 
@@ -116,12 +119,7 @@ frame_button_create(struct frame *frame, const char *icon,
 	if (!button)
 		return NULL;
 
-	button->icon = cairo_image_surface_create_from_png(icon);
-	if (!button->icon) {
-		free(button);
-		return NULL;
-	}
-
+	button->icon = icon;
 	button->frame = frame;
 	button->flags = flags;
 	button->status_effect = status_effect;
@@ -129,6 +127,30 @@ frame_button_create(struct frame *frame, const char *icon,
 	wl_list_insert(frame->buttons.prev, &button->link);
 
 	return button;
+}
+
+static struct frame_button *
+frame_button_create(struct frame *frame, const char *icon_name,
+                    enum frame_status status_effect,
+                    enum frame_button_flags flags)
+{
+	struct frame_button *button;
+	cairo_surface_t *icon;
+
+	icon = cairo_image_surface_create_from_png(icon_name);
+	if (cairo_surface_status(icon) != CAIRO_STATUS_SUCCESS)
+		goto error;
+
+	button = frame_button_create_from_surface(frame, icon, status_effect,
+	                                          flags);
+	if (!button)
+		goto error;
+
+	return button;
+
+error:
+	cairo_surface_destroy(icon);
+	return NULL;
 }
 
 static void
@@ -303,7 +325,7 @@ frame_destroy(struct frame *frame)
 
 struct frame *
 frame_create(struct theme *t, int32_t width, int32_t height, uint32_t buttons,
-	     const char *title)
+             const char *title, cairo_surface_t *icon)
 {
 	struct frame *frame;
 	struct frame_button *button;
@@ -330,40 +352,71 @@ frame_create(struct theme *t, int32_t width, int32_t height, uint32_t buttons,
 	}
 
 	if (title) {
-		button = frame_button_create(frame,
-					     DATADIR "/weston/icon_window.png",
-					     FRAME_STATUS_MENU,
-					     FRAME_BUTTON_CLICK_DOWN);
+		if (icon) {
+			button = frame_button_create_from_surface(frame,
+			                                          icon,
+			                                          FRAME_STATUS_MENU,
+			                                          FRAME_BUTTON_CLICK_DOWN);
+		} else {
+			char *name = file_name_with_datadir("icon_window.png");
+
+			if (!name)
+				goto free_frame;
+
+			button = frame_button_create(frame,
+			                             name,
+			                             FRAME_STATUS_MENU,
+			                             FRAME_BUTTON_CLICK_DOWN);
+			free(name);
+		}
 		if (!button)
 			goto free_frame;
 	}
 
 	if (buttons & FRAME_BUTTON_CLOSE) {
+		char *name = file_name_with_datadir("sign_close.png");
+
+		if (!name)
+			goto free_frame;
+
 		button = frame_button_create(frame,
-					     DATADIR "/weston/sign_close.png",
+					     name,
 					     FRAME_STATUS_CLOSE,
 					     FRAME_BUTTON_ALIGN_RIGHT |
 					     FRAME_BUTTON_DECORATED);
+		free(name);
 		if (!button)
 			goto free_frame;
 	}
 
 	if (buttons & FRAME_BUTTON_MAXIMIZE) {
+		char *name = file_name_with_datadir("sign_maximize.png");
+
+		if (!name)
+			goto free_frame;
+
 		button = frame_button_create(frame,
-					     DATADIR "/weston/sign_maximize.png",
+					     name,
 					     FRAME_STATUS_MAXIMIZE,
 					     FRAME_BUTTON_ALIGN_RIGHT |
 					     FRAME_BUTTON_DECORATED);
+		free(name);
 		if (!button)
 			goto free_frame;
 	}
 
 	if (buttons & FRAME_BUTTON_MINIMIZE) {
+		char *name = file_name_with_datadir("sign_minimize.png");
+
+		if (!name)
+			goto free_frame;
+
 		button = frame_button_create(frame,
-					     DATADIR "/weston/sign_minimize.png",
+					     name,
 					     FRAME_STATUS_MINIMIZE,
 					     FRAME_BUTTON_ALIGN_RIGHT |
 					     FRAME_BUTTON_DECORATED);
+		free(name);
 		if (!button)
 			goto free_frame;
 	}
@@ -393,6 +446,20 @@ frame_set_title(struct frame *frame, const char *title)
 	frame->status |= FRAME_STATUS_REPAINT;
 
 	return 0;
+}
+
+void
+frame_set_icon(struct frame *frame, cairo_surface_t *icon)
+{
+	struct frame_button *button;
+	wl_list_for_each(button, &frame->buttons, link) {
+		if (button->status_effect != FRAME_STATUS_MENU)
+			continue;
+		if (button->icon)
+			cairo_surface_destroy(button->icon);
+		button->icon = icon;
+		frame->status |= FRAME_STATUS_REPAINT;
+	}
 }
 
 void
@@ -531,6 +598,11 @@ frame_refresh_geometry(struct frame *frame)
 			x_l += button_padding;
 		}
 	}
+
+	frame->title_rect.x = x_l;
+	frame->title_rect.y = y;
+	frame->title_rect.width = x_r - x_l;
+	frame->title_rect.height = titlebar_height;
 
 	frame->geometry_dirty = 0;
 }
@@ -938,7 +1010,8 @@ frame_repaint(struct frame *frame, cairo_t *cr)
 
 	cairo_save(cr);
 	theme_render_frame(frame->theme, cr, frame->width, frame->height,
-			   frame->title, &frame->buttons, flags);
+			   frame->title, &frame->title_rect,
+			   &frame->buttons, flags);
 	cairo_restore(cr);
 
 	wl_list_for_each(button, &frame->buttons, link)

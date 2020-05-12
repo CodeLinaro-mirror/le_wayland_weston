@@ -24,19 +24,22 @@
 #include "config.h"
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <cairo.h>
 #include <math.h>
 #include <assert.h>
+#include <getopt.h>
+#include <errno.h>
 
 #include <linux/input.h>
 #include <wayland-client.h>
 
 #include "window.h"
 #include "shared/helpers.h"
-#include "shared/matrix.h"
+#include <libweston/matrix.h>
 
 /* Our points for the calibration must be not be on a line */
 static const struct {
@@ -218,7 +221,7 @@ redraw_handler(struct widget *widget, void *data)
 }
 
 static struct calibrator *
-calibrator_create(struct display *display)
+calibrator_create(struct display *display, bool enable_button)
 {
 	struct calibrator *calibrator;
 
@@ -233,7 +236,8 @@ calibrator_create(struct display *display)
 
 	calibrator->current_test = ARRAY_LENGTH(test_ratios) - 1;
 
-	widget_set_button_handler(calibrator->widget, button_handler);
+	if (enable_button)
+		widget_set_button_handler(calibrator->widget, button_handler);
 	widget_set_touch_down_handler(calibrator->widget, touch_handler);
 	widget_set_redraw_handler(calibrator->widget, redraw_handler);
 
@@ -250,21 +254,49 @@ calibrator_destroy(struct calibrator *calibrator)
 	free(calibrator);
 }
 
+static void
+help(const char *name)
+{
+	fprintf(stderr, "Usage: %s [args...]\n", name);
+	fprintf(stderr, "  -m, --enable-mouse       Enable mouse for testing the touchscreen\n");
+	fprintf(stderr, "  -h, --help      Display this help message\n");
+}
 
 int
 main(int argc, char *argv[])
 {
 	struct display *display;
 	struct calibrator *calibrator;
+	int c;
+	bool enable_mouse = 0;
+	struct option opts[] = {
+		{ "enable-mouse",     no_argument, NULL, 'm' },
+		{ "help",    no_argument,       NULL, 'h' },
+		{ 0,         0,                 NULL,  0  }
+	};
+
+	while ((c = getopt_long(argc, argv, "mh", opts, NULL)) != -1) {
+		switch (c) {
+		case 'm':
+			enable_mouse = 1;
+			break;
+		case 'h':
+			help(argv[0]);
+			exit(EXIT_FAILURE);
+		default:
+			break;
+		}
+	}
 
 	display = display_create(&argc, argv);
 
 	if (display == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 
-	calibrator = calibrator_create(display);
+	calibrator = calibrator_create(display, enable_mouse);
 
 	if (!calibrator)
 		return -1;

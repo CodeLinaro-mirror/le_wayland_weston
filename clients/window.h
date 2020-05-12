@@ -27,11 +27,12 @@
 #include "config.h"
 
 #include <stdint.h>
+#include <time.h>
 #include <xkbcommon/xkbcommon.h>
 #include <wayland-client.h>
 #include <cairo.h>
-#include "shared/config-parser.h"
-#include "shared/zalloc.h"
+#include <libweston/config-parser.h>
+#include <libweston/zalloc.h>
 #include "shared/platform.h"
 
 struct window;
@@ -133,8 +134,6 @@ display_release_window_surface(struct display *display,
 #define SURFACE_SHM    0x02
 
 #define SURFACE_HINT_RESIZE 0x10
-
-#define SURFACE_HINT_RGB565 0x100
 
 cairo_surface_t *
 display_create_surface(struct display *display,
@@ -507,15 +506,6 @@ window_get_title(struct window *window);
 void
 window_set_text_cursor_position(struct window *window, int32_t x, int32_t y);
 
-enum preferred_format {
-	WINDOW_PREFERRED_FORMAT_NONE,
-	WINDOW_PREFERRED_FORMAT_RGB565
-};
-
-void
-window_set_preferred_format(struct window *window,
-			    enum preferred_format format);
-
 int
 widget_set_tooltip(struct widget *parent, char *entry, float x, float y);
 
@@ -604,9 +594,21 @@ widget_set_axis_handlers(struct widget *widget,
 			widget_axis_discrete_handler_t axis_discrete_handler);
 
 void
+window_inhibit_redraw(struct window *window);
+void
+window_uninhibit_redraw(struct window *window);
+void
 widget_schedule_redraw(struct widget *widget);
 void
 widget_set_use_cairo(struct widget *widget, int use_cairo);
+
+/*
+ * Sets the viewport destination for the widget's surface
+ * return 0 on success and -1 on failure. Set width and height to
+ * -1 to reset the viewport.
+ */
+int
+widget_set_viewport_destination(struct widget *widget, int width, int height);
 
 struct widget *
 window_frame_create(struct window *window, void *data);
@@ -712,5 +714,31 @@ keysym_modifiers_add(struct wl_array *modifiers_map,
 xkb_mod_mask_t
 keysym_modifiers_get_mask(struct wl_array *modifiers_map,
 			  const char *name);
+
+struct toytimer;
+typedef void (*toytimer_cb)(struct toytimer *);
+
+struct toytimer {
+	struct display *display;
+	struct task tsk;
+	int fd;
+	toytimer_cb callback;
+};
+
+void
+toytimer_init(struct toytimer *tt, clockid_t clock, struct display *display,
+	      toytimer_cb callback);
+
+void
+toytimer_fini(struct toytimer *tt);
+
+void
+toytimer_arm(struct toytimer *tt, const struct itimerspec *its);
+
+void
+toytimer_arm_once_usec(struct toytimer *tt, uint32_t usec);
+
+void
+toytimer_disarm(struct toytimer *tt);
 
 #endif

@@ -40,6 +40,8 @@
 				WL_SEAT_CAPABILITY_POINTER  |\
 				WL_SEAT_CAPABILITY_TOUCH)
 
+char *server_parameters = "--shell=weston-test-desktop-shell.so";
+
 /* simply test if weston sends the right capabilities when
  * some devices are removed */
 TEST(seat_capabilities_test)
@@ -309,4 +311,36 @@ TEST(get_device_after_destroy_multiple)
 	for (i = 0; i < 30; ++i) {
 		get_device_after_destroy();
 	}
+}
+
+TEST(seats_have_names)
+{
+	struct client *cl = create_client_and_test_surface(100, 100, 100, 100);
+	struct input *input;
+
+	wl_list_for_each(input, &cl->inputs, link) {
+		assert(input->seat_name);
+	}
+}
+
+TEST(seat_destroy_and_recreate)
+{
+	struct client *cl = create_client_and_test_surface(100, 100, 100, 100);
+
+	weston_test_device_release(cl->test->weston_test, "seat");
+	/* Roundtrip to receive and handle the seat global removal event */
+	client_roundtrip(cl);
+
+	assert(!cl->input);
+
+	weston_test_device_add(cl->test->weston_test, "seat");
+	/* First roundtrip to send request and receive new seat global */
+	client_roundtrip(cl);
+	/* Second roundtrip to handle seat events and set up input devices */
+	client_roundtrip(cl);
+
+	assert(cl->input);
+	assert(cl->input->pointer);
+	assert(cl->input->keyboard);
+	assert(cl->input->touch);
 }

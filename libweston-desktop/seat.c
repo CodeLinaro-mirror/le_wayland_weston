@@ -30,11 +30,12 @@
 
 #include <wayland-server.h>
 
-#include "compositor.h"
-#include "zalloc.h"
+#include <libweston/libweston.h>
+#include <libweston/zalloc.h>
 
-#include "libweston-desktop.h"
+#include <libweston-desktop/libweston-desktop.h>
 #include "internal.h"
+#include "shared/timespec-util.h"
 
 struct weston_desktop_seat {
 	struct wl_listener seat_destroy_listener;
@@ -53,7 +54,8 @@ static void weston_desktop_seat_popup_grab_end(struct weston_desktop_seat *seat)
 
 static void
 weston_desktop_seat_popup_grab_keyboard_key(struct weston_keyboard_grab *grab,
-					    uint32_t time, uint32_t key,
+					    const struct timespec *time,
+					    uint32_t key,
 					    enum wl_keyboard_key_state state)
 {
 	weston_keyboard_send_key(grab->keyboard, time, key, state);
@@ -108,7 +110,7 @@ weston_desktop_seat_popup_grab_pointer_focus(struct weston_pointer_grab *grab)
 
 static void
 weston_desktop_seat_popup_grab_pointer_motion(struct weston_pointer_grab *grab,
-					      uint32_t time,
+					      const struct timespec *time,
 					      struct weston_pointer_motion_event *event)
 {
 	weston_pointer_send_motion(grab->pointer, time, event);
@@ -116,7 +118,8 @@ weston_desktop_seat_popup_grab_pointer_motion(struct weston_pointer_grab *grab,
 
 static void
 weston_desktop_seat_popup_grab_pointer_button(struct weston_pointer_grab *grab,
-					      uint32_t time, uint32_t button,
+					      const struct timespec *time,
+					      uint32_t button,
 					      enum wl_pointer_button_state state)
 {
 	struct weston_desktop_seat *seat =
@@ -130,13 +133,14 @@ weston_desktop_seat_popup_grab_pointer_button(struct weston_pointer_grab *grab,
 	if (weston_pointer_has_focus_resource(pointer))
 		weston_pointer_send_button(pointer, time, button, state);
 	else if (state == WL_POINTER_BUTTON_STATE_RELEASED &&
-		 (initial_up || (time - grab->pointer->grab_time) > 500))
+		 (initial_up ||
+		  (timespec_sub_to_msec(time, &grab->pointer->grab_time) > 500)))
 		weston_desktop_seat_popup_grab_end(seat);
 }
 
 static void
 weston_desktop_seat_popup_grab_pointer_axis(struct weston_pointer_grab *grab,
-					    uint32_t time,
+					    const struct timespec *time,
 					    struct weston_pointer_axis_event *event)
 {
 	weston_pointer_send_axis(grab->pointer, time, event);
@@ -176,7 +180,8 @@ static const struct weston_pointer_grab_interface weston_desktop_seat_pointer_po
 
 static void
 weston_desktop_seat_popup_grab_touch_down(struct weston_touch_grab *grab,
-					  uint32_t time, int touch_id,
+					  const struct timespec *time,
+					  int touch_id,
 					  wl_fixed_t sx, wl_fixed_t sy)
 {
 	weston_touch_send_down(grab->touch, time, touch_id, sx, sy);
@@ -184,14 +189,16 @@ weston_desktop_seat_popup_grab_touch_down(struct weston_touch_grab *grab,
 
 static void
 weston_desktop_seat_popup_grab_touch_up(struct weston_touch_grab *grab,
-					uint32_t time, int touch_id)
+					const struct timespec *time,
+					int touch_id)
 {
 	weston_touch_send_up(grab->touch, time, touch_id);
 }
 
 static void
 weston_desktop_seat_popup_grab_touch_motion(struct weston_touch_grab *grab,
-					    uint32_t time, int touch_id,
+					    const struct timespec *time,
+					    int touch_id,
 					    wl_fixed_t sx, wl_fixed_t sy)
 {
 	weston_touch_send_motion(grab->touch, time, touch_id, sx, sy);
@@ -235,6 +242,9 @@ weston_desktop_seat_from_seat(struct weston_seat *wseat)
 	struct wl_listener *listener;
 	struct weston_desktop_seat *seat;
 
+	if (wseat == NULL)
+		return NULL;
+
 	listener = wl_signal_get(&wseat->destroy_signal,
 				 weston_desktop_seat_destroy);
 	if (listener != NULL)
@@ -263,7 +273,7 @@ weston_desktop_seat_from_seat(struct weston_seat *wseat)
 struct weston_desktop_surface *
 weston_desktop_seat_popup_grab_get_topmost_surface(struct weston_desktop_seat *seat)
 {
-	if (wl_list_empty(&seat->popup_grab.surfaces))
+	if (seat == NULL || wl_list_empty(&seat->popup_grab.surfaces))
 		return NULL;
 
 	struct wl_list *grab_link = seat->popup_grab.surfaces.next;
@@ -275,11 +285,14 @@ bool
 weston_desktop_seat_popup_grab_start(struct weston_desktop_seat *seat,
 				     struct wl_client *client, uint32_t serial)
 {
-	assert(seat->popup_grab.client == NULL || seat->popup_grab.client == client);
+	assert(seat == NULL || seat->popup_grab.client == NULL ||
+	       seat->popup_grab.client == client);
 
-	struct weston_keyboard *keyboard = weston_seat_get_keyboard(seat->seat);
-	struct weston_pointer *pointer = weston_seat_get_pointer(seat->seat);
-	struct weston_touch *touch = weston_seat_get_touch(seat->seat);
+	struct weston_seat *wseat = seat != NULL ? seat->seat : NULL;
+	/* weston_seat_get_* functions can properly handle a NULL wseat */
+	struct weston_keyboard *keyboard = weston_seat_get_keyboard(wseat);
+	struct weston_pointer *pointer = weston_seat_get_pointer(wseat);
+	struct weston_touch *touch = weston_seat_get_touch(wseat);
 
 	if ((keyboard == NULL || keyboard->grab_serial != serial) &&
 	    (pointer == NULL || pointer->grab_serial != serial) &&

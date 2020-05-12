@@ -36,7 +36,7 @@
 
 #include "shared/os-compatibility.h"
 #include "shared/xalloc.h"
-#include "shared/zalloc.h"
+#include <libweston/zalloc.h>
 #include "weston-test-client-helper.h"
 
 #define max(a, b) (((a) > (b)) ? (a) : (b))
@@ -130,7 +130,7 @@ pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
 	pointer->x = wl_fixed_to_int(x);
 	pointer->y = wl_fixed_to_int(y);
 
-	fprintf(stderr, "test-client: got pointer enter %d %d, surface %p\n",
+	testlog("test-client: got pointer enter %d %d, surface %p\n",
 		pointer->x, pointer->y, pointer->focus);
 }
 
@@ -142,71 +142,90 @@ pointer_handle_leave(void *data, struct wl_pointer *wl_pointer,
 
 	pointer->focus = NULL;
 
-	fprintf(stderr, "test-client: got pointer leave, surface %p\n",
+	testlog("test-client: got pointer leave, surface %p\n",
 		wl_surface ? wl_surface_get_user_data(wl_surface) : NULL);
 }
 
 static void
 pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
-		      uint32_t time, wl_fixed_t x, wl_fixed_t y)
+		      uint32_t time_msec, wl_fixed_t x, wl_fixed_t y)
 {
 	struct pointer *pointer = data;
 
 	pointer->x = wl_fixed_to_int(x);
 	pointer->y = wl_fixed_to_int(y);
+	pointer->motion_time_msec = time_msec;
+	pointer->motion_time_timespec = pointer->input_timestamp;
+	pointer->input_timestamp = (struct timespec) { 0 };
 
-	fprintf(stderr, "test-client: got pointer motion %d %d\n",
+	testlog("test-client: got pointer motion %d %d\n",
 		pointer->x, pointer->y);
 }
 
 static void
 pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
-		      uint32_t serial, uint32_t time, uint32_t button,
+		      uint32_t serial, uint32_t time_msec, uint32_t button,
 		      uint32_t state)
 {
 	struct pointer *pointer = data;
 
 	pointer->button = button;
 	pointer->state = state;
+	pointer->button_time_msec = time_msec;
+	pointer->button_time_timespec = pointer->input_timestamp;
+	pointer->input_timestamp = (struct timespec) { 0 };
 
-	fprintf(stderr, "test-client: got pointer button %u %u\n",
-		button, state);
+	testlog("test-client: got pointer button %u %u\n", button, state);
 }
 
 static void
 pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
-		    uint32_t time, uint32_t axis, wl_fixed_t value)
+		    uint32_t time_msec, uint32_t axis, wl_fixed_t value)
 {
-	fprintf(stderr, "test-client: got pointer axis %u %f\n",
+	struct pointer *pointer = data;
+
+	pointer->axis = axis;
+	pointer->axis_value = wl_fixed_to_double(value);
+	pointer->axis_time_msec = time_msec;
+	pointer->axis_time_timespec = pointer->input_timestamp;
+	pointer->input_timestamp = (struct timespec) { 0 };
+
+	testlog("test-client: got pointer axis %u %f\n",
 		axis, wl_fixed_to_double(value));
 }
 
 static void
 pointer_handle_frame(void *data, struct wl_pointer *wl_pointer)
 {
-	fprintf(stderr, "test-client: got pointer frame\n");
+	testlog("test-client: got pointer frame\n");
 }
 
 static void
 pointer_handle_axis_source(void *data, struct wl_pointer *wl_pointer,
 			     uint32_t source)
 {
-	fprintf(stderr, "test-client: got pointer axis source %u\n", source);
+	testlog("test-client: got pointer axis source %u\n", source);
 }
 
 static void
 pointer_handle_axis_stop(void *data, struct wl_pointer *wl_pointer,
-			 uint32_t time, uint32_t axis)
+			 uint32_t time_msec, uint32_t axis)
 {
-	fprintf(stderr, "test-client: got pointer axis stop\n");
+	struct pointer *pointer = data;
+
+	pointer->axis = axis;
+	pointer->axis_stop_time_msec = time_msec;
+	pointer->axis_stop_time_timespec = pointer->input_timestamp;
+	pointer->input_timestamp = (struct timespec) { 0 };
+
+	testlog("test-client: got pointer axis stop %u\n", axis);
 }
 
 static void
 pointer_handle_axis_discrete(void *data, struct wl_pointer *wl_pointer,
 			     uint32_t axis, int32_t value)
 {
-	fprintf(stderr, "test-client: got pointer axis discrete %u %d\n",
-		axis, value);
+	testlog("test-client: got pointer axis discrete %u %d\n", axis, value);
 }
 
 static const struct wl_pointer_listener pointer_listener = {
@@ -227,7 +246,7 @@ keyboard_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
 {
 	close(fd);
 
-	fprintf(stderr, "test-client: got keyboard keymap\n");
+	testlog("test-client: got keyboard keymap\n");
 }
 
 static void
@@ -242,7 +261,7 @@ keyboard_handle_enter(void *data, struct wl_keyboard *wl_keyboard,
 	else
 		keyboard->focus = NULL;
 
-	fprintf(stderr, "test-client: got keyboard enter, surface %p\n",
+	testlog("test-client: got keyboard enter, surface %p\n",
 		keyboard->focus);
 }
 
@@ -254,21 +273,24 @@ keyboard_handle_leave(void *data, struct wl_keyboard *wl_keyboard,
 
 	keyboard->focus = NULL;
 
-	fprintf(stderr, "test-client: got keyboard leave, surface %p\n",
+	testlog("test-client: got keyboard leave, surface %p\n",
 		wl_surface ? wl_surface_get_user_data(wl_surface) : NULL);
 }
 
 static void
 keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
-		    uint32_t serial, uint32_t time, uint32_t key,
+		    uint32_t serial, uint32_t time_msec, uint32_t key,
 		    uint32_t state)
 {
 	struct keyboard *keyboard = data;
 
 	keyboard->key = key;
 	keyboard->state = state;
+	keyboard->key_time_msec = time_msec;
+	keyboard->key_time_timespec = keyboard->input_timestamp;
+	keyboard->input_timestamp = (struct timespec) { 0 };
 
-	fprintf(stderr, "test-client: got keyboard key %u %u\n", key, state);
+	testlog("test-client: got keyboard key %u %u\n", key, state);
 }
 
 static void
@@ -284,7 +306,7 @@ keyboard_handle_modifiers(void *data, struct wl_keyboard *wl_keyboard,
 	keyboard->mods_locked = mods_locked;
 	keyboard->group = group;
 
-	fprintf(stderr, "test-client: got keyboard modifiers %u %u %u %u\n",
+	testlog("test-client: got keyboard modifiers %u %u %u %u\n",
 		mods_depressed, mods_latched, mods_locked, group);
 }
 
@@ -297,8 +319,7 @@ keyboard_handle_repeat_info(void *data, struct wl_keyboard *wl_keyboard,
 	keyboard->repeat_info.rate = rate;
 	keyboard->repeat_info.delay = delay;
 
-	fprintf(stderr, "test-client: got keyboard repeat_info %d %d\n",
-		rate, delay);
+	testlog("test-client: got keyboard repeat_info %d %d\n", rate, delay);
 }
 
 static const struct wl_keyboard_listener keyboard_listener = {
@@ -312,38 +333,49 @@ static const struct wl_keyboard_listener keyboard_listener = {
 
 static void
 touch_handle_down(void *data, struct wl_touch *wl_touch,
-		  uint32_t serial, uint32_t time, struct wl_surface *surface,
-		  int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
+		  uint32_t serial, uint32_t time_msec,
+		  struct wl_surface *surface, int32_t id,
+		  wl_fixed_t x_w, wl_fixed_t y_w)
 {
 	struct touch *touch = data;
 
 	touch->down_x = wl_fixed_to_int(x_w);
 	touch->down_y = wl_fixed_to_int(y_w);
 	touch->id = id;
+	touch->down_time_msec = time_msec;
+	touch->down_time_timespec = touch->input_timestamp;
+	touch->input_timestamp = (struct timespec) { 0 };
 
-	fprintf(stderr, "test-client: got touch down %d %d, surf: %p, id: %d\n",
+	testlog("test-client: got touch down %d %d, surf: %p, id: %d\n",
 		touch->down_x, touch->down_y, surface, id);
 }
 
 static void
 touch_handle_up(void *data, struct wl_touch *wl_touch,
-		uint32_t serial, uint32_t time, int32_t id)
+		uint32_t serial, uint32_t time_msec, int32_t id)
 {
 	struct touch *touch = data;
 	touch->up_id = id;
+	touch->up_time_msec = time_msec;
+	touch->up_time_timespec = touch->input_timestamp;
+	touch->input_timestamp = (struct timespec) { 0 };
 
-	fprintf(stderr, "test-client: got touch up, id: %d\n", id);
+	testlog("test-client: got touch up, id: %d\n", id);
 }
 
 static void
 touch_handle_motion(void *data, struct wl_touch *wl_touch,
-		    uint32_t time, int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
+		    uint32_t time_msec, int32_t id,
+		    wl_fixed_t x_w, wl_fixed_t y_w)
 {
 	struct touch *touch = data;
 	touch->x = wl_fixed_to_int(x_w);
 	touch->y = wl_fixed_to_int(y_w);
+	touch->motion_time_msec = time_msec;
+	touch->motion_time_timespec = touch->input_timestamp;
+	touch->input_timestamp = (struct timespec) { 0 };
 
-	fprintf(stderr, "test-client: got touch motion, %d %d, id: %d\n",
+	testlog("test-client: got touch motion, %d %d, id: %d\n",
 		touch->x, touch->y, id);
 }
 
@@ -354,7 +386,7 @@ touch_handle_frame(void *data, struct wl_touch *wl_touch)
 
 	++touch->frame_no;
 
-	fprintf(stderr, "test-client: got touch frame (%d)\n", touch->frame_no);
+	testlog("test-client: got touch frame (%d)\n", touch->frame_no);
 }
 
 static void
@@ -364,7 +396,7 @@ touch_handle_cancel(void *data, struct wl_touch *wl_touch)
 
 	++touch->cancel_no;
 
-	fprintf(stderr, "test-client: got touch cancel (%d)\n", touch->cancel_no);
+	testlog("test-client: got touch cancel (%d)\n", touch->cancel_no);
 }
 
 static const struct wl_touch_listener touch_listener = {
@@ -383,8 +415,7 @@ surface_enter(void *data,
 
 	surface->output = wl_output_get_user_data(output);
 
-	fprintf(stderr, "test-client: got surface enter output %p\n",
-		surface->output);
+	testlog("test-client: got surface enter output %p\n", surface->output);
 }
 
 static void
@@ -395,7 +426,7 @@ surface_leave(void *data,
 
 	surface->output = NULL;
 
-	fprintf(stderr, "test-client: got surface leave output %p\n",
+	testlog("test-client: got surface leave output %p\n",
 		wl_output_get_user_data(output));
 }
 
@@ -501,7 +532,7 @@ test_handle_pointer_position(void *data, struct weston_test *weston_test,
 	test->pointer_x = wl_fixed_to_int(x);
 	test->pointer_y = wl_fixed_to_int(y);
 
-	fprintf(stderr, "test-client: got global pointer %d %d\n",
+	testlog("test-client: got global pointer %d %d\n",
 		test->pointer_x, test->pointer_y);
 }
 
@@ -510,7 +541,7 @@ test_handle_capture_screenshot_done(void *data, struct weston_test *weston_test)
 {
 	struct test *test = data;
 
-	printf("Screenshot has been captured\n");
+	testlog("Screenshot has been captured\n");
 	test->buffer_copy_done = 1;
 }
 
@@ -518,6 +549,27 @@ static const struct weston_test_listener test_listener = {
 	test_handle_pointer_position,
 	test_handle_capture_screenshot_done,
 };
+
+static void
+input_destroy(struct input *inp)
+{
+	if (inp->pointer) {
+		wl_pointer_release(inp->pointer->wl_pointer);
+		free(inp->pointer);
+	}
+	if (inp->keyboard) {
+		wl_keyboard_release(inp->keyboard->wl_keyboard);
+		free(inp->keyboard);
+	}
+	if (inp->touch) {
+		wl_touch_release(inp->touch->wl_touch);
+		free(inp->touch);
+	}
+	wl_list_remove(&inp->link);
+	wl_seat_release(inp->wl_seat);
+	free(inp->seat_name);
+	free(inp);
+}
 
 static void
 input_update_devices(struct input *input)
@@ -583,8 +635,7 @@ seat_handle_capabilities(void *data, struct wl_seat *seat,
 	if (input->seat_name && strcmp(input->seat_name, "test-seat") == 0)
 		input_update_devices(input);
 
-	fprintf(stderr, "test-client: got seat %p capabilities: %x\n",
-		input, caps);
+	testlog("test-client: got seat %p capabilities: %x\n", input, caps);
 }
 
 static void
@@ -595,8 +646,16 @@ seat_handle_name(void *data, struct wl_seat *seat, const char *name)
 	input->seat_name = strdup(name);
 	assert(input->seat_name && "No memory");
 
-	fprintf(stderr, "test-client: got seat %p name: \'%s\'\n",
-		input, name);
+	/* We only update the devices and set client input for the test seat */
+	if (strcmp(name, "test-seat") == 0) {
+		assert(!input->client->input &&
+		       "Multiple test seats detected!");
+
+		input_update_devices(input);
+		input->client->input = input;
+	}
+
+	testlog("test-client: got seat %p name: \'%s\'\n", input, name);
 }
 
 static const struct wl_seat_listener seat_listener = {
@@ -656,25 +715,11 @@ output_handle_done(void *data,
 	output->initialized = 1;
 }
 
-static void
-output_handle_hdcp(void *data, struct wl_output *wl_output,
-		   uint32_t version, uint32_t interface_type)
-{
-}
-
-static void
-output_handle_hdr(void *data, struct wl_output *wl_output,
-		 uint32_t is_supported)
-{
-}
-
 static const struct wl_output_listener output_listener = {
 	output_handle_geometry,
 	output_handle_mode,
 	output_handle_done,
 	output_handle_scale,
-	output_handle_hdcp,
-	output_handle_hdr
 };
 
 static void
@@ -700,6 +745,8 @@ handle_global(void *data, struct wl_registry *registry,
 					 &wl_compositor_interface, version);
 	} else if (strcmp(interface, "wl_seat") == 0) {
 		input = xzalloc(sizeof *input);
+		input->client = client;
+		input->global_name = global->name;
 		input->wl_seat =
 			wl_registry_bind(registry, id,
 					 &wl_seat_interface, version);
@@ -730,8 +777,59 @@ handle_global(void *data, struct wl_registry *registry,
 	}
 }
 
+static struct global *
+client_find_global_with_name(struct client *client, uint32_t name)
+{
+	struct global *global;
+
+	wl_list_for_each(global, &client->global_list, link) {
+		if (global->name == name)
+			return global;
+	}
+
+	return NULL;
+}
+
+static struct input *
+client_find_input_with_name(struct client *client, uint32_t name)
+{
+	struct input *input;
+
+	wl_list_for_each(input, &client->inputs, link) {
+		if (input->global_name == name)
+			return input;
+	}
+
+	return NULL;
+}
+
+static void
+handle_global_remove(void *data, struct wl_registry *registry, uint32_t name)
+{
+	struct client *client = data;
+	struct global *global;
+	struct input *input;
+
+	global = client_find_global_with_name(client, name);
+	assert(global && "Request to remove unknown global");
+
+	if (strcmp(global->interface, "wl_seat") == 0) {
+		input = client_find_input_with_name(client, name);
+		if (input) {
+			if (client->input == input)
+				client->input = NULL;
+			input_destroy(input);
+		}
+	}
+
+	wl_list_remove(&global->link);
+	free(global->interface);
+	free(global);
+}
+
 static const struct wl_registry_listener registry_listener = {
-	handle_global
+	handle_global,
+	handle_global_remove,
 };
 
 void
@@ -746,7 +844,7 @@ skip(const char *fmt, ...)
 	/* automake tests uses exit code 77. weston-test-runner will see
 	 * this and use it, and then weston-test's sigchld handler (in the
 	 * weston process) will use that as an exit status, which is what
-	 * automake will see in the end. */
+	 * ninja will see in the end. */
 	exit(77);
 }
 
@@ -773,8 +871,7 @@ expect_protocol_error(struct client *client,
 
 	/* check error */
 	if (errcode != code) {
-		fprintf(stderr, "Should get error code %d but got %d\n",
-			code, errcode);
+		testlog("Should get error code %d but got %d\n", code, errcode);
 		failed = 1;
 	}
 
@@ -782,19 +879,19 @@ expect_protocol_error(struct client *client,
 	assert(interface);
 
 	if (strcmp(intf->name, interface->name) != 0) {
-		fprintf(stderr, "Should get interface '%s' but got '%s'\n",
+		testlog("Should get interface '%s' but got '%s'\n",
 			intf->name, interface->name);
 		failed = 1;
 	}
 
 	if (failed) {
-		fprintf(stderr, "Expected other protocol error\n");
+		testlog("Expected other protocol error\n");
 		abort();
 	}
 
 	/* all OK */
-	fprintf(stderr, "Got expected protocol error on '%s' (object id: %d) "
-			"with code %d\n", interface->name, id, errcode);
+	testlog("Got expected protocol error on '%s' (object id: %d) "
+		"with code %d\n", interface->name, id, errcode);
 }
 
 static void
@@ -802,34 +899,6 @@ log_handler(const char *fmt, va_list args)
 {
 	fprintf(stderr, "libwayland: ");
 	vfprintf(stderr, fmt, args);
-}
-
-static void
-input_destroy(struct input *inp)
-{
-	wl_list_remove(&inp->link);
-	wl_seat_destroy(inp->wl_seat);
-	free(inp);
-}
-
-/* find the test-seat and set it in client.
- * Destroy other inputs */
-static void
-client_set_input(struct client *cl)
-{
-	struct input *inp, *inptmp;
-	wl_list_for_each_safe(inp, inptmp, &cl->inputs, link) {
-		assert(inp->seat_name && "BUG: input with no name");
-		if (strcmp(inp->seat_name, "test-seat") == 0) {
-			cl->input = inp;
-			input_update_devices(inp);
-		} else {
-			input_destroy(inp);
-		}
-	}
-
-	/* we keep only one input */
-	assert(wl_list_length(&cl->inputs) == 1);
 }
 
 struct client *
@@ -857,9 +926,6 @@ create_client(void)
 	 * events */
 	client_roundtrip(client);
 
-	/* find the right input for us */
-	client_set_input(client);
-
 	/* must have WL_SHM_FORMAT_ARGB32 */
 	assert(client->has_argb);
 
@@ -878,6 +944,25 @@ create_client(void)
 	return client;
 }
 
+struct surface *
+create_test_surface(struct client *client)
+{
+	struct surface *surface;
+
+	surface = xzalloc(sizeof *surface);
+
+	surface->wl_surface =
+		wl_compositor_create_surface(client->wl_compositor);
+	assert(surface->wl_surface);
+
+	wl_surface_add_listener(surface->wl_surface, &surface_listener,
+				surface);
+
+	wl_surface_set_user_data(surface->wl_surface, surface);
+
+	return surface;
+}
+
 struct client *
 create_client_and_test_surface(int x, int y, int width, int height)
 {
@@ -889,16 +974,8 @@ create_client_and_test_surface(int x, int y, int width, int height)
 	client = create_client();
 
 	/* initialize the client surface */
-	surface = xzalloc(sizeof *surface);
-	surface->wl_surface =
-		wl_compositor_create_surface(client->wl_compositor);
-	assert(surface->wl_surface);
-
-	wl_surface_add_listener(surface->wl_surface, &surface_listener,
-				surface);
-
+	surface = create_test_surface(client);
 	client->surface = surface;
-	wl_surface_set_user_data(surface->wl_surface, surface);
 
 	surface->width = width;
 	surface->height = height;
@@ -926,7 +1003,7 @@ output_path(void)
 	char *path = getenv("WESTON_TEST_OUTPUT_PATH");
 
 	if (!path)
-		return "./logs";
+		return ".";
 
 	return path;
 }
@@ -1253,7 +1330,7 @@ write_image_as_png(pixman_image_t *image, const char *fname)
 
 	status = cairo_surface_write_to_png(cairo_surface, fname);
 	if (status != CAIRO_STATUS_SUCCESS) {
-		fprintf(stderr, "Failed to save image '%s': %s\n", fname,
+		testlog("Failed to save image '%s': %s\n", fname,
 			cairo_status_to_string(status));
 
 		return false;
@@ -1323,7 +1400,8 @@ load_image_from_png(const char *fname)
 	cairo_surface_flush(reference_cairo_surface);
 	status = cairo_surface_status(reference_cairo_surface);
 	if (status != CAIRO_STATUS_SUCCESS) {
-		printf("Could not open %s: %s\n", fname, cairo_status_to_string(status));
+		testlog("Could not open %s: %s\n", fname,
+			cairo_status_to_string(status));
 		cairo_surface_destroy(reference_cairo_surface);
 		return NULL;
 	}

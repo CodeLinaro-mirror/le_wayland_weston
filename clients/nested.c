@@ -34,6 +34,7 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -50,10 +51,10 @@
 #include "shared/xalloc.h"
 #include "window.h"
 
-#include "weston-egl-ext.h"
+#include "shared/weston-egl-ext.h"
 
 
-static int option_blit;
+static bool option_blit;
 
 struct nested {
 	struct display *display;
@@ -228,8 +229,7 @@ nested_buffer_reference(struct nested_buffer_reference *ref,
 		ref->buffer->busy_count--;
 		if (ref->buffer->busy_count == 0) {
 			assert(wl_resource_get_client(ref->buffer->resource));
-			wl_resource_queue_event(ref->buffer->resource,
-						WL_BUFFER_RELEASE);
+			wl_buffer_send_release(ref->buffer->resource);
 		}
 		wl_list_remove(&ref->destroy_listener.link);
 	}
@@ -331,8 +331,8 @@ launch_client(struct nested *nested, const char *path)
 
 	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv) < 0) {
 		fprintf(stderr, "launch_client: "
-			"socketpair failed while launching '%s': %m\n",
-			path);
+			"socketpair failed while launching '%s': %s\n",
+			path, strerror(errno));
 		free(client);
 		return NULL;
 	}
@@ -343,7 +343,8 @@ launch_client(struct nested *nested, const char *path)
 		close(sv[1]);
 		free(client);
 		fprintf(stderr, "launch_client: "
-			"fork failed while launching '%s': %m\n", path);
+			"fork failed while launching '%s': %s\n", path,
+			strerror(errno));
 		return NULL;
 	}
 
@@ -355,7 +356,8 @@ launch_client(struct nested *nested, const char *path)
 		 * get a non-CLOEXEC fd to pass through exec. */
 		clientfd = dup(sv[1]);
 		if (clientfd == -1) {
-			fprintf(stderr, "compositor: dup failed: %m\n");
+			fprintf(stderr, "compositor: dup failed: %s\n",
+				strerror(errno));
 			exit(-1);
 		}
 
@@ -364,8 +366,8 @@ launch_client(struct nested *nested, const char *path)
 
 		execl(path, path, NULL);
 
-		fprintf(stderr, "compositor: executing '%s' failed: %m\n",
-			path);
+		fprintf(stderr, "compositor: executing '%s' failed: %s\n",
+			path, strerror(errno));
 		exit(-1);
 	}
 
@@ -748,7 +750,7 @@ nested_init_compositor(struct nested *nested)
 
 	nested->egl_display = display_get_egl_display(nested->display);
 	extensions = eglQueryString(nested->egl_display, EGL_EXTENSIONS);
-	if (weston_check_egl_extension(extensions, "EGL_WL_bind_wayland_display") == NULL) {
+	if (!weston_check_egl_extension(extensions, "EGL_WL_bind_wayland_display")) {
 		fprintf(stderr, "no EGL_WL_bind_wayland_display extension\n");
 		return -1;
 	}
@@ -1117,7 +1119,8 @@ main(int argc, char *argv[])
 
 	display = display_create(&argc, argv);
 	if (display == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 

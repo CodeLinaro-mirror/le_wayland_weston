@@ -26,14 +26,14 @@
 
 #include "config.h"
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
+#include <string.h>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <sys/ioctl.h>
 #include <linux/vt.h>
 #include <linux/kd.h>
@@ -45,6 +45,14 @@
 
 #ifndef KDSKBMUTE
 #define KDSKBMUTE	0x4B51
+#endif
+
+/* major()/minor() */
+#ifdef MAJOR_IN_MKDEV
+#include <sys/mkdev.h>
+#endif
+#ifdef MAJOR_IN_SYSMACROS
+#include <sys/sysmacros.h>
 #endif
 
 #ifdef BUILD_DRM_COMPOSITOR
@@ -96,14 +104,14 @@ vt_handler(int signal_number, void *data)
 	struct weston_compositor *compositor = launcher->compositor;
 
 	if (compositor->session_active) {
-		compositor->session_active = 0;
+		compositor->session_active = false;
 		wl_signal_emit(&compositor->session_signal, compositor);
 		drmDropMaster(launcher->drm_fd);
 		ioctl(launcher->tty, VT_RELDISP, 1);
 	} else {
 		ioctl(launcher->tty, VT_RELDISP, VT_ACKACQ);
 		drmSetMaster(launcher->drm_fd);
-		compositor->session_active = 1;
+		compositor->session_active = true;
 		wl_signal_emit(&compositor->session_signal, compositor);
 	}
 
@@ -122,14 +130,16 @@ setup_tty(struct launcher_direct *launcher, int tty)
 	if (tty == 0) {
 		launcher->tty = dup(tty);
 		if (launcher->tty == -1) {
-			weston_log("couldn't dup stdin: %m\n");
+			weston_log("couldn't dup stdin: %s\n",
+				   strerror(errno));
 			return -1;
 		}
 	} else {
 		snprintf(tty_device, sizeof tty_device, "/dev/tty%d", tty);
 		launcher->tty = open(tty_device, O_RDWR | O_CLOEXEC);
 		if (launcher->tty == -1) {
-			weston_log("couldn't open tty %s: %m\n", tty_device);
+			weston_log("couldn't open tty %s: %s\n", tty_device,
+				   strerror(errno));
 			return -1;
 		}
 	}
@@ -144,7 +154,7 @@ setup_tty(struct launcher_direct *launcher, int tty)
 
 	ret = ioctl(launcher->tty, KDGETMODE, &kd_mode);
 	if (ret) {
-		weston_log("failed to get VT mode: %m\n");
+		weston_log("failed to get VT mode: %s\n", strerror(errno));
 		return -1;
 	}
 	if (kd_mode != KD_TEXT) {
@@ -157,19 +167,22 @@ setup_tty(struct launcher_direct *launcher, int tty)
 	ioctl(launcher->tty, VT_WAITACTIVE, minor(buf.st_rdev));
 
 	if (ioctl(launcher->tty, KDGKBMODE, &launcher->kb_mode)) {
-		weston_log("failed to read keyboard mode: %m\n");
+		weston_log("failed to read keyboard mode: %s\n",
+			   strerror(errno));
 		goto err_close;
 	}
 
 	if (ioctl(launcher->tty, KDSKBMUTE, 1) &&
 	    ioctl(launcher->tty, KDSKBMODE, K_OFF)) {
-		weston_log("failed to set K_OFF keyboard mode: %m\n");
+		weston_log("failed to set K_OFF keyboard mode: %s\n",
+			   strerror(errno));
 		goto err_close;
 	}
 
 	ret = ioctl(launcher->tty, KDSETMODE, KD_GRAPHICS);
 	if (ret) {
-		weston_log("failed to set KD_GRAPHICS mode on tty: %m\n");
+		weston_log("failed to set KD_GRAPHICS mode on tty: %s\n",
+			   strerror(errno));
 		goto err_close;
 	}
 
@@ -248,10 +261,12 @@ launcher_direct_restore(struct weston_launcher *launcher_base)
 
 	if (ioctl(launcher->tty, KDSKBMUTE, 0) &&
 	    ioctl(launcher->tty, KDSKBMODE, launcher->kb_mode))
-		weston_log("failed to restore kb mode: %m\n");
+		weston_log("failed to restore kb mode: %s\n",
+			   strerror(errno));
 
 	if (ioctl(launcher->tty, KDSETMODE, KD_TEXT))
-		weston_log("failed to set KD_TEXT mode on tty: %m\n");
+		weston_log("failed to set KD_TEXT mode on tty: %s\n",
+			   strerror(errno));
 
 	/* We have to drop master before we switch the VT back in
 	 * VT_AUTO, so we don't risk switching to a VT with another
@@ -285,13 +300,11 @@ launcher_direct_connect(struct weston_launcher **out, struct weston_compositor *
 
 	launcher->base.iface = &launcher_direct_iface;
 	launcher->compositor = compositor;
-// Todo: With TTY enabled, weston could not be launched by-default.
-#ifndef COMPILE_WITH_FBDEV
+
 	if (setup_tty(launcher, tty) == -1) {
 		free(launcher);
 		return -1;
 	}
-#endif
 
 	* (struct launcher_direct **) out = launcher;
 	return 0;
@@ -328,6 +341,5 @@ const struct launcher_interface launcher_direct_iface = {
 	.open = launcher_direct_open,
 	.close = launcher_direct_close,
 	.activate_vt = launcher_direct_activate_vt,
-	.restore = launcher_direct_restore,
 	.get_vt = launcher_direct_get_vt,
 };

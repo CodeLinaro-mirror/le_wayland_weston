@@ -33,7 +33,6 @@
 #include <poll.h>
 #include <errno.h>
 
-#include <error.h>
 #include <getopt.h>
 
 #include <sys/types.h>
@@ -42,7 +41,6 @@
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/signalfd.h>
-#include <sys/sysmacros.h>
 #include <signal.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -93,6 +91,14 @@ drmSetMaster(int drm_fd)
 
 #endif
 
+/* major()/minor() */
+#ifdef MAJOR_IN_MKDEV
+#    include <sys/mkdev.h>
+#endif
+#ifdef MAJOR_IN_SYSMACROS
+#    include <sys/sysmacros.h>
+#endif
+
 struct weston_launch {
 	struct pam_conv pc;
 	pam_handle_t *ph;
@@ -114,7 +120,7 @@ struct weston_launch {
 union cmsg_data { unsigned char b[4]; int fd; };
 
 static gid_t *
-read_groups(void)
+read_groups(int *ngroups)
 {
 	int n;
 	gid_t *groups;
@@ -122,7 +128,8 @@ read_groups(void)
 	n = getgroups(0, NULL);
 
 	if (n < 0) {
-		fprintf(stderr, "Unable to retrieve groups: %m\n");
+		fprintf(stderr, "Unable to retrieve groups: %s\n",
+			strerror(errno));
 		return NULL;
 	}
 
@@ -131,10 +138,13 @@ read_groups(void)
 		return NULL;
 
 	if (getgroups(n, groups) < 0) {
-		fprintf(stderr, "Unable to retrieve groups: %m\n");
+		fprintf(stderr, "Unable to retrieve groups: %s\n",
+			strerror(errno));
 		free(groups);
 		return NULL;
 	}
+
+	*ngroups = n;
 	return groups;
 }
 
@@ -143,7 +153,7 @@ weston_launch_allowed(struct weston_launch *wl)
 {
 	struct group *gr;
 	gid_t *groups;
-	int i;
+	int ngroups;
 #ifdef HAVE_SYSTEMD_LOGIN
 	char *session, *seat;
 	int err;
@@ -154,10 +164,10 @@ weston_launch_allowed(struct weston_launch *wl)
 
 	gr = getgrnam("weston-launch");
 	if (gr) {
-		groups = read_groups();
-		if (groups) {
-			for (i = 0; groups[i]; ++i) {
-				if (groups[i] == gr->gr_gid) {
+		groups = read_groups(&ngroups);
+		if (groups && ngroups > 0) {
+			while (ngroups--) {
+				if (groups[ngroups] == gr->gr_gid) {
 					free(groups);
 					return true;
 				}
@@ -226,11 +236,17 @@ setup_pam(struct weston_launch *wl)
 static int
 setup_launcher_socket(struct weston_launch *wl)
 {
-	if (socketpair(AF_LOCAL, SOCK_SEQPACKET, 0, wl->sock) < 0)
-		error(1, errno, "socketpair failed");
+	if (socketpair(AF_LOCAL, SOCK_SEQPACKET, 0, wl->sock) < 0) {
+		fprintf(stderr, "weston: socketpair failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
 
-	if (fcntl(wl->sock[0], F_SETFD, FD_CLOEXEC) < 0)
-		error(1, errno, "fcntl failed");
+	if (fcntl(wl->sock[0], F_SETFD, FD_CLOEXEC) < 0) {
+		fprintf(stderr, "weston: fcntl failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
 
 	return 0;
 }
@@ -311,8 +327,8 @@ handle_open(struct weston_launch *wl, struct msghdr *msg, ssize_t len)
 
 	fd = open(message->path, message->flags);
 	if (fd < 0) {
-		fprintf(stderr, "Error opening device %s: %m\n",
-			message->path);
+		fprintf(stderr, "Error opening device %s: %s\n",
+			message->path, strerror(errno));
 		goto err0;
 	}
 
@@ -425,10 +441,12 @@ quit(struct weston_launch *wl, int status)
 
 	if (ioctl(wl->tty, KDSKBMUTE, 0) &&
 	    ioctl(wl->tty, KDSKBMODE, wl->kb_mode))
-		fprintf(stderr, "failed to restore keyboard mode: %m\n");
+		fprintf(stderr, "failed to restore keyboard mode: %s\n",
+			strerror(errno));
 
 	if (ioctl(wl->tty, KDSETMODE, KD_TEXT))
-		fprintf(stderr, "failed to set KD_TEXT mode on tty: %m\n");
+		fprintf(stderr, "failed to set KD_TEXT mode on tty: %s\n",
+			strerror(errno));
 
 	/* We have to drop master before we switch the VT back in
 	 * VT_AUTO, so we don't risk switching to a VT with another
@@ -465,7 +483,8 @@ handle_signal(struct weston_launch *wl)
 	int pid, status, ret;
 
 	if (read(wl->signalfd, &sig, sizeof sig) != sizeof sig) {
-		error(0, errno, "reading signalfd failed");
+		fprintf(stderr, "weston: reading signalfd failed: %s\n",
+			strerror(errno));
 		return -1;
 	}
 
@@ -491,8 +510,14 @@ handle_signal(struct weston_launch *wl)
 		break;
 	case SIGTERM:
 	case SIGINT:
-		if (wl->child)
-			kill(wl->child, sig.ssi_signo);
+		if (!wl->child)
+			break;
+
+		if (wl->verbose)
+			fprintf(stderr, "weston-launch: sending %s to pid %d\n",
+				strsignal(sig.ssi_signo), wl->child);
+
+		kill(wl->child, sig.ssi_signo);
 		break;
 	case SIGUSR1:
 		send_reply(wl, WESTON_LAUNCHER_DEACTIVATE);
@@ -531,49 +556,83 @@ setup_tty(struct weston_launch *wl, const char *tty)
 		int tty0 = open("/dev/tty0", O_WRONLY | O_CLOEXEC);
 		char filename[16];
 
-		if (tty0 < 0)
-			error(1, errno, "could not open tty0");
+		if (tty0 < 0) {
+			fprintf(stderr, "weston: could not open tty0: %s\n",
+				strerror(errno));
+			return -1;
+		}
 
 		if (ioctl(tty0, VT_OPENQRY, &wl->ttynr) < 0 || wl->ttynr == -1)
-			error(1, errno, "failed to find non-opened console");
+		{
+			fprintf(stderr, "weston: failed to find non-opened console: %s\n",
+				strerror(errno));
+			return -1;
+		}
 
 		snprintf(filename, sizeof filename, "/dev/tty%d", wl->ttynr);
 		wl->tty = open(filename, O_RDWR | O_NOCTTY);
 		close(tty0);
 	}
 
-	if (wl->tty < 0)
-		error(1, errno, "failed to open tty");
+	if (wl->tty < 0) {
+		fprintf(stderr, "weston: failed to open tty: %s\n",
+			strerror(errno));
+		return -1;
+	}
 
 	if (fstat(wl->tty, &buf) == -1 ||
-	    major(buf.st_rdev) != TTY_MAJOR || minor(buf.st_rdev) == 0)
-		error(1, 0, "weston-launch must be run from a virtual terminal");
+	    major(buf.st_rdev) != TTY_MAJOR || minor(buf.st_rdev) == 0) {
+		fprintf(stderr, "weston: weston-launch must be run from a virtual terminal\n");
+		return -1;
+	}
 
 	if (tty) {
-		if (fstat(wl->tty, &buf) < 0)
-			error(1, errno, "stat %s failed", tty);
+		if (fstat(wl->tty, &buf) < 0) {
+			fprintf(stderr, "weston: stat %s failed: %s\n", tty,
+				strerror(errno));
+			return -1;
+		}
 
-		if (major(buf.st_rdev) != TTY_MAJOR)
-			error(1, 0, "invalid tty device: %s", tty);
+		if (major(buf.st_rdev) != TTY_MAJOR) {
+			fprintf(stderr,
+				"weston: invalid tty device: %s\n", tty);
+			return -1;
+		}
 
 		wl->ttynr = minor(buf.st_rdev);
 	}
 
-	if (ioctl(wl->tty, KDGKBMODE, &wl->kb_mode))
-		error(1, errno, "failed to get current keyboard mode: %m\n");
+	if (ioctl(wl->tty, KDGKBMODE, &wl->kb_mode)) {
+		fprintf(stderr,
+			"weston: failed to get current keyboard mode: %s",
+			strerror(errno));
+		return -1;
+	}
 
 	if (ioctl(wl->tty, KDSKBMUTE, 1) &&
-	    ioctl(wl->tty, KDSKBMODE, K_OFF))
-		error(1, errno, "failed to set K_OFF keyboard mode: %m\n");
+	    ioctl(wl->tty, KDSKBMODE, K_OFF)) {
+		fprintf(stderr,
+			"weston: failed to set K_OFF keyboard mode: %s\n",
+			strerror(errno));
+		return -1;
+	}
 
-	if (ioctl(wl->tty, KDSETMODE, KD_GRAPHICS))
-		error(1, errno, "failed to set KD_GRAPHICS mode on tty: %m\n");
+	if (ioctl(wl->tty, KDSETMODE, KD_GRAPHICS)) {
+		fprintf(stderr,
+			"weston: failed to set KD_GRAPHICS mode on tty: %s\n",
+			strerror(errno));
+		return -1;
+	}
 
 	mode.mode = VT_PROCESS;
 	mode.relsig = SIGUSR1;
 	mode.acqsig = SIGUSR2;
-	if (ioctl(wl->tty, VT_SETMODE, &mode) < 0)
-		error(1, errno, "failed to take control of vt handling\n");
+	if (ioctl(wl->tty, VT_SETMODE, &mode) < 0) {
+		fprintf(stderr,
+			"weston: failed to take control of vt handling %s\n",
+			strerror(errno));
+		return -1;
+	}
 
 	return 0;
 }
@@ -586,10 +645,16 @@ setup_session(struct weston_launch *wl, char **child_argv)
 	int i;
 
 	if (wl->tty != STDIN_FILENO) {
-		if (setsid() < 0)
-			error(1, errno, "setsid failed");
-		if (ioctl(wl->tty, TIOCSCTTY, 0) < 0)
-			error(1, errno, "TIOCSCTTY failed - tty is in use");
+		if (setsid() < 0) {
+			fprintf(stderr, "weston: setsid failed %s\n",
+				strerror(errno));
+			exit(EXIT_FAILURE);
+		}
+		if (ioctl(wl->tty, TIOCSCTTY, 0) < 0) {
+			fprintf(stderr, "TIOCSCTTY failed - tty is in use %s\n",
+				strerror(errno));
+			exit(EXIT_FAILURE);
+		}
 	}
 
 	term = getenv("TERM");
@@ -605,7 +670,7 @@ setup_session(struct weston_launch *wl, char **child_argv)
 	if (env) {
 		for (i = 0; env[i]; ++i) {
 			if (putenv(env[i]) != 0)
-				error(0, 0, "putenv %s failed", env[i]);
+				fprintf(stderr, "putenv %s failed\n", env[i]);
 		}
 		free(env);
 	}
@@ -617,7 +682,7 @@ setup_session(struct weston_launch *wl, char **child_argv)
 	child_argv[0] = "/bin/sh";
 	child_argv[1] = "-l";
 	child_argv[2] = "-c";
-	child_argv[3] = BINDIR "/weston \"$@\"";
+	child_argv[3] = "exec " BINDIR "/weston \"$@\"";
 	child_argv[4] = "weston";
 	return 5;
 }
@@ -629,8 +694,11 @@ drop_privileges(struct weston_launch *wl)
 #ifdef HAVE_INITGROUPS
 	    initgroups(wl->pw->pw_name, wl->pw->pw_gid) < 0 ||
 #endif
-	    setuid(wl->pw->pw_uid) < 0)
-		error(1, errno, "dropping privileges failed");
+	    setuid(wl->pw->pw_uid) < 0) {
+		fprintf(stderr, "weston: dropping privileges failed %s\n",
+			strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 }
 
 static void
@@ -669,15 +737,18 @@ launch_compositor(struct weston_launch *wl, int argc, char *argv[])
 
 
 	execv(child_argv[0], child_argv);
-	error(1, errno, "exec failed");
+	fprintf(stderr, "weston: exec failed: %s\n", strerror(errno));
+	exit(EXIT_FAILURE);
 }
 
 static void
 help(const char *name)
 {
 	fprintf(stderr, "Usage: %s [args...] [-- [weston args..]]\n", name);
-	fprintf(stderr, "  -u, --user      Start session as specified username\n");
-	fprintf(stderr, "  -t, --tty       Start session on alternative tty\n");
+	fprintf(stderr, "  -u, --user      Start session as specified username,\n"
+			"                  e.g. -u joe, requires root.\n");
+	fprintf(stderr, "  -t, --tty       Start session on alternative tty,\n"
+			"                  e.g. -t /dev/tty4, requires -u option.\n");
 	fprintf(stderr, "  -v, --verbose   Be verbose\n");
 	fprintf(stderr, "  -h, --help      Display this help message\n");
 }
@@ -698,12 +769,14 @@ main(int argc, char *argv[])
 
 	memset(&wl, 0, sizeof wl);
 
-	while ((c = getopt_long(argc, argv, "u:t::vh", opts, &i)) != -1) {
+	while ((c = getopt_long(argc, argv, "u:t:vh", opts, &i)) != -1) {
 		switch (c) {
 		case 'u':
 			wl.new_user = optarg;
-			if (getuid() != 0)
-				error(1, 0, "Permission denied. -u allowed for root only");
+			if (getuid() != 0) {
+				fprintf(stderr, "weston: Permission denied. -u allowed for root only\n");
+				exit(EXIT_FAILURE);
+			}
 			break;
 		case 't':
 			tty = optarg;
@@ -719,24 +792,38 @@ main(int argc, char *argv[])
 		}
 	}
 
-	if ((argc - optind) > (MAX_ARGV_SIZE - 6))
-		error(1, E2BIG, "Too many arguments to pass to weston");
+	if ((argc - optind) > (MAX_ARGV_SIZE - 6)) {
+		fprintf(stderr,
+			"weston: Too many arguments to pass to weston: %s\n",
+			strerror(E2BIG));
+		exit(EXIT_FAILURE);
+	}
+
+	if (tty && !wl.new_user) {
+		fprintf(stderr, "weston: -t/--tty option requires -u/--user option as well\n");
+		exit(EXIT_FAILURE);
+	}
 
 	if (wl.new_user)
 		wl.pw = getpwnam(wl.new_user);
 	else
 		wl.pw = getpwuid(getuid());
-	if (wl.pw == NULL)
-		error(1, errno, "failed to get username");
+	if (wl.pw == NULL) {
+		fprintf(stderr, "weston: failed to get username: %s\n",
+			strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 
-	if (!weston_launch_allowed(&wl))
-		error(1, 0, "Permission denied. You should either:\n"
+	if (!weston_launch_allowed(&wl)) {
+		fprintf(stderr, "Permission denied. You should either:\n"
 #ifdef HAVE_SYSTEMD_LOGIN
 		      " - run from an active and local (systemd) session.\n"
 #else
 		      " - enable systemd session support for weston-launch.\n"
 #endif
-		      " - or add yourself to the 'weston-launch' group.");
+		      " - or add yourself to the 'weston-launch' group.\n");
+		exit(EXIT_FAILURE);
+	}
 
 	if (setup_tty(&wl, tty) < 0)
 		exit(EXIT_FAILURE);
@@ -751,8 +838,10 @@ main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 
 	wl.child = fork();
-	if (wl.child == -1)
-		error(EXIT_FAILURE, errno, "fork failed");
+	if (wl.child == -1) {
+		fprintf(stderr, "weston: fork failed %s\n", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 
 	if (wl.child == 0)
 		launch_compositor(&wl, argc - optind, argv + optind);
@@ -771,8 +860,10 @@ main(int argc, char *argv[])
 		fds[1].events = POLLIN;
 
 		n = poll(fds, 2, -1);
-		if (n < 0)
-			error(0, errno, "poll failed");
+		if (n < 0) {
+			fprintf(stderr, "poll failed: %s\n", strerror(errno));
+			return -1;
+		}
 		if (fds[0].revents & POLLIN)
 			handle_socket_msg(&wl);
 		if (fds[1].revents)

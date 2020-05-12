@@ -28,6 +28,8 @@
 
 #include <stdint.h>
 #include <assert.h>
+#include <time.h>
+#include <stdbool.h>
 
 #define NSEC_PER_SEC 1000000000
 
@@ -79,7 +81,7 @@ timespec_add_nsec(struct timespec *r, const struct timespec *a, int64_t b)
 static inline void
 timespec_add_msec(struct timespec *r, const struct timespec *a, int64_t b)
 {
-	return timespec_add_nsec(r, a, b * 1000000);
+	timespec_add_nsec(r, a, b * 1000000);
 }
 
 /* Convert timespec to nanoseconds
@@ -130,6 +132,116 @@ static inline int64_t
 timespec_sub_to_msec(const struct timespec *a, const struct timespec *b)
 {
 	return timespec_sub_to_nsec(a, b) / 1000000;
+}
+
+/* Convert timespec to microseconds
+ *
+ * \param a timespec
+ * \return microseconds
+ *
+ * Rounding to integer microseconds happens always down (floor()).
+ */
+static inline int64_t
+timespec_to_usec(const struct timespec *a)
+{
+	return (int64_t)a->tv_sec * 1000000 + a->tv_nsec / 1000;
+}
+
+/* Convert timespec to protocol data
+ *
+ * \param a timespec
+ * \param tv_sec_hi[out] the high bytes of the seconds part
+ * \param tv_sec_lo[out] the low bytes of the seconds part
+ * \param tv_nsec[out] the nanoseconds part
+ *
+ * The input timespec must be normalized (the nanoseconds part should
+ * be less than 1 second) and non-negative.
+ */
+static inline void
+timespec_to_proto(const struct timespec *a, uint32_t *tv_sec_hi,
+                  uint32_t *tv_sec_lo, uint32_t *tv_nsec)
+{
+	assert(a->tv_sec >= 0);
+	assert(a->tv_nsec >= 0 && a->tv_nsec < NSEC_PER_SEC);
+
+	uint64_t sec64 = a->tv_sec;
+
+	*tv_sec_hi = sec64 >> 32;
+	*tv_sec_lo = sec64 & 0xffffffff;
+	*tv_nsec = a->tv_nsec;
+}
+
+/* Convert nanoseconds to timespec
+ *
+ * \param a timespec
+ * \param b nanoseconds
+ */
+static inline void
+timespec_from_nsec(struct timespec *a, int64_t b)
+{
+	a->tv_sec = b / NSEC_PER_SEC;
+	a->tv_nsec = b % NSEC_PER_SEC;
+}
+
+/* Convert microseconds to timespec
+ *
+ * \param a timespec
+ * \param b microseconds
+ */
+static inline void
+timespec_from_usec(struct timespec *a, int64_t b)
+{
+	timespec_from_nsec(a, b * 1000);
+}
+
+/* Convert milliseconds to timespec
+ *
+ * \param a timespec
+ * \param b milliseconds
+ */
+static inline void
+timespec_from_msec(struct timespec *a, int64_t b)
+{
+	timespec_from_nsec(a, b * 1000000);
+}
+
+/* Convert protocol data to timespec
+ *
+ * \param a[out] timespec
+ * \param tv_sec_hi the high bytes of seconds part
+ * \param tv_sec_lo the low bytes of seconds part
+ * \param tv_nsec the nanoseconds part
+ */
+static inline void
+timespec_from_proto(struct timespec *a, uint32_t tv_sec_hi,
+                    uint32_t tv_sec_lo, uint32_t tv_nsec)
+{
+	a->tv_sec = ((uint64_t)tv_sec_hi << 32) + tv_sec_lo;
+	a->tv_nsec = tv_nsec;
+}
+
+/* Check if a timespec is zero
+ *
+ * \param a timespec
+ * \return whether the timespec is zero
+ */
+static inline bool
+timespec_is_zero(const struct timespec *a)
+{
+	return a->tv_sec == 0 && a->tv_nsec == 0;
+}
+
+/* Check if two timespecs are equal
+ *
+ * \param a[in] timespec to check
+ * \param b[in] timespec to check
+ * \return whether timespecs a and b are equal
+ */
+static inline bool
+timespec_eq(const struct timespec *a, const struct timespec *b)
+{
+	return a->tv_sec == b->tv_sec &&
+	       a->tv_nsec == b->tv_nsec;
 }
 
 /* Convert milli-Hertz to nanoseconds

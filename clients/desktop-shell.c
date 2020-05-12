@@ -34,8 +34,6 @@
 #include <math.h>
 #include <cairo.h>
 #include <sys/wait.h>
-#include <sys/timerfd.h>
-#include <sys/epoll.h>
 #include <linux/input.h>
 #include <libgen.h>
 #include <ctype.h>
@@ -45,14 +43,16 @@
 #include <wayland-client.h>
 #include "window.h"
 #include "shared/cairo-util.h"
-#include "shared/config-parser.h"
+#include <libweston/config-parser.h>
 #include "shared/helpers.h"
 #include "shared/xalloc.h"
-#include "shared/zalloc.h"
+#include <libweston/zalloc.h>
+#include "shared/file-util.h"
 
 #include "weston-desktop-shell-client-protocol.h"
 
 #define DEFAULT_CLOCK_FORMAT CLOCK_FORMAT_MINUTES
+#define DEFAULT_SPACING 10
 
 extern char **environ; /* defined by libc */
 
@@ -77,7 +77,7 @@ struct desktop {
 	struct widget *grab_widget;
 
 	struct weston_config *config;
-	int locking;
+	bool locking;
 
 	enum cursor_type grab_cursor;
 
@@ -91,8 +91,13 @@ struct surface {
 			  int32_t width, int32_t height);
 };
 
+struct output;
+
 struct panel {
 	struct surface base;
+
+	struct output *owner;
+
 	struct window *window;
 	struct widget *widget;
 	struct wl_list launcher_list;
@@ -105,6 +110,9 @@ struct panel {
 
 struct background {
 	struct surface base;
+
+	struct output *owner;
+
 	struct window *window;
 	struct widget *widget;
 	int painted;
@@ -119,6 +127,8 @@ struct output {
 	uint32_t server_output_id;
 	struct wl_list link;
 
+	int x;
+	int y;
 	struct panel *panel;
 	struct background *background;
 };
@@ -137,8 +147,7 @@ struct panel_launcher {
 struct panel_clock {
 	struct widget *widget;
 	struct panel *panel;
-	struct task clock_task;
-	int clock_fd;
+	struct toytimer timer;
 	char *format_string;
 	time_t refresh_timer;
 };
@@ -204,7 +213,7 @@ panel_launcher_activate(struct panel_launcher *widget)
 
 	pid = fork();
 	if (pid < 0) {
-		fprintf(stderr, "fork failed: %m\n");
+		fprintf(stderr, "fork failed: %s\n", strerror(errno));
 		return;
 	}
 
@@ -217,7 +226,8 @@ panel_launcher_activate(struct panel_launcher *widget)
 		exit(EXIT_FAILURE);
 
 	if (execve(argv[0], argv, widget->envp.data) < 0) {
-		fprintf(stderr, "execl '%s' failed: %m\n", argv[0]);
+		fprintf(stderr, "execl '%s' failed: %s\n", argv[0],
+			strerror(errno));
 		exit(1);
 	}
 }
@@ -232,6 +242,14 @@ panel_launcher_redraw_handler(struct widget *widget, void *data)
 	cr = widget_cairo_create(launcher->panel->widget);
 
 	widget_get_allocation(widget, &allocation);
+	allocation.x += allocation.width / 2 -
+		cairo_image_surface_get_width(launcher->icon) / 2;
+	if (allocation.width > allocation.height)
+		allocation.x += allocation.width / 2 - allocation.height / 2;
+	allocation.y += allocation.height / 2 -
+		cairo_image_surface_get_height(launcher->icon) / 2;
+	if (allocation.height > allocation.width)
+		allocation.y += allocation.height / 2 - allocation.width / 2;
 	if (launcher->pressed) {
 		allocation.x++;
 		allocation.y++;
@@ -354,14 +372,10 @@ panel_launcher_touch_up_handler(struct widget *widget, struct input *input,
 }
 
 static void
-clock_func(struct task *task, uint32_t events)
+clock_func(struct toytimer *tt)
 {
-	struct panel_clock *clock =
-		container_of(task, struct panel_clock, clock_task);
-	uint64_t exp;
+	struct panel_clock *clock = container_of(tt, struct panel_clock, timer);
 
-	if (read(clock->clock_fd, &exp, sizeof exp) != sizeof exp)
-		abort();
 	widget_schedule_redraw(clock->widget);
 }
 
@@ -372,7 +386,6 @@ panel_clock_redraw_handler(struct widget *widget, void *data)
 	cairo_t *cr;
 	struct rectangle allocation;
 	cairo_text_extents_t extents;
-	cairo_font_extents_t font_extents;
 	time_t rawtime;
 	struct tm * timeinfo;
 	char string[128];
@@ -386,19 +399,20 @@ panel_clock_redraw_handler(struct widget *widget, void *data)
 		return;
 
 	cr = widget_cairo_create(clock->panel->widget);
-	cairo_select_font_face(cr, "sans",
-			       CAIRO_FONT_SLANT_NORMAL,
-			       CAIRO_FONT_WEIGHT_NORMAL);
 	cairo_set_font_size(cr, 14);
 	cairo_text_extents(cr, string, &extents);
-	cairo_font_extents (cr, &font_extents);
-	cairo_move_to(cr, allocation.x + 5,
-		      allocation.y + 3 * (allocation.height >> 2) + 1);
-	cairo_set_source_rgb(cr, 0, 0, 0);
+	if (allocation.x > 0)
+		allocation.x +=
+			allocation.width - DEFAULT_SPACING * 1.5 - extents.width;
+	else
+		allocation.x +=
+			allocation.width / 2 - extents.width / 2;
+	allocation.y += allocation.height / 2 - 1 + extents.height / 2;
+	cairo_move_to(cr, allocation.x + 1, allocation.y + 1);
+	cairo_set_source_rgba(cr, 0, 0, 0, 0.85);
 	cairo_show_text(cr, string);
-	cairo_move_to(cr, allocation.x + 4,
-		      allocation.y + 3 * (allocation.height >> 2));
-	cairo_set_source_rgb(cr, 1, 1, 1);
+	cairo_move_to(cr, allocation.x, allocation.y);
+	cairo_set_source_rgba(cr, 1, 1, 1, 0.85);
 	cairo_show_text(cr, string);
 	cairo_destroy(cr);
 }
@@ -412,10 +426,7 @@ clock_timer_reset(struct panel_clock *clock)
 	its.it_interval.tv_nsec = 0;
 	its.it_value.tv_sec = clock->refresh_timer;
 	its.it_value.tv_nsec = 0;
-	if (timerfd_settime(clock->clock_fd, 0, &its, NULL) < 0) {
-		fprintf(stderr, "could not set timerfd\n: %m");
-		return -1;
-	}
+	toytimer_arm(&clock->timer, &its);
 
 	return 0;
 }
@@ -424,9 +435,7 @@ static void
 panel_destroy_clock(struct panel_clock *clock)
 {
 	widget_destroy(clock->widget);
-
-	close(clock->clock_fd);
-
+	toytimer_fini(&clock->timer);
 	free(clock);
 }
 
@@ -434,18 +443,10 @@ static void
 panel_add_clock(struct panel *panel)
 {
 	struct panel_clock *clock;
-	int timerfd;
-
-	timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
-	if (timerfd < 0) {
-		fprintf(stderr, "could not create timerfd\n: %m");
-		return;
-	}
 
 	clock = xzalloc(sizeof *clock);
 	clock->panel = panel;
 	panel->clock = clock;
-	clock->clock_fd = timerfd;
 
 	switch (panel->clock_format) {
 	case CLOCK_FORMAT_MINUTES:
@@ -460,9 +461,8 @@ panel_add_clock(struct panel *panel)
 		assert(!"not reached");
 	}
 
-	clock->clock_task.run = clock_func;
-	display_watch_fd(window_get_display(panel->window), clock->clock_fd,
-			 EPOLLIN, &clock->clock_task);
+	toytimer_init(&clock->timer, CLOCK_MONOTONIC,
+		      window_get_display(panel->window), clock_func);
 	clock_timer_reset(clock);
 
 	clock->widget = widget_add_widget(panel->widget, clock);
@@ -475,49 +475,41 @@ panel_resize_handler(struct widget *widget,
 {
 	struct panel_launcher *launcher;
 	struct panel *panel = data;
-	int bx = width / 2;
-	int by = height / 2;
-	int spacing = 10;
-	int x = spacing;
-	int y = spacing;
-	int w, h;
+	int x = 0;
+	int y = 0;
+	int w = height > width ? width : height;
+	int h = w;
 	int horizontal = panel->panel_position == WESTON_DESKTOP_SHELL_PANEL_POSITION_TOP || panel->panel_position == WESTON_DESKTOP_SHELL_PANEL_POSITION_BOTTOM;
+	int first_pad_h = horizontal ? 0 : DEFAULT_SPACING / 2;
+	int first_pad_w = horizontal ? DEFAULT_SPACING / 2 : 0;
 
 	wl_list_for_each(launcher, &panel->launcher_list, link) {
-		w = cairo_image_surface_get_width(launcher->icon);
-		h = cairo_image_surface_get_height(launcher->icon);
-
+		widget_set_allocation(launcher->widget, x, y,
+				      w + first_pad_w + 1, h + first_pad_h + 1);
 		if (horizontal)
-			y = by - h / 2;
+			x += w + first_pad_w;
 		else
-			x = bx - w / 2;
-		widget_set_allocation(launcher->widget,
-				      x, y, w + 1, h + 1);
-		if (horizontal)
-			x += w + spacing;
-		else
-			y += h + spacing;
+			y += h + first_pad_h;
+		first_pad_h = first_pad_w = 0;
 	}
-
-	h = 20;
 
 	if (panel->clock_format == CLOCK_FORMAT_SECONDS)
-		w = 190;
-	else /* CLOCK_FORMAT_MINUTES */
 		w = 170;
+	else /* CLOCK_FORMAT_MINUTES */
+		w = 150;
 
-	if (horizontal) {
-		x = width - w - spacing;
-		y = by - h / 2;
-	} else {
-		x = bx - w / 2;
-		y = height - h - spacing;
-	}
+	if (horizontal)
+		x = width - w;
+	else
+		y = height - (h = DEFAULT_SPACING * 3);
 
 	if (panel->clock)
 		widget_set_allocation(panel->clock->widget,
 				      x, y, w + 1, h + 1);
 }
+
+static void
+panel_destroy(struct panel *panel);
 
 static void
 panel_configure(void *data,
@@ -528,6 +520,15 @@ panel_configure(void *data,
 	struct desktop *desktop = data;
 	struct surface *surface = window_get_user_data(window);
 	struct panel *panel = container_of(surface, struct panel, base);
+	struct output *owner;
+
+	if (width < 1 || height < 1) {
+		/* Shell plugin configures 0x0 for redundant panel. */
+		owner = panel->owner;
+		panel_destroy(panel);
+		owner->panel = NULL;
+		return;
+	}
 
 	switch (desktop->panel_position) {
 	case WESTON_DESKTOP_SHELL_PANEL_POSITION_TOP:
@@ -541,10 +542,10 @@ panel_configure(void *data,
 			width = 32;
 			break;
 		case CLOCK_FORMAT_MINUTES:
-			width = 170;
+			width = 150;
 			break;
 		case CLOCK_FORMAT_SECONDS:
-			width = 190;
+			width = 170;
 			break;
 		}
 		break;
@@ -587,13 +588,14 @@ panel_destroy(struct panel *panel)
 }
 
 static struct panel *
-panel_create(struct desktop *desktop)
+panel_create(struct desktop *desktop, struct output *output)
 {
 	struct panel *panel;
 	struct weston_config_section *s;
 
 	panel = xzalloc(sizeof *panel);
 
+	panel->owner = output;
 	panel->base.configure = panel_configure;
 	panel->window = window_create_custom(desktop->display);
 	panel->widget = window_add_widget(panel->window, panel);
@@ -733,7 +735,8 @@ panel_add_launcher(struct panel *panel, const char *icon, const char *path)
 enum {
 	BACKGROUND_SCALE,
 	BACKGROUND_SCALE_CROP,
-	BACKGROUND_TILE
+	BACKGROUND_TILE,
+	BACKGROUND_CENTERED
 };
 
 static void
@@ -753,15 +756,22 @@ background_draw(struct widget *widget, void *data)
 
 	cr = widget_cairo_create(background->widget);
 	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-	cairo_set_source_rgba(cr, 0.0, 0.0, 0.2, 1.0);
+	if (background->color == 0)
+		cairo_set_source_rgba(cr, 0.0, 0.0, 0.2, 1.0);
+	else
+		set_hex_color(cr, background->color);
 	cairo_paint(cr);
 
 	widget_get_allocation(widget, &allocation);
 	image = NULL;
 	if (background->image)
 		image = load_cairo_surface(background->image);
-	else if (background->color == 0)
-		image = load_cairo_surface(DATADIR "/weston/pattern.png");
+	else if (background->color == 0) {
+		char *name = file_name_with_datadir("pattern.png");
+
+		image = load_cairo_surface(name);
+		free(name);
+	}
 
 	if (image && background->type != -1) {
 		im_w = cairo_image_surface_get_width(image);
@@ -790,16 +800,27 @@ background_draw(struct widget *widget, void *data)
 		case BACKGROUND_TILE:
 			cairo_pattern_set_extend(pattern, CAIRO_EXTEND_REPEAT);
 			break;
+		case BACKGROUND_CENTERED:
+			s = (sx < sy) ? sx : sy;
+			if (s < 1.0)
+				s = 1.0;
+
+			/* align center */
+			tx = (im_w - s * allocation.width) * 0.5;
+			ty = (im_h - s * allocation.height) * 0.5;
+
+			cairo_matrix_init_translate(&matrix, tx, ty);
+			cairo_matrix_scale(&matrix, s, s);
+			cairo_pattern_set_matrix(pattern, &matrix);
+			break;
 		}
 
 		cairo_set_source(cr, pattern);
 		cairo_pattern_destroy (pattern);
 		cairo_surface_destroy(image);
-	} else {
-		set_hex_color(cr, background->color);
+		cairo_mask(cr, pattern);
 	}
 
-	cairo_paint(cr);
 	cairo_destroy(cr);
 	cairo_surface_destroy(surface);
 
@@ -808,13 +829,31 @@ background_draw(struct widget *widget, void *data)
 }
 
 static void
+background_destroy(struct background *background);
+
+static void
 background_configure(void *data,
 		     struct weston_desktop_shell *desktop_shell,
 		     uint32_t edges, struct window *window,
 		     int32_t width, int32_t height)
 {
+	struct output *owner;
 	struct background *background =
 		(struct background *) window_get_user_data(window);
+
+	if (width < 1 || height < 1) {
+		/* Shell plugin configures 0x0 for redundant background. */
+		owner = background->owner;
+		background_destroy(background);
+		owner->background = NULL;
+		return;
+	}
+
+	if (!background->image) {
+		widget_set_viewport_destination(background->widget, width, height);
+		width = 1;
+		height = 1;
+	}
 
 	widget_schedule_resize(background->widget, width, height);
 }
@@ -1089,13 +1128,14 @@ background_destroy(struct background *background)
 }
 
 static struct background *
-background_create(struct desktop *desktop)
+background_create(struct desktop *desktop, struct output *output)
 {
 	struct background *background;
 	struct weston_config_section *s;
 	char *type;
 
 	background = xzalloc(sizeof *background);
+	background->owner = output;
 	background->base.configure = background_configure;
 	background->window = window_create_custom(desktop->display);
 	background->widget = window_add_widget(background->window, background);
@@ -1122,6 +1162,8 @@ background_create(struct desktop *desktop)
 		background->type = BACKGROUND_SCALE_CROP;
 	} else if (strcmp(type, "tile") == 0) {
 		background->type = BACKGROUND_TILE;
+	} else if (strcmp(type, "centered") == 0) {
+		background->type = BACKGROUND_CENTERED;
 	} else {
 		background->type = -1;
 		fprintf(stderr, "invalid background-type: %s\n",
@@ -1173,7 +1215,8 @@ grab_surface_create(struct desktop *desktop)
 static void
 output_destroy(struct output *output)
 {
-	background_destroy(output->background);
+	if (output->background)
+		background_destroy(output->background);
 	if (output->panel)
 		panel_destroy(output->panel);
 	wl_output_destroy(output->output);
@@ -1205,9 +1248,13 @@ output_handle_geometry(void *data,
 {
 	struct output *output = data;
 
+	output->x = x;
+	output->y = y;
+
 	if (output->panel)
 		window_set_buffer_transform(output->panel->window, transform);
-	window_set_buffer_transform(output->background->window, transform);
+	if (output->background)
+		window_set_buffer_transform(output->background->window, transform);
 }
 
 static void
@@ -1235,7 +1282,8 @@ output_handle_scale(void *data,
 
 	if (output->panel)
 		window_set_buffer_scale(output->panel->window, scale);
-	window_set_buffer_scale(output->background->window, scale);
+	if (output->background)
+		window_set_buffer_scale(output->background->window, scale);
 }
 
 static const struct wl_output_listener output_listener = {
@@ -1251,13 +1299,13 @@ output_init(struct output *output, struct desktop *desktop)
 	struct wl_surface *surface;
 
 	if (desktop->want_panel) {
-		output->panel = panel_create(desktop);
+		output->panel = panel_create(desktop, output);
 		surface = window_get_wl_surface(output->panel->window);
 		weston_desktop_shell_set_panel(desktop->shell,
 					       output->output, surface);
 	}
 
-	output->background = background_create(desktop);
+	output->background = background_create(desktop, output);
 	surface = window_get_wl_surface(output->background->window);
 	weston_desktop_shell_set_background(desktop->shell,
 					    output->output, surface);
@@ -1284,6 +1332,60 @@ create_output(struct desktop *desktop, uint32_t id)
 	 * in which case we can't create the panel and background just yet */
 	if (desktop->shell)
 		output_init(output, desktop);
+}
+
+static void
+output_remove(struct desktop *desktop, struct output *output)
+{
+	struct output *cur;
+	struct output *rep = NULL;
+
+	if (!output->background) {
+		output_destroy(output);
+		return;
+	}
+
+	/* Find a wl_output that is a clone of the removed wl_output.
+	 * We don't want to leave the clone without a background or panel. */
+	wl_list_for_each(cur, &desktop->outputs, link) {
+		if (cur == output)
+			continue;
+
+		/* XXX: Assumes size matches. */
+		if (cur->x == output->x && cur->y == output->y) {
+			rep = cur;
+			break;
+		}
+	}
+
+	if (rep) {
+		/* If found and it does not already have a background or panel,
+		 * hand over the background and panel so they don't get
+		 * destroyed.
+		 *
+		 * We never create multiple backgrounds or panels for clones,
+		 * but if the compositor moves outputs, a pair of wl_outputs
+		 * might become "clones". This may happen temporarily when
+		 * an output is about to be removed and the rest are reflowed.
+		 * In this case it is correct to let the background/panel be
+		 * destroyed.
+		 */
+
+		if (!rep->background) {
+			rep->background = output->background;
+			output->background = NULL;
+			rep->background->owner = rep;
+		}
+
+		if (!rep->panel) {
+			rep->panel = output->panel;
+			output->panel = NULL;
+			if (rep->panel)
+				rep->panel->owner = rep;
+		}
+	}
+
+	output_destroy(output);
 }
 
 static void
@@ -1315,7 +1417,7 @@ global_handler_remove(struct display *display, uint32_t id,
 	if (!strcmp(interface, "wl_output")) {
 		wl_list_for_each(output, &desktop->outputs, link) {
 			if (output->server_output_id == id) {
-				output_destroy(output);
+				output_remove(desktop, output);
 				break;
 			}
 		}
@@ -1351,10 +1453,13 @@ panel_add_launchers(struct panel *panel, struct desktop *desktop)
 	}
 
 	if (count == 0) {
+                char *name = file_name_with_datadir("terminal.png");
+
 		/* add default launcher */
 		panel_add_launcher(panel,
-				   DATADIR "/weston/terminal.png",
+				   name,
 				   BINDIR "/weston-terminal");
+		free(name);
 	}
 }
 
@@ -1413,13 +1518,14 @@ int main(int argc, char *argv[])
 	config_file = weston_config_get_name_from_env();
 	desktop.config = weston_config_parse(config_file);
 	s = weston_config_get_section(desktop.config, "shell", NULL, NULL);
-	weston_config_section_get_bool(s, "locking", &desktop.locking, 1);
+	weston_config_section_get_bool(s, "locking", &desktop.locking, true);
 	parse_panel_position(&desktop, s);
 	parse_clock_format(&desktop, s);
 
 	desktop.display = display_create(&argc, argv);
 	if (desktop.display == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 

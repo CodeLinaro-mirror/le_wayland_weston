@@ -30,10 +30,10 @@
 
 #include <wayland-server.h>
 
-#include "compositor.h"
-#include "zalloc.h"
+#include <libweston/libweston.h>
+#include <libweston/zalloc.h>
 
-#include "libweston-desktop.h"
+#include <libweston-desktop/libweston-desktop.h>
 #include "internal.h"
 
 #define WD_WL_SHELL_PROTOCOL_VERSION 1
@@ -220,6 +220,9 @@ weston_desktop_wl_shell_surface_protocol_move(struct wl_client *wl_client,
 	struct weston_desktop_wl_shell_surface *surface =
 		weston_desktop_surface_get_implementation_data(dsurface);
 
+	if (seat == NULL)
+		return;
+
 	weston_desktop_api_move(surface->desktop, dsurface, seat, serial);
 }
 
@@ -237,6 +240,9 @@ weston_desktop_wl_shell_surface_protocol_resize(struct wl_client *wl_client,
 		weston_desktop_surface_get_implementation_data(dsurface);
 	enum weston_desktop_surface_edge surf_edges =
 		(enum weston_desktop_surface_edge) edges;
+
+	if (seat == NULL)
+		return;
 
 	weston_desktop_api_resize(surface->desktop, dsurface, seat, serial, surf_edges);
 }
@@ -302,7 +308,7 @@ weston_desktop_wl_shell_surface_protocol_set_fullscreen(struct wl_client *wl_cli
 	struct weston_output *output = NULL;
 
 	if (output_resource != NULL)
-		output = weston_output_from_resource(output_resource);
+		output = weston_head_from_resource(output_resource)->output;
 
 	weston_desktop_wl_shell_change_state(surface, FULLSCREEN, NULL, 0, 0);
 	weston_desktop_api_fullscreen_requested(surface->desktop, dsurface,
@@ -328,7 +334,8 @@ weston_desktop_wl_shell_surface_protocol_set_popup(struct wl_client *wl_client,
 	struct weston_desktop_wl_shell_surface *surface =
 		weston_desktop_surface_get_implementation_data(dsurface);
 
-	if (seat == NULL) {
+	/* Check that if we have a valid wseat we also got a valid desktop seat */
+	if (wseat != NULL && seat == NULL) {
 		wl_client_post_no_memory(wl_client);
 		return;
 	}

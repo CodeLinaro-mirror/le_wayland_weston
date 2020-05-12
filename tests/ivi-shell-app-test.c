@@ -36,10 +36,7 @@ get_ivi_application(struct client *client)
 {
 	struct global *g;
 	struct global *global_iviapp = NULL;
-	static struct ivi_application *iviapp;
-
-	if (iviapp)
-		return iviapp;
+	struct ivi_application *iviapp;
 
 	wl_list_for_each(g, &client->global_list, link) {
 		if (strcmp(g->interface, "ivi_application"))
@@ -71,5 +68,5 @@ TEST(ivi_application_exists)
 	iviapp = get_ivi_application(client);
 	client_roundtrip(client);
 
-	printf("Successful bind: %p\n", iviapp);
+	testlog("Successful bind: %p\n", iviapp);
 }

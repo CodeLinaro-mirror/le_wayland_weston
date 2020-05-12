@@ -25,16 +25,27 @@
 
 #include "config.h"
 
-#include "compositor.h"
+#include <libweston/libweston.h>
+#include "backend.h"
+#include "libweston-internal.h"
 
 int
 pixman_renderer_init(struct weston_compositor *ec);
 
+enum pixman_renderer_output_flags {
+	PIXMAN_RENDERER_OUTPUT_USE_SHADOW = (1 << 0),
+};
+
 int
-pixman_renderer_output_create(struct weston_output *output);
+pixman_renderer_output_create(struct weston_output *output, uint32_t flags);
 
 void
-pixman_renderer_output_set_buffer(struct weston_output *output, pixman_image_t *buffer);
+pixman_renderer_output_set_buffer(struct weston_output *output,
+				  pixman_image_t *buffer);
+
+void
+pixman_renderer_output_set_hw_extra_damage(struct weston_output *output,
+					   pixman_region32_t *extra_damage);
 
 void
 pixman_renderer_output_destroy(struct weston_output *output);

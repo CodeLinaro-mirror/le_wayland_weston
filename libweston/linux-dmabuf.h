@@ -35,6 +35,9 @@ extern "C" {
 #ifndef DRM_FORMAT_MOD_INVALID
 #define DRM_FORMAT_MOD_INVALID ((1ULL<<56) - 1)
 #endif
+#ifndef DRM_FORMAT_MOD_LINEAR
+#define DRM_FORMAT_MOD_LINEAR 0
+#endif
 
 struct linux_dmabuf_buffer;
 typedef void (*dmabuf_user_data_destroy_func)(
@@ -75,10 +78,16 @@ struct linux_dmabuf_buffer {
 	 * feasible to scan it out directly. This would improve the
 	 * possibilities to successfully scan out, avoiding compositing.
 	 */
+
+	/**< marked as scan-out capable, avoids any composition */
+	bool direct_display;
 };
 
 int
 linux_dmabuf_setup(struct weston_compositor *compositor);
+
+int
+weston_direct_display_setup(struct weston_compositor *compositor);
 
 struct linux_dmabuf_buffer *
 linux_dmabuf_buffer_get(struct wl_resource *resource);

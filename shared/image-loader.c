@@ -166,15 +166,15 @@ premultiply_data(png_structp   png,
     png_bytep p;
 
     for (i = 0, p = data; i < row_info->rowbytes; i += 4, p += 4) {
-	png_byte  alpha = p[3];
+	uint32_t alpha = p[3];
 	uint32_t w;
 
 	if (alpha == 0) {
 		w = 0;
 	} else {
-		png_byte red   = p[0];
-		png_byte green = p[1];
-		png_byte blue  = p[2];
+		uint32_t red   = p[0];
+		uint32_t green = p[1];
+		uint32_t blue  = p[2];
 
 		if (alpha != 0xff) {
 			red   = multiply_alpha(alpha, red);
@@ -208,8 +208,8 @@ load_png(FILE *fp)
 {
 	png_struct *png;
 	png_info *info;
-	png_byte *data = NULL;
-	png_byte **row_pointers = NULL;
+	png_byte *volatile data = NULL;
+	png_byte **volatile row_pointers = NULL;
 	png_uint_32 width, height;
 	int depth, color_type, interlace, stride;
 	unsigned int i;

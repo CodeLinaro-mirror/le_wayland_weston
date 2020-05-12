@@ -31,6 +31,7 @@
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 #include <pixman.h>
 
 #include <wayland-client-protocol.h>
@@ -74,6 +75,8 @@ struct test {
 };
 
 struct input {
+	struct client *client;
+	uint32_t global_name;
 	struct wl_seat *wl_seat;
 	struct pointer *pointer;
 	struct keyboard *keyboard;
@@ -90,6 +93,17 @@ struct pointer {
 	int y;
 	uint32_t button;
 	uint32_t state;
+	uint32_t axis;
+	double axis_value;
+	uint32_t motion_time_msec;
+	uint32_t button_time_msec;
+	uint32_t axis_time_msec;
+	uint32_t axis_stop_time_msec;
+	struct timespec input_timestamp;
+	struct timespec motion_time_timespec;
+	struct timespec button_time_timespec;
+	struct timespec axis_time_timespec;
+	struct timespec axis_stop_time_timespec;
 };
 
 struct keyboard {
@@ -105,6 +119,9 @@ struct keyboard {
 		int rate;
 		int delay;
 	} repeat_info;
+	uint32_t key_time_msec;
+	struct timespec input_timestamp;
+	struct timespec key_time_timespec;
 };
 
 struct touch {
@@ -117,6 +134,13 @@ struct touch {
 	int up_id; /* id of last wl_touch.up event */
 	int frame_no;
 	int cancel_no;
+	uint32_t down_time_msec;
+	uint32_t up_time_msec;
+	uint32_t motion_time_msec;
+	struct timespec input_timestamp;
+	struct timespec down_time_timespec;
+	struct timespec up_time_timespec;
+	struct timespec motion_time_timespec;
 };
 
 struct output {
@@ -154,6 +178,9 @@ struct rectangle {
 
 struct client *
 create_client(void);
+
+struct surface *
+create_test_surface(struct client *client);
 
 struct client *
 create_client_and_test_surface(int x, int y, int width, int height);

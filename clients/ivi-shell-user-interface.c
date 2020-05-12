@@ -35,14 +35,16 @@
 #include <signal.h>
 #include <sys/mman.h>
 #include <getopt.h>
+#include <errno.h>
 #include <wayland-cursor.h>
 #include <wayland-client-protocol.h>
 #include "shared/cairo-util.h"
-#include "shared/config-parser.h"
+#include <libweston/config-parser.h>
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
 #include "shared/xalloc.h"
-#include "shared/zalloc.h"
+#include <libweston/zalloc.h>
+#include "shared/file-util.h"
 #include "ivi-application-client-protocol.h"
 #include "ivi-hmi-controller-client-protocol.h"
 
@@ -805,8 +807,8 @@ createShmBuffer(struct wlContextStruct *p_wlCtx)
 
 	fd = os_create_anonymous_file(size);
 	if (fd < 0) {
-		fprintf(stderr, "creating a buffer file for %d B failed: %m\n",
-			size);
+		fprintf(stderr, "creating a buffer file for %d B failed: %s\n",
+			size, strerror(errno));
 		return ;
 	}
 
@@ -814,7 +816,7 @@ createShmBuffer(struct wlContextStruct *p_wlCtx)
 		mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
 	if (MAP_FAILED == p_wlCtx->data) {
-		fprintf(stderr, "mmap failed: %m\n");
+		fprintf(stderr, "mmap failed: %s\n", strerror(errno));
 		close(fd);
 		return;
 	}
@@ -827,7 +829,8 @@ createShmBuffer(struct wlContextStruct *p_wlCtx)
 						      WL_SHM_FORMAT_ARGB8888);
 
 	if (NULL == p_wlCtx->wlBuffer) {
-		fprintf(stderr, "wl_shm_create_buffer failed: %m\n");
+		fprintf(stderr, "wl_shm_create_buffer failed: %s\n",
+			strerror(errno));
 		close(fd);
 		return;
 	}
@@ -1076,6 +1079,7 @@ hmi_homescreen_setting_create(void)
 	const char *name = NULL;
 	uint32_t workspace_layer_id;
 	uint32_t icon_surface_id = 0;
+	char *filename;
 
 	wl_list_init(&setting->workspace_list);
 	wl_list_init(&setting->launcher_list);
@@ -1095,51 +1099,65 @@ hmi_homescreen_setting_create(void)
 	weston_config_section_get_uint(
 		shellSection, "workspace-layer-id", &workspace_layer_id, 3000);
 
+	filename = file_name_with_datadir("background.png");
 	weston_config_section_get_string(
 		shellSection, "background-image", &setting->background.filePath,
-		DATADIR "/weston/background.png");
+		filename);
+	free(filename);
 
 	weston_config_section_get_uint(
 		shellSection, "background-id", &setting->background.id, 1001);
 
+	filename = file_name_with_datadir("panel.png");
 	weston_config_section_get_string(
 		shellSection, "panel-image", &setting->panel.filePath,
-		DATADIR "/weston/panel.png");
+		filename);
+	free(filename);
 
 	weston_config_section_get_uint(
 		shellSection, "panel-id", &setting->panel.id, 1002);
 
+	filename = file_name_with_datadir("tiling.png");
 	weston_config_section_get_string(
 		shellSection, "tiling-image", &setting->tiling.filePath,
-		DATADIR "/weston/tiling.png");
+		filename);
+	free(filename);
 
 	weston_config_section_get_uint(
 		shellSection, "tiling-id", &setting->tiling.id, 1003);
 
+	filename = file_name_with_datadir("sidebyside.png");
 	weston_config_section_get_string(
 		shellSection, "sidebyside-image", &setting->sidebyside.filePath,
-		DATADIR "/weston/sidebyside.png");
+		filename);
+	free(filename);
 
 	weston_config_section_get_uint(
 		shellSection, "sidebyside-id", &setting->sidebyside.id, 1004);
 
+	filename = file_name_with_datadir("fullscreen.png");
 	weston_config_section_get_string(
 		shellSection, "fullscreen-image", &setting->fullscreen.filePath,
-		DATADIR "/weston/fullscreen.png");
+		filename);
+	free(filename);
 
 	weston_config_section_get_uint(
 		shellSection, "fullscreen-id", &setting->fullscreen.id, 1005);
 
+	filename = file_name_with_datadir("random.png");
 	weston_config_section_get_string(
 		shellSection, "random-image", &setting->random.filePath,
-		DATADIR "/weston/random.png");
+		filename);
+	free(filename);
 
 	weston_config_section_get_uint(
 		shellSection, "random-id", &setting->random.id, 1006);
 
+	filename = file_name_with_datadir("home.png");
 	weston_config_section_get_string(
 		shellSection, "home-image", &setting->home.filePath,
-		DATADIR "/weston/home.png");
+		filename);
+	free(filename);
 
 	weston_config_section_get_uint(
 		shellSection, "home-id", &setting->home.id, 1007);

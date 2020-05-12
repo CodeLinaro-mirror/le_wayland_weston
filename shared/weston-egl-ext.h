@@ -176,12 +176,45 @@ typedef EGLSurface (EGLAPIENTRYP PFNEGLCREATEPLATFORMPIXMAPSURFACEEXTPROC) (EGLD
 #define EGL_PLATFORM_X11_KHR 0x31D5
 #endif
 
+#ifndef EGL_PLATFORM_SURFACELESS_MESA
+#define EGL_PLATFORM_SURFACELESS_MESA     0x31DD
+#endif
+
+#ifndef EGL_KHR_cl_event2
+#define EGL_KHR_cl_event2 1
+typedef void *EGLSyncKHR;
+#endif /* EGL_KHR_cl_event2 */
+
+#ifndef EGL_NO_SYNC_KHR
+#define EGL_NO_SYNC_KHR ((EGLSyncKHR)0)
+#endif
+
+#ifndef EGL_KHR_fence_sync
+#define EGL_KHR_fence_sync 1
+typedef EGLSyncKHR (EGLAPIENTRYP PFNEGLCREATESYNCKHRPROC) (EGLDisplay dpy, EGLenum type, const EGLint *attrib_list);
+typedef EGLBoolean (EGLAPIENTRYP PFNEGLDESTROYSYNCKHRPROC) (EGLDisplay dpy, EGLSyncKHR sync);
+#endif /* EGL_KHR_fence_sync */
+
+#ifndef EGL_ANDROID_native_fence_sync
+#define EGL_ANDROID_native_fence_sync 1
+typedef EGLint (EGLAPIENTRYP PFNEGLDUPNATIVEFENCEFDANDROIDPROC) (EGLDisplay dpy, EGLSyncKHR sync);
+#endif /* EGL_ANDROID_native_fence_sync */
+
+#ifndef EGL_SYNC_NATIVE_FENCE_ANDROID
+#define EGL_SYNC_NATIVE_FENCE_ANDROID 0x3144
+#endif
+
+#ifndef EGL_NO_NATIVE_FENCE_FD_ANDROID
+#define EGL_NO_NATIVE_FENCE_FD_ANDROID -1
+#endif
+
 #else /* ENABLE_EGL */
 
 /* EGL platform definition are keept to allow compositor-xx.c to build */
 #define EGL_PLATFORM_GBM_KHR     0x31D7
 #define EGL_PLATFORM_WAYLAND_KHR 0x31D8
 #define EGL_PLATFORM_X11_KHR     0x31D5
+#define EGL_PLATFORM_SURFACELESS_MESA     0x31DD
 
 #endif /* ENABLE_EGL */
 

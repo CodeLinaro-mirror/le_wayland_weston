@@ -35,6 +35,7 @@
 #include <cairo.h>
 #include <sys/epoll.h>
 #include <stdbool.h>
+#include <errno.h>
 
 #include <wayland-client.h>
 #include <wayland-cursor.h>
@@ -534,6 +535,10 @@ create_drag_source(struct dnd *dnd,
 		} else {
 			dnd_drag->data_source =
 				display_create_data_source(dnd->display);
+			if (!dnd_drag->data_source) {
+				fprintf(stderr, "No data device manager\n");
+				abort();
+			}
 			wl_data_source_add_listener(dnd_drag->data_source,
 						    &data_source_listener,
 						    dnd_drag);
@@ -844,7 +849,8 @@ main(int argc, char *argv[])
 
 	d = display_create(&argc, argv);
 	if (d == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 

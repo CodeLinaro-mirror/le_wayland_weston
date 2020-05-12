@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include <linux/input.h>
 #include <cairo.h>
@@ -273,11 +274,10 @@ static void __attribute__ ((format (printf, 1, 2)))
 dbg(const char *fmt, ...)
 {
 #ifdef DEBUG
-	int l;
 	va_list argp;
 
 	va_start(argp, fmt);
-	l = vfprintf(stderr, fmt, argp);
+	vfprintf(stderr, fmt, argp);
 	va_end(argp);
 #endif
 }
@@ -1020,7 +1020,8 @@ main(int argc, char *argv[])
 
 	virtual_keyboard.display = display_create(&argc, argv);
 	if (virtual_keyboard.display == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 

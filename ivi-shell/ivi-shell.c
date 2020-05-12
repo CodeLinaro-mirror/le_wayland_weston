@@ -44,7 +44,7 @@
 
 #include "ivi-shell.h"
 #include "ivi-application-server-protocol.h"
-#include "ivi-layout-export.h"
+#include "ivi-layout-private.h"
 #include "ivi-layout-shell.h"
 #include "shared/helpers.h"
 #include "compositor/weston.h"
@@ -65,12 +65,6 @@ struct ivi_shell_surface
 	int32_t height;
 
 	struct wl_list link;
-};
-
-struct ivi_shell_setting
-{
-	char *ivi_module;
-	int developermode;
 };
 
 /*
@@ -114,7 +108,6 @@ shell_surface_send_configure(struct weston_surface *surface,
 	struct ivi_shell_surface *shsurf;
 
 	shsurf = get_ivi_shell_surface(surface);
-	assert(shsurf);
 	if (!shsurf)
 		return;
 
@@ -163,6 +156,10 @@ layout_surface_cleanup(struct ivi_shell_surface *ivisurf)
 {
 	assert(ivisurf->layout_surface != NULL);
 
+	/* destroy weston_surface destroy signal. */
+	if (!ivisurf->layout_surface->weston_desktop_surface)
+		wl_list_remove(&ivisurf->surface_destroy_listener.link);
+
 	ivi_layout_surface_destroy(ivisurf->layout_surface);
 	ivisurf->layout_surface = NULL;
 
@@ -170,9 +167,6 @@ layout_surface_cleanup(struct ivi_shell_surface *ivisurf)
 	ivisurf->surface->committed_private = NULL;
 	weston_surface_set_label_func(ivisurf->surface, NULL);
 	ivisurf->surface = NULL;
-
-	// destroy weston_surface destroy signal.
-	wl_list_remove(&ivisurf->surface_destroy_listener.link);
 }
 
 /*
@@ -272,6 +266,8 @@ application_surface_create(struct wl_client *client,
 		return;
 	}
 
+	layout_surface->weston_desktop_surface = NULL;
+
 	ivisurf = zalloc(sizeof *ivisurf);
 	if (ivisurf == NULL) {
 		wl_resource_post_no_memory(resource);
@@ -337,23 +333,6 @@ bind_ivi_application(struct wl_client *client,
 				       shell, NULL);
 }
 
-struct weston_view *
-get_default_view(struct weston_surface *surface)
-{
-	struct weston_view *view;
-
-	if (!surface || wl_list_empty(&surface->views))
-		return NULL;
-
-	wl_list_for_each(view, &surface->views, surface_link) {
-		if (weston_view_is_mapped(view))
-			return view;
-	}
-
-	return container_of(surface->views.next,
-			    struct weston_view, surface_link);
-}
-
 /*
  * Called through the compositor's destroy signal.
  */
@@ -364,8 +343,8 @@ shell_destroy(struct wl_listener *listener, void *data)
 		container_of(listener, struct ivi_shell, destroy_listener);
 	struct ivi_shell_surface *ivisurf, *next;
 
-	text_backend_destroy(shell->text_backend);
-	input_panel_destroy(shell);
+	wl_list_remove(&shell->destroy_listener.link);
+	wl_list_remove(&shell->wake_listener.link);
 
 	wl_list_for_each_safe(ivisurf, next, &shell->ivi_surface_list, link) {
 		wl_list_remove(&ivisurf->link);
@@ -375,26 +354,43 @@ shell_destroy(struct wl_listener *listener, void *data)
 	free(shell);
 }
 
+/*
+ * Called through the compositor's wake signal.
+ */
 static void
-terminate_binding(struct weston_keyboard *keyboard, uint32_t time,
+wake_handler(struct wl_listener *listener, void *data)
+{
+	struct weston_compositor *compositor = data;
+
+	weston_compositor_damage_all(compositor);
+}
+
+static void
+terminate_binding(struct weston_keyboard *keyboard, const struct timespec *time,
 		  uint32_t key, void *data)
 {
 	struct weston_compositor *compositor = data;
 
-	wl_display_terminate(compositor->wl_display);
+	weston_compositor_exit(compositor);
 }
 
 static void
-init_ivi_shell(struct weston_compositor *compositor, struct ivi_shell *shell,
-	       const struct ivi_shell_setting *setting)
+init_ivi_shell(struct weston_compositor *compositor, struct ivi_shell *shell)
 {
+	struct weston_config *config = wet_get_config(compositor);
+	struct weston_config_section *section;
+	bool developermode;
+
 	shell->compositor = compositor;
 
 	wl_list_init(&shell->ivi_surface_list);
 
-	weston_layer_init(&shell->input_panel_layer, compositor);
+	section = weston_config_get_section(config, "ivi-shell", NULL, NULL);
 
-	if (setting->developermode) {
+	weston_config_section_get_bool(section, "developermode",
+				       &developermode, 0);
+
+	if (developermode) {
 		weston_install_debug_key_binding(compositor, MODIFIER_SUPER);
 
 		weston_compositor_add_key_binding(compositor, KEY_BACKSPACE,
@@ -402,37 +398,6 @@ init_ivi_shell(struct weston_compositor *compositor, struct ivi_shell *shell,
 						  terminate_binding,
 						  compositor);
 	}
-}
-
-static int
-ivi_shell_setting_create(struct ivi_shell_setting *dest,
-			 struct weston_compositor *compositor,
-			 int *argc, char *argv[])
-{
-	int result = 0;
-	struct weston_config *config = wet_get_config(compositor);
-	struct weston_config_section *section;
-
-	const struct weston_option ivi_shell_options[] = {
-		{ WESTON_OPTION_STRING, "ivi-module", 0, &dest->ivi_module },
-	};
-
-	parse_options(ivi_shell_options, ARRAY_LENGTH(ivi_shell_options),
-		      argc, argv);
-
-	section = weston_config_get_section(config, "ivi-shell", NULL, NULL);
-
-	if (!dest->ivi_module &&
-	    weston_config_section_get_string(section, "ivi-module",
-					     &dest->ivi_module, NULL) < 0) {
-		weston_log("Error: ivi-shell: No ivi-module set\n");
-		result = -1;
-	}
-
-	weston_config_section_get_bool(section, "developermode",
-				       &dest->developermode, 0);
-
-	return result;
 }
 
 static void
@@ -450,7 +415,8 @@ activate_binding(struct weston_seat *seat,
 }
 
 static void
-click_to_activate_binding(struct weston_pointer *pointer, uint32_t time,
+click_to_activate_binding(struct weston_pointer *pointer,
+			  const struct timespec *time,
 			  uint32_t button, void *data)
 {
 	if (pointer->grab != &pointer->default_grab)
@@ -462,7 +428,8 @@ click_to_activate_binding(struct weston_pointer *pointer, uint32_t time,
 }
 
 static void
-touch_to_activate_binding(struct weston_touch *touch, uint32_t time,
+touch_to_activate_binding(struct weston_touch *touch,
+			  const struct timespec *time,
 			  void *data)
 {
 	if (touch->grab != &touch->default_grab)
@@ -489,6 +456,161 @@ shell_add_bindings(struct weston_compositor *compositor,
 }
 
 /*
+ * libweston-desktop
+ */
+
+static void
+desktop_surface_ping_timeout(struct weston_desktop_client *client,
+			     void *user_data)
+{
+	/* Not supported */
+}
+
+static void
+desktop_surface_pong(struct weston_desktop_client *client,
+		     void *user_data)
+{
+	/* Not supported */
+}
+
+static void
+desktop_surface_added(struct weston_desktop_surface *surface,
+		      void *user_data)
+{
+	struct ivi_shell *shell = (struct ivi_shell *) user_data;
+	struct ivi_layout_surface *layout_surface;
+	struct ivi_shell_surface *ivisurf;
+	struct weston_surface *weston_surf =
+			weston_desktop_surface_get_surface(surface);
+
+	layout_surface = ivi_layout_desktop_surface_create(weston_surf);
+	if (!layout_surface) {
+		return;
+	}
+
+	layout_surface->weston_desktop_surface = surface;
+
+	ivisurf = zalloc(sizeof *ivisurf);
+	if (!ivisurf) {
+		return;
+	}
+
+	ivisurf->shell = shell;
+	ivisurf->id_surface = IVI_INVALID_ID;
+
+	ivisurf->width = 0;
+	ivisurf->height = 0;
+	ivisurf->layout_surface = layout_surface;
+	ivisurf->surface = weston_surf;
+
+	weston_desktop_surface_set_user_data(surface, ivisurf);
+}
+
+static void
+desktop_surface_removed(struct weston_desktop_surface *surface,
+			void *user_data)
+{
+	struct ivi_shell_surface *ivisurf = (struct ivi_shell_surface *)
+			weston_desktop_surface_get_user_data(surface);
+
+	assert(ivisurf != NULL);
+
+	if (ivisurf->layout_surface)
+		layout_surface_cleanup(ivisurf);
+}
+
+static void
+desktop_surface_committed(struct weston_desktop_surface *surface,
+			  int32_t sx, int32_t sy, void *user_data)
+{
+	struct ivi_shell_surface *ivisurf = (struct ivi_shell_surface *)
+			weston_desktop_surface_get_user_data(surface);
+	struct weston_surface *weston_surf =
+			weston_desktop_surface_get_surface(surface);
+
+	if(!ivisurf)
+		return;
+
+	if (weston_surf->width == 0 || weston_surf->height == 0)
+		return;
+
+	if (ivisurf->width != weston_surf->width ||
+	    ivisurf->height != weston_surf->height) {
+		ivisurf->width  = weston_surf->width;
+		ivisurf->height = weston_surf->height;
+
+		ivi_layout_desktop_surface_configure(ivisurf->layout_surface,
+						 weston_surf->width,
+						 weston_surf->height);
+	}
+}
+
+static void
+desktop_surface_move(struct weston_desktop_surface *surface,
+		     struct weston_seat *seat, uint32_t serial, void *user_data)
+{
+	/* Not supported */
+}
+
+static void
+desktop_surface_resize(struct weston_desktop_surface *surface,
+		       struct weston_seat *seat, uint32_t serial,
+		       enum weston_desktop_surface_edge edges, void *user_data)
+{
+	/* Not supported */
+}
+
+static void
+desktop_surface_fullscreen_requested(struct weston_desktop_surface *surface,
+				     bool fullscreen,
+				     struct weston_output *output,
+				     void *user_data)
+{
+	/* Not supported */
+}
+
+static void
+desktop_surface_maximized_requested(struct weston_desktop_surface *surface,
+				    bool maximized, void *user_data)
+{
+	/* Not supported */
+}
+
+static void
+desktop_surface_minimized_requested(struct weston_desktop_surface *surface,
+				    void *user_data)
+{
+	/* Not supported */
+}
+
+static void
+desktop_surface_set_xwayland_position(struct weston_desktop_surface *surface,
+				      int32_t x, int32_t y, void *user_data)
+{
+	/* Not supported */
+}
+
+static const struct weston_desktop_api shell_desktop_api = {
+	.struct_size = sizeof(struct weston_desktop_api),
+	.ping_timeout = desktop_surface_ping_timeout,
+	.pong = desktop_surface_pong,
+	.surface_added = desktop_surface_added,
+	.surface_removed = desktop_surface_removed,
+	.committed = desktop_surface_committed,
+
+	.move = desktop_surface_move,
+	.resize = desktop_surface_resize,
+	.fullscreen_requested = desktop_surface_fullscreen_requested,
+	.maximized_requested = desktop_surface_maximized_requested,
+	.minimized_requested = desktop_surface_minimized_requested,
+	.set_xwayland_position = desktop_surface_set_xwayland_position,
+};
+
+/*
+ * end of libweston-desktop
+ */
+
+/*
  * Initialization of ivi-shell.
  */
 WL_EXPORT int
@@ -496,45 +618,43 @@ wet_shell_init(struct weston_compositor *compositor,
 	       int *argc, char *argv[])
 {
 	struct ivi_shell *shell;
-	struct ivi_shell_setting setting = { };
-	int retval = -1;
 
 	shell = zalloc(sizeof *shell);
 	if (shell == NULL)
 		return -1;
 
-	if (ivi_shell_setting_create(&setting, compositor, argc, argv) != 0)
-		return -1;
+	if (!weston_compositor_add_destroy_listener_once(compositor,
+							 &shell->destroy_listener,
+							 shell_destroy)) {
+		free(shell);
+		return 0;
+	}
 
-	init_ivi_shell(compositor, shell, &setting);
+	init_ivi_shell(compositor, shell);
 
-	shell->destroy_listener.notify = shell_destroy;
-	wl_signal_add(&compositor->destroy_signal, &shell->destroy_listener);
+	shell->wake_listener.notify = wake_handler;
+	wl_signal_add(&compositor->wake_signal, &shell->wake_listener);
 
-	if (input_panel_setup(shell) < 0)
-		goto out_settings;
-
-	shell->text_backend = text_backend_init(compositor);
-	if (!shell->text_backend)
-		goto out_settings;
+	shell->desktop = weston_desktop_create(compositor, &shell_desktop_api, shell);
+	if (!shell->desktop)
+		goto err_shell;
 
 	if (wl_global_create(compositor->wl_display,
 			     &ivi_application_interface, 1,
 			     shell, bind_ivi_application) == NULL)
-		goto out_settings;
+		goto err_desktop;
 
 	ivi_layout_init_with_compositor(compositor);
 	shell_add_bindings(compositor, shell);
 
-	/* Call module_init of ivi-modules which are defined in weston.ini */
-	if (load_controller_modules(compositor, setting.ivi_module,
-				    argc, argv) < 0)
-		goto out_settings;
+	return IVI_SUCCEEDED;
 
-	retval = 0;
+err_desktop:
+	weston_desktop_destroy(shell->desktop);
 
-out_settings:
-	free(setting.ivi_module);
+err_shell:
+	wl_list_remove(&shell->destroy_listener.link);
+	free(shell);
 
-	return retval;
+	return IVI_FAILED;
 }

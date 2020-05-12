@@ -75,8 +75,8 @@ theme_set_background_source(struct theme *t, cairo_t *cr, uint32_t flags);
 void
 theme_render_frame(struct theme *t,
 		   cairo_t *cr, int width, int height,
-		   const char *title, struct wl_list *buttons,
-		   uint32_t flags);
+		   const char *title, cairo_rectangle_int_t *title_rect,
+		   struct wl_list *buttons, uint32_t flags);
 
 enum theme_location {
 	THEME_LOCATION_INTERIOR = 0,
@@ -126,7 +126,7 @@ enum {
 
 struct frame *
 frame_create(struct theme *t, int32_t width, int32_t height, uint32_t buttons,
-	     const char *title);
+             const char *title, cairo_surface_t *icon);
 
 void
 frame_destroy(struct frame *frame);
@@ -134,6 +134,10 @@ frame_destroy(struct frame *frame);
 /* May set FRAME_STATUS_REPAINT */
 int
 frame_set_title(struct frame *frame, const char *title);
+
+/* May set FRAME_STATUS_REPAINT */
+void
+frame_set_icon(struct frame *frame, cairo_surface_t *icon);
 
 /* May set FRAME_STATUS_REPAINT */
 void

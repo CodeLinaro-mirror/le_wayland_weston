@@ -1,7 +1,8 @@
 /*
  * Copyright © 2010-2011 Intel Corporation
  * Copyright © 2008-2011 Kristian Høgsberg
- * Copyright © 2012-2015 Collabora, Ltd.
+ * Copyright © 2012-2018 Collabora, Ltd.
+ * Copyright © 2017, 2018 General Electric Company
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -50,19 +51,39 @@
 #include <sys/time.h>
 #include <time.h>
 #include <errno.h>
+#include <inttypes.h>
 
 #include "timeline.h"
 
-#include "compositor.h"
+#include <libweston/libweston.h>
+#include <libweston/weston-log.h>
+#include "linux-dmabuf.h"
 #include "viewporter-server-protocol.h"
 #include "presentation-time-server-protocol.h"
+#include "xdg-output-unstable-v1-server-protocol.h"
+#include "linux-explicit-synchronization-unstable-v1-server-protocol.h"
+#include "linux-explicit-synchronization.h"
+#include "shared/fd-util.h"
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
 #include "shared/string-helpers.h"
 #include "shared/timespec-util.h"
 #include "git-version.h"
-#include "version.h"
-#include "plugin-registry.h"
+#include <libweston/version.h>
+#include <libweston/plugin-registry.h>
+#include "pixel-formats.h"
+#include "backend.h"
+#include "libweston-internal.h"
+
+#include "weston-log-internal.h"
+
+/**
+ * \defgroup head Head
+ * \defgroup output Output
+ * \defgroup compositor Compositor
+ */
+
+#define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
 
 static void
 weston_output_update_matrix(struct weston_output *output);
@@ -74,14 +95,57 @@ weston_output_transform_scale_init(struct weston_output *output,
 static void
 weston_compositor_build_view_list(struct weston_compositor *compositor);
 
-static void weston_mode_switch_finish(struct weston_output *output,
-				      int mode_changed,
-				      int scale_changed)
+static char *
+weston_output_create_heads_string(struct weston_output *output);
+
+/** Send wl_output events for mode and scale changes
+ *
+ * \param head Send on all resources bound to this head.
+ * \param mode_changed If true, send the current mode.
+ * \param scale_changed If true, send the current scale.
+ */
+static void
+weston_mode_switch_send_events(struct weston_head *head,
+			       bool mode_changed, bool scale_changed)
+{
+	struct weston_output *output = head->output;
+	struct wl_resource *resource;
+	int version;
+
+	wl_resource_for_each(resource, &head->resource_list) {
+		if (mode_changed) {
+			wl_output_send_mode(resource,
+					    output->current_mode->flags,
+					    output->current_mode->width,
+					    output->current_mode->height,
+					    output->current_mode->refresh);
+		}
+
+		version = wl_resource_get_version(resource);
+		if (version >= WL_OUTPUT_SCALE_SINCE_VERSION && scale_changed)
+			wl_output_send_scale(resource, output->current_scale);
+
+		if (version >= WL_OUTPUT_DONE_SINCE_VERSION)
+			wl_output_send_done(resource);
+	}
+	wl_resource_for_each(resource, &head->xdg_output_resource_list) {
+		zxdg_output_v1_send_logical_position(resource,
+						     output->x,
+						     output->y);
+		zxdg_output_v1_send_logical_size(resource,
+						 output->width,
+						 output->height);
+		zxdg_output_v1_send_done(resource);
+	}
+}
+
+static void
+weston_mode_switch_finish(struct weston_output *output,
+			  int mode_changed, int scale_changed)
 {
 	struct weston_seat *seat;
-	struct wl_resource *resource;
+	struct weston_head *head;
 	pixman_region32_t old_output_region;
-	int version;
 
 	pixman_region32_init(&old_output_region);
 	pixman_region32_copy(&old_output_region, &output->region);
@@ -89,7 +153,6 @@ static void weston_mode_switch_finish(struct weston_output *output,
 	/* Update output region and transformation matrix */
 	weston_output_transform_scale_init(output, output->transform, output->current_scale);
 
-	pixman_region32_init(&output->previous_damage);
 	pixman_region32_init_rect(&output->region, output->x, output->y,
 				  output->width, output->height);
 
@@ -128,29 +191,18 @@ static void weston_mode_switch_finish(struct weston_output *output,
 		return;
 
 	/* notify clients of the changes */
-	wl_resource_for_each(resource, &output->resource_list) {
-		if (mode_changed) {
-			wl_output_send_mode(resource,
-					    output->current_mode->flags,
-					    output->current_mode->width,
-					    output->current_mode->height,
-					    output->current_mode->refresh);
-		}
-
-		version = wl_resource_get_version(resource);
-		if (version >= WL_OUTPUT_SCALE_SINCE_VERSION && scale_changed)
-			wl_output_send_scale(resource, output->current_scale);
-
-		if (version >= WL_OUTPUT_DONE_SINCE_VERSION)
-			wl_output_send_done(resource);
-	}
+	wl_list_for_each(head, &output->head_list, output_link)
+		weston_mode_switch_send_events(head,
+					       mode_changed, scale_changed);
 }
-
 
 static void
 weston_compositor_reflow_outputs(struct weston_compositor *compositor,
 				struct weston_output *resized_output, int delta_width);
 
+/**
+ * \ingroup output
+ */
 WL_EXPORT int
 weston_output_mode_set_native(struct weston_output *output,
 			      struct weston_mode *mode,
@@ -188,6 +240,9 @@ weston_output_mode_set_native(struct weston_output *output,
 	return 0;
 }
 
+/**
+ * \ingroup output
+ */
 WL_EXPORT int
 weston_output_mode_switch_to_native(struct weston_output *output)
 {
@@ -222,6 +277,9 @@ weston_output_mode_switch_to_native(struct weston_output *output)
 	return 0;
 }
 
+/**
+ * \ingroup output
+ */
 WL_EXPORT int
 weston_output_mode_switch_to_temporary(struct weston_output *output,
 				       struct weston_mode *mode,
@@ -338,20 +396,32 @@ weston_presentation_feedback_present(
 		uint32_t flags)
 {
 	struct wl_client *client = wl_resource_get_client(feedback->resource);
+	struct weston_head *head;
 	struct wl_resource *o;
-	uint64_t secs;
+	uint32_t tv_sec_hi;
+	uint32_t tv_sec_lo;
+	uint32_t tv_nsec;
+	bool done = false;
 
-	wl_resource_for_each(o, &output->resource_list) {
-		if (wl_resource_get_client(o) != client)
-			continue;
+	wl_list_for_each(head, &output->head_list, output_link) {
+		wl_resource_for_each(o, &head->resource_list) {
+			if (wl_resource_get_client(o) != client)
+				continue;
 
-		wp_presentation_feedback_send_sync_output(feedback->resource, o);
+			wp_presentation_feedback_send_sync_output(feedback->resource, o);
+			done = true;
+		}
+
+		/* For clone mode, send it for just one wl_output global,
+		 * they are all equivalent anyway.
+		 */
+		if (done)
+			break;
 	}
 
-	secs = ts->tv_sec;
+	timespec_to_proto(ts, &tv_sec_hi, &tv_sec_lo, &tv_nsec);
 	wp_presentation_feedback_send_presented(feedback->resource,
-						secs >> 32, secs & 0xffffffff,
-						ts->tv_nsec,
+						tv_sec_hi, tv_sec_lo, tv_nsec,
 						refresh_nsec,
 						seq >> 32, seq & 0xffffffff,
 						flags | feedback->psf_flags);
@@ -410,6 +480,11 @@ weston_surface_state_init(struct weston_surface_state *state)
 	state->buffer_viewport.buffer.src_width = wl_fixed_from_int(-1);
 	state->buffer_viewport.surface.width = -1;
 	state->buffer_viewport.changed = 0;
+
+	state->acquire_fence_fd = -1;
+
+	state->desired_protection = WESTON_HDCP_DISABLE;
+	state->protection_mode = WESTON_SURFACE_PROTECTION_MODE_RELAXED;
 }
 
 static void
@@ -431,6 +506,9 @@ weston_surface_state_fini(struct weston_surface_state *state)
 	if (state->buffer)
 		wl_list_remove(&state->buffer_destroy_listener.link);
 	state->buffer = NULL;
+
+	fd_clear(&state->acquire_fence_fd);
+	weston_buffer_release_reference(&state->buffer_release_ref, NULL);
 }
 
 static void
@@ -487,6 +565,12 @@ weston_surface_create(struct weston_compositor *compositor)
 
 	wl_list_init(&surface->pointer_constraints);
 
+	surface->acquire_fence_fd = -1;
+
+	surface->desired_protection = WESTON_HDCP_DISABLE;
+	surface->current_protection = WESTON_HDCP_DISABLE;
+	surface->protection_mode = WESTON_SURFACE_PROTECTION_MODE_RELAXED;
+
 	return surface;
 }
 
@@ -495,6 +579,7 @@ weston_surface_set_color(struct weston_surface *surface,
 		 float red, float green, float blue, float alpha)
 {
 	surface->compositor->renderer->surface_set_color(surface, red, green, blue, alpha);
+	surface->is_opaque = !(alpha < 1.0);
 }
 
 WL_EXPORT void
@@ -840,8 +925,8 @@ weston_surface_to_buffer_rect(struct weston_surface *surface,
  *
  * \param surface The surface to fetch wp_viewport and buffer transformation
  * from.
- * \param surface_region[in] The region in surface coordinates.
- * \param buffer_region[out] The region converted to buffer coordinates.
+ * \param[in] surface_region The region in surface coordinates.
+ * \param[out] buffer_region The region converted to buffer coordinates.
  *
  * Buffer_region must be init'd, but will be completely overwritten.
  *
@@ -849,6 +934,7 @@ weston_surface_to_buffer_rect(struct weston_surface *surface,
  * and rotations in 90-degree steps. Therefore the only loss in the
  * conversion is from the coordinate rounding that takes place in
  * \ref weston_surface_to_buffer_rect.
+ *
  */
 WL_EXPORT void
 weston_surface_to_buffer_region(struct weston_surface *surface,
@@ -916,6 +1002,119 @@ weston_view_damage_below(struct weston_view *view)
 	weston_view_schedule_repaint(view);
 }
 
+/** Send wl_surface.enter/leave events
+ *
+ * \param surface The surface.
+ * \param head A head of the entered/left output.
+ * \param enter True if entered.
+ * \param leave True if left.
+ *
+ * Send the enter/leave events for all protocol objects bound to the given
+ * output by the client owning the surface.
+ */
+static void
+weston_surface_send_enter_leave(struct weston_surface *surface,
+				struct weston_head *head,
+				bool enter,
+				bool leave)
+{
+	struct wl_resource *wloutput;
+	struct wl_client *client;
+
+	assert(enter != leave);
+
+	client = wl_resource_get_client(surface->resource);
+	wl_resource_for_each(wloutput, &head->resource_list) {
+		if (wl_resource_get_client(wloutput) != client)
+			continue;
+
+		if (enter)
+			wl_surface_send_enter(surface->resource, wloutput);
+		if (leave)
+			wl_surface_send_leave(surface->resource, wloutput);
+	}
+}
+
+static void
+weston_surface_compute_protection(struct protected_surface *psurface)
+{
+	enum weston_hdcp_protection min_protection;
+	bool min_protection_valid = false;
+	struct weston_surface *surface = psurface->surface;
+	struct weston_output *output;
+
+	wl_list_for_each(output, &surface->compositor->output_list, link)
+		if (surface->output_mask & (1u << output->id)) {
+			/*
+			 * If the content-protection is enabled with protection
+			 * mode as RELAXED for a surface, and if
+			 * content-recording features like: screen-shooter,
+			 * recorder, screen-sharing, etc are on, then notify the
+			 * client, that the protection is disabled.
+			 *
+			 * Note: If the protection mode is ENFORCED then there
+			 * is no need to bother the client as the renderer takes
+			 * care of censoring the visibility of the protected
+			 * content.
+			 */
+
+			if (output->disable_planes > 0 &&
+			    surface->protection_mode == WESTON_SURFACE_PROTECTION_MODE_RELAXED) {
+				min_protection = WESTON_HDCP_DISABLE;
+				min_protection_valid = true;
+				break;
+			}
+			if (!min_protection_valid) {
+				min_protection = output->current_protection;
+				min_protection_valid = true;
+			}
+			if (output->current_protection < min_protection)
+				min_protection = output->current_protection;
+		}
+	if (!min_protection_valid)
+		min_protection = WESTON_HDCP_DISABLE;
+
+	surface->current_protection = min_protection;
+
+	weston_protected_surface_send_event(psurface, surface->current_protection);
+}
+
+static void
+notify_surface_protection_change(void *data)
+{
+	struct weston_compositor *compositor = data;
+	struct content_protection *cp;
+	struct protected_surface *psurface;
+
+	cp = compositor->content_protection;
+	cp->surface_protection_update = NULL;
+
+	/* Notify the clients, whose surfaces are changed */
+	wl_list_for_each(psurface, &cp->protected_list, link)
+		if (psurface && psurface->surface)
+			weston_surface_compute_protection(psurface);
+}
+
+/**
+ * \param compositor weston_compositor
+ *
+ * Schedule an idle task to notify surface about the update in protection,
+ * if not already scheduled.
+ */
+static void
+weston_schedule_surface_protection_update(struct weston_compositor *compositor)
+{
+	struct content_protection *cp = compositor->content_protection;
+	struct wl_event_loop *loop;
+
+	if (!cp || cp->surface_protection_update)
+		return;
+	loop = wl_display_get_event_loop(compositor->wl_display);
+	cp->surface_protection_update = wl_event_loop_add_idle(loop,
+					       notify_surface_protection_change,
+					       compositor);
+}
+
 /**
  * \param es    The surface
  * \param mask  The new set of outputs for the surface
@@ -931,9 +1130,9 @@ weston_surface_update_output_mask(struct weston_surface *es, uint32_t mask)
 	uint32_t different = es->output_mask ^ mask;
 	uint32_t entered = mask & different;
 	uint32_t left = es->output_mask & different;
+	uint32_t output_bit;
 	struct weston_output *output;
-	struct wl_resource *resource = NULL;
-	struct wl_client *client;
+	struct weston_head *head;
 
 	es->output_mask = mask;
 	if (es->resource == NULL)
@@ -941,19 +1140,60 @@ weston_surface_update_output_mask(struct weston_surface *es, uint32_t mask)
 	if (different == 0)
 		return;
 
-	client = wl_resource_get_client(es->resource);
-
 	wl_list_for_each(output, &es->compositor->output_list, link) {
-		if (1u << output->id & different)
-			resource =
-				wl_resource_find_for_client(&output->resource_list,
-							 client);
-		if (resource == NULL)
+		output_bit = 1u << output->id;
+		if (!(output_bit & different))
 			continue;
-		if (1u << output->id & entered)
-			wl_surface_send_enter(es->resource, resource);
-		if (1u << output->id & left)
-			wl_surface_send_leave(es->resource, resource);
+
+		wl_list_for_each(head, &output->head_list, output_link) {
+			weston_surface_send_enter_leave(es, head,
+							output_bit & entered,
+							output_bit & left);
+		}
+	}
+	/*
+	 * Change in surfaces' output mask might trigger a change in its
+	 * protection.
+	 */
+	weston_schedule_surface_protection_update(es->compositor);
+}
+
+static void
+notify_view_output_destroy(struct wl_listener *listener, void *data)
+{
+	struct weston_view *view =
+		container_of(listener,
+		     struct weston_view, output_destroy_listener);
+
+	view->output = NULL;
+	view->output_destroy_listener.notify = NULL;
+}
+
+/** Set the primary output of the view
+ *
+ * \param view The view whose primary output to set
+ * \param output The new primary output for the view
+ *
+ * Set \a output to be the primary output of the \a view.
+ *
+ * Notice that the assignment may be temporary; the primary output could be
+ * automatically changed. Hence, one cannot rely on the value persisting.
+ *
+ * Passing NULL as /a output will set the primary output to NULL.
+ */
+WL_EXPORT void
+weston_view_set_output(struct weston_view *view, struct weston_output *output)
+{
+	if (view->output_destroy_listener.notify) {
+		wl_list_remove(&view->output_destroy_listener.link);
+		view->output_destroy_listener.notify = NULL;
+	}
+	view->output = output;
+	if (output) {
+		view->output_destroy_listener.notify =
+			notify_view_output_destroy;
+		wl_signal_add(&output->destroy_signal,
+			      &view->output_destroy_listener);
 	}
 }
 
@@ -1048,7 +1288,7 @@ weston_view_assign_output(struct weston_view *ev)
 	}
 	pixman_region32_fini(&region);
 
-	ev->output = new_output;
+	weston_view_set_output(ev, new_output);
 	ev->output_mask = mask;
 
 	weston_surface_assign_output(ev->surface);
@@ -1574,6 +1814,78 @@ weston_view_is_mapped(struct weston_view *view)
 	return view->is_mapped;
 }
 
+/* Check if view is opaque in specified region
+ *
+ * \param view The view to check for opacity.
+ * \param region The region to check for opacity, in view coordinates.
+ *
+ * Returns true if the view is opaque in the specified region, because view
+ * alpha is 1.0 and either the opaque region set by the client contains the
+ * specified region, or the buffer pixel format or solid color is opaque.
+ */
+WL_EXPORT bool
+weston_view_is_opaque(struct weston_view *ev, pixman_region32_t *region)
+{
+	pixman_region32_t r;
+	bool ret = false;
+
+	if (ev->alpha < 1.0)
+		return false;
+
+	if (ev->surface->is_opaque)
+		return true;
+
+	if (ev->transform.dirty) {
+		weston_log("%s: transform dirty", __func__);
+		return false;
+	}
+
+	pixman_region32_init(&r);
+	pixman_region32_subtract(&r, region, &ev->transform.opaque);
+
+	if (!pixman_region32_not_empty(&r))
+		ret = true;
+
+	pixman_region32_fini(&r);
+
+	return ret;
+}
+
+/** Check if the view has a valid buffer available
+ *
+ * @param ev The view to check if it has a valid buffer.
+ *
+ * Returns true if the view has a valid buffer or false otherwise.
+ */
+WL_EXPORT bool
+weston_view_has_valid_buffer(struct weston_view *ev)
+{
+	return ev->surface->buffer_ref.buffer != NULL;
+}
+
+/** Check if the view matches the entire output
+ *
+ * @param ev The view to check.
+ * @param output The output to check against.
+ *
+ * Returns true if the view does indeed matches the entire output.
+ */
+WL_EXPORT bool
+weston_view_matches_output_entirely(struct weston_view *ev,
+				    struct weston_output *output)
+{
+	pixman_box32_t *extents =
+		pixman_region32_extents(&ev->transform.boundingbox);
+
+	if (extents->x1 != output->x ||
+	    extents->y1 != output->y ||
+	    extents->x2 != output->x + output->width ||
+	    extents->y2 != output->y + output->height)
+		return false;
+
+	return true;
+}
+
 /* Check if a surface has a view assigned to it
  *
  * The indicator is set manually when mapping
@@ -1692,16 +2004,18 @@ weston_surface_update_size(struct weston_surface *surface)
 	surface_set_size(surface, width, height);
 }
 
-WL_EXPORT uint32_t
-weston_compositor_get_time(void)
+/** weston_compositor_get_time
+ * \ingroup compositor
+ */
+WL_EXPORT void
+weston_compositor_get_time(struct timespec *time)
 {
-       struct timeval tv;
-
-       gettimeofday(&tv, NULL);
-
-       return tv.tv_sec * 1000 + tv.tv_usec / 1000;
+	clock_gettime(CLOCK_REALTIME, time);
 }
 
+/** weston_compositor_pick_view
+ * \ingroup compositor
+ */
 WL_EXPORT struct weston_view *
 weston_compositor_pick_view(struct weston_compositor *compositor,
 			    wl_fixed_t x, wl_fixed_t y,
@@ -1762,7 +2076,7 @@ weston_view_unmap(struct weston_view *view)
 		return;
 
 	weston_view_damage_below(view);
-	view->output = NULL;
+	weston_view_set_output(view, NULL);
 	view->plane = NULL;
 	view->is_mapped = false;
 	weston_layer_entry_remove(&view->layer_link);
@@ -1831,6 +2145,7 @@ weston_view_destroy(struct weston_view *view)
 	pixman_region32_fini(&view->transform.opaque);
 
 	weston_view_set_transform_parent(view, NULL);
+	weston_view_set_output(view, NULL);
 
 	wl_list_remove(&view->surface_link);
 
@@ -1860,6 +2175,7 @@ weston_surface_destroy(struct weston_surface *surface)
 	weston_surface_state_fini(&surface->pending);
 
 	weston_buffer_reference(&surface->buffer_ref, NULL);
+	weston_buffer_release_reference(&surface->buffer_release_ref, NULL);
 
 	pixman_region32_fini(&surface->damage);
 	pixman_region32_fini(&surface->opaque);
@@ -1874,6 +2190,8 @@ weston_surface_destroy(struct weston_surface *surface)
 			      &surface->pointer_constraints,
 			      link)
 		weston_pointer_constraint_destroy(constraint);
+
+	fd_clear(&surface->acquire_fence_fd);
 
 	free(surface);
 }
@@ -1892,6 +2210,11 @@ destroy_surface(struct wl_resource *resource)
 
 	if (surface->viewport_resource)
 		wl_resource_set_user_data(surface->viewport_resource, NULL);
+
+	if (surface->synchronization_resource) {
+		wl_resource_set_user_data(surface->synchronization_resource,
+					  NULL);
+	}
 
 	weston_surface_destroy(surface);
 }
@@ -1952,8 +2275,7 @@ weston_buffer_reference(struct weston_buffer_reference *ref,
 		ref->buffer->busy_count--;
 		if (ref->buffer->busy_count == 0) {
 			assert(wl_resource_get_client(ref->buffer->resource));
-			wl_resource_queue_event(ref->buffer->resource,
-						WL_BUFFER_RELEASE);
+			wl_buffer_send_release(ref->buffer->resource);
 		}
 		wl_list_remove(&ref->destroy_listener.link);
 	}
@@ -1969,6 +2291,68 @@ weston_buffer_reference(struct weston_buffer_reference *ref,
 }
 
 static void
+weston_buffer_release_reference_handle_destroy(struct wl_listener *listener,
+					       void *data)
+{
+	struct weston_buffer_release_reference *ref =
+		container_of(listener, struct weston_buffer_release_reference,
+			     destroy_listener);
+
+	assert((struct wl_resource *)data == ref->buffer_release->resource);
+	ref->buffer_release = NULL;
+}
+
+static void
+weston_buffer_release_destroy(struct weston_buffer_release *buffer_release)
+{
+	struct wl_resource *resource = buffer_release->resource;
+	int release_fence_fd = buffer_release->fence_fd;
+
+	if (release_fence_fd >= 0) {
+		zwp_linux_buffer_release_v1_send_fenced_release(
+			resource, release_fence_fd);
+	} else {
+		zwp_linux_buffer_release_v1_send_immediate_release(
+			resource);
+	}
+
+	wl_resource_destroy(resource);
+}
+
+WL_EXPORT void
+weston_buffer_release_reference(struct weston_buffer_release_reference *ref,
+				struct weston_buffer_release *buffer_release)
+{
+	if (buffer_release == ref->buffer_release)
+		return;
+
+	if (ref->buffer_release) {
+		ref->buffer_release->ref_count--;
+		wl_list_remove(&ref->destroy_listener.link);
+		if (ref->buffer_release->ref_count == 0)
+			weston_buffer_release_destroy(ref->buffer_release);
+	}
+
+	if (buffer_release) {
+		buffer_release->ref_count++;
+		wl_resource_add_destroy_listener(buffer_release->resource,
+						 &ref->destroy_listener);
+	}
+
+	ref->buffer_release = buffer_release;
+	ref->destroy_listener.notify =
+		weston_buffer_release_reference_handle_destroy;
+}
+
+WL_EXPORT void
+weston_buffer_release_move(struct weston_buffer_release_reference *dest,
+			   struct weston_buffer_release_reference *src)
+{
+	weston_buffer_release_reference(dest, src->buffer_release);
+	weston_buffer_release_reference(src, NULL);
+}
+
+static void
 weston_surface_attach(struct weston_surface *surface,
 		      struct weston_buffer *buffer)
 {
@@ -1979,14 +2363,15 @@ weston_surface_attach(struct weston_surface *surface,
 			weston_surface_unmap(surface);
 	}
 
-	if (surface->compositor->renderer) {
-		surface->compositor->renderer->attach(surface, buffer);
-	}
+	surface->compositor->renderer->attach(surface, buffer);
 
 	weston_surface_calculate_size_from_buffer(surface);
 	weston_presentation_feedback_discard_list(&surface->feedback_list);
 }
 
+/** weston_compositor_damage_all
+ * \ingroup compositor
+ */
 WL_EXPORT void
 weston_compositor_damage_all(struct weston_compositor *compositor)
 {
@@ -1996,6 +2381,9 @@ weston_compositor_damage_all(struct weston_compositor *compositor)
 		weston_output_damage(output);
 }
 
+/**
+ * \ingroup output
+ */
 WL_EXPORT void
 weston_output_damage(struct weston_output *output)
 {
@@ -2014,9 +2402,8 @@ surface_flush_damage(struct weston_surface *surface)
 	    wl_shm_buffer_get(surface->buffer_ref.buffer->resource))
 		surface->compositor->renderer->flush_damage(surface);
 
-	if (weston_timeline_enabled_ &&
-	    pixman_region32_not_empty(&surface->damage))
-		TL_POINT("core_flush_damage", TLP_SURFACE(surface),
+	if (pixman_region32_not_empty(&surface->damage))
+		TL_POINT(surface->compositor, "core_flush_damage", TLP_SURFACE(surface),
 			 TLP_OUTPUT(surface->output), TLP_END);
 
 	pixman_region32_clear(&surface->damage);
@@ -2095,8 +2482,11 @@ compositor_accumulate_damage(struct weston_compositor *ec)
 		 * reference now, and allow early buffer release. This enables
 		 * clients to use single-buffering.
 		 */
-		if (!ev->surface->keep_buffer)
+		if (!ev->surface->keep_buffer) {
 			weston_buffer_reference(&ev->surface->buffer_ref, NULL);
+			weston_buffer_release_reference(
+				&ev->surface->buffer_release_ref, NULL);
+		}
 	}
 }
 
@@ -2212,14 +2602,17 @@ view_list_add(struct weston_compositor *compositor,
 static void
 weston_compositor_build_view_list(struct weston_compositor *compositor)
 {
-	struct weston_view *view;
+	struct weston_view *view, *tmp;
 	struct weston_layer *layer;
 
 	wl_list_for_each(layer, &compositor->layer_list, link)
 		wl_list_for_each(view, &layer->view_list.link, layer_link.link)
 			surface_stash_subsurface_views(view->surface);
 
+	wl_list_for_each_safe(view, tmp, &compositor->view_list, link)
+		wl_list_init(&view->link);
 	wl_list_init(&compositor->view_list);
+
 	wl_list_for_each(layer, &compositor->layer_list, link) {
 		wl_list_for_each(view, &layer->view_list.link, layer_link.link) {
 			view_list_add(compositor, view);
@@ -2266,14 +2659,33 @@ weston_output_repaint(struct weston_output *output, void *repaint_data)
 	struct wl_list frame_callback_list;
 	pixman_region32_t output_damage;
 	int r;
+	uint32_t frame_time_msec;
+	enum weston_hdcp_protection highest_requested = WESTON_HDCP_DISABLE;
 
 	if (output->destroying)
 		return 0;
 
-	TL_POINT("core_repaint_begin", TLP_OUTPUT(output), TLP_END);
+	TL_POINT(ec, "core_repaint_begin", TLP_OUTPUT(output), TLP_END);
 
 	/* Rebuild the surface list and update surface transforms up front. */
 	weston_compositor_build_view_list(ec);
+
+	/* Find the highest protection desired for an output */
+	wl_list_for_each(ev, &ec->view_list, link) {
+		if (ev->surface->output_mask & (1u << output->id)) {
+			/*
+			 * The desired_protection of the output should be the
+			 * maximum of the desired_protection of the surfaces,
+			 * that are displayed on that output, to avoid
+			 * reducing the protection for existing surfaces.
+			 */
+			if (ev->surface->desired_protection > highest_requested)
+				highest_requested =
+						ev->surface->desired_protection;
+		}
+	}
+
+	output->desired_protection = highest_requested;
 
 	if (output->assign_planes && !output->disable_planes) {
 		output->assign_planes(output, repaint_data);
@@ -2319,17 +2731,19 @@ weston_output_repaint(struct weston_output *output, void *repaint_data)
 
 	weston_compositor_repick(ec);
 
+	frame_time_msec = timespec_to_msec(&output->frame_time);
+
 	wl_list_for_each_safe(cb, cnext, &frame_callback_list, link) {
-		wl_callback_send_done(cb->resource, output->frame_time);
+		wl_callback_send_done(cb->resource, frame_time_msec);
 		wl_resource_destroy(cb->resource);
 	}
 
 	wl_list_for_each_safe(animation, next, &output->animation_list, link) {
 		animation->frame_counter++;
-		animation->frame(animation, output, output->frame_time);
+		animation->frame(animation, output, &output->frame_time);
 	}
 
-	TL_POINT("core_repaint_posted", TLP_OUTPUT(output), TLP_END);
+	TL_POINT(ec, "core_repaint_posted", TLP_OUTPUT(output), TLP_END);
 
 	return r;
 }
@@ -2338,7 +2752,8 @@ static void
 weston_output_schedule_repaint_reset(struct weston_output *output)
 {
 	output->repaint_status = REPAINT_NOT_SCHEDULED;
-	TL_POINT("core_repaint_exit_loop", TLP_OUTPUT(output), TLP_END);
+	TL_POINT(output->compositor, "core_repaint_exit_loop",
+		 TLP_OUTPUT(output), TLP_END);
 }
 
 static int
@@ -2347,9 +2762,14 @@ weston_output_maybe_repaint(struct weston_output *output, struct timespec *now,
 {
 	struct weston_compositor *compositor = output->compositor;
 	int ret = 0;
+	int64_t msec_to_repaint;
 
 	/* We're not ready yet; come back to make a decision later. */
 	if (output->repaint_status != REPAINT_SCHEDULED)
+		return ret;
+
+	msec_to_repaint = timespec_sub_to_msec(&output->next_repaint, now);
+	if (msec_to_repaint > 1)
 		return ret;
 
 	/* If we're sleeping, drop the repaint machinery entirely; we will
@@ -2370,11 +2790,10 @@ weston_output_maybe_repaint(struct weston_output *output, struct timespec *now,
 	 * output. */
 	ret = weston_output_repaint(output, repaint_data);
 	weston_compositor_read_presentation_clock(compositor, now);
-	/*Revisit: frame_time is needed by clients to track the presented time.*/
-	output->frame_time = timespec_to_msec(now);
 	if (ret != 0)
 		goto err;
 
+	output->repainted = true;
 	return ret;
 
 err:
@@ -2387,60 +2806,88 @@ output_repaint_timer_arm(struct weston_compositor *compositor)
 {
 	struct weston_output *output;
 	bool any_should_repaint = false;
+	struct timespec now;
 	int64_t msec_to_next = INT64_MAX;
 
+	weston_compositor_read_presentation_clock(compositor, &now);
+
 	wl_list_for_each(output, &compositor->output_list, link) {
+		int64_t msec_to_this;
 
 		if (output->repaint_status != REPAINT_SCHEDULED)
 			continue;
+
+		msec_to_this = timespec_sub_to_msec(&output->next_repaint,
+						    &now);
+		if (!any_should_repaint || msec_to_this < msec_to_next)
+			msec_to_next = msec_to_this;
 
 		any_should_repaint = true;
 	}
 
 	if (!any_should_repaint)
 		return;
-	/* Revisit: Removed timer for driving through vsync on fbdev.
-	 * Need corresponding changes on other compositer.
+
+	/* Even if we should repaint immediately, add the minimum 1 ms delay.
+	 * This is a workaround to allow coalescing multiple output repaints
+	 * particularly from weston_output_finish_frame()
+	 * into the same call, which would not happen if we called
+	 * output_repaint_timer_handler() directly.
 	 */
+	if (msec_to_next < 1)
+		msec_to_next = 1;
+
+	wl_event_source_timer_update(compositor->repaint_timer, msec_to_next);
 }
 
-WL_EXPORT int
+static int
 output_repaint_timer_handler(void *data)
 {
 	struct weston_compositor *compositor = data;
 	struct weston_output *output;
 	struct timespec now;
 	void *repaint_data = NULL;
-	int ret;
+	int ret = 0;
+
+	weston_compositor_read_presentation_clock(compositor, &now);
 
 	if (compositor->backend->repaint_begin)
 		repaint_data = compositor->backend->repaint_begin(compositor);
 
 	wl_list_for_each(output, &compositor->output_list, link) {
-		/* Revisit: May need cleanup to utilise this flag properly.*/
-		/* We are not ready for repainting from idle,
-		 * repaint in next cycle*/
-		if (output->repaint_status == REPAINT_BEGIN_FROM_IDLE)
-			continue;
-		output->repaint_status = REPAINT_SCHEDULED;
 		ret = weston_output_maybe_repaint(output, &now, repaint_data);
 		if (ret)
 			break;
 	}
 
 	if (ret == 0) {
-	    if (compositor->backend->repaint_flush)
-		    compositor->backend->repaint_flush(compositor,
-						       repaint_data);
+		if (compositor->backend->repaint_flush)
+			ret = compositor->backend->repaint_flush(compositor,
+							 repaint_data);
 	} else {
-	    if (compositor->backend->repaint_cancel)
-		    compositor->backend->repaint_cancel(compositor,
-						        repaint_data);
+		if (compositor->backend->repaint_cancel)
+			compositor->backend->repaint_cancel(compositor,
+							    repaint_data);
 	}
+
+	if (ret != 0) {
+		wl_list_for_each(output, &compositor->output_list, link) {
+			if (output->repainted)
+				weston_output_schedule_repaint_reset(output);
+		}
+	}
+
+	wl_list_for_each(output, &compositor->output_list, link)
+		output->repainted = false;
+
+	output_repaint_timer_arm(compositor);
 
 	return 0;
 }
 
+/**
+ * \ingroup output
+ */
 WL_EXPORT void
 weston_output_finish_frame(struct weston_output *output,
 			   const struct timespec *stamp,
@@ -2451,8 +2898,6 @@ weston_output_finish_frame(struct weston_output *output,
 	struct timespec now;
 	int64_t msec_rel;
 
-	TL_POINT("core_repaint_finished", TLP_OUTPUT(output),
-		 TLP_VBLANK(stamp), TLP_END);
 
 	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
 	assert(stamp || (presented_flags & WP_PRESENTATION_FEEDBACK_INVALID));
@@ -2467,26 +2912,63 @@ weston_output_finish_frame(struct weston_output *output,
 		goto out;
 	}
 
+	TL_POINT(compositor, "core_repaint_finished", TLP_OUTPUT(output),
+		 TLP_VBLANK(stamp), TLP_END);
+
 	refresh_nsec = millihz_to_nsec(output->current_mode->refresh);
 	weston_presentation_feedback_present_list(&output->feedback_list,
 						  output, refresh_nsec, stamp,
 						  output->msc,
 						  presented_flags);
 
-	output->frame_time = timespec_to_msec(stamp);
+	output->frame_time = *stamp;
+
+	timespec_add_nsec(&output->next_repaint, stamp, refresh_nsec);
+	timespec_add_msec(&output->next_repaint, &output->next_repaint,
+			  -compositor->repaint_msec);
+	msec_rel = timespec_sub_to_msec(&output->next_repaint, &now);
+
+	if (msec_rel < -1000 || msec_rel > 1000) {
+		static bool warned;
+
+		if (!warned)
+			weston_log("Warning: computed repaint delay is "
+				   "insane: %lld msec\n", (long long) msec_rel);
+		warned = true;
+
+		output->next_repaint = now;
+	}
+
+	/* Called from restart_repaint_loop and restart happens already after
+	 * the deadline given by repaint_msec? In that case we delay until
+	 * the deadline of the next frame, to give clients a more predictable
+	 * timing of the repaint cycle to lock on. */
+	if (presented_flags == WP_PRESENTATION_FEEDBACK_INVALID &&
+	    msec_rel < 0) {
+		while (timespec_sub_to_nsec(&output->next_repaint, &now) < 0) {
+			timespec_add_nsec(&output->next_repaint,
+					  &output->next_repaint,
+					  refresh_nsec);
+		}
+	}
 
 out:
 	output->repaint_status = REPAINT_SCHEDULED;
+	output_repaint_timer_arm(compositor);
 }
 
 static void
 idle_repaint(void *data)
 {
 	struct weston_output *output = data;
+	int ret;
 
 	assert(output->repaint_status == REPAINT_BEGIN_FROM_IDLE);
 	output->repaint_status = REPAINT_AWAITING_COMPLETION;
-	output->start_repaint_loop(output);
+	output->idle_repaint_source = NULL;
+	ret = output->start_repaint_loop(output);
+	if (ret != 0)
+		weston_output_schedule_repaint_reset(output);
 }
 
 WL_EXPORT void
@@ -2582,10 +3064,30 @@ weston_layer_set_mask(struct weston_layer *layer,
 WL_EXPORT void
 weston_layer_set_mask_infinite(struct weston_layer *layer)
 {
-	weston_layer_set_mask(layer, INT32_MIN, INT32_MIN,
-				     UINT32_MAX, UINT32_MAX);
+	struct weston_view *view;
+
+	layer->mask.x1 = INT32_MIN;
+	layer->mask.x2 = INT32_MAX;
+	layer->mask.y1 = INT32_MIN;
+	layer->mask.y2 = INT32_MAX;
+
+	wl_list_for_each(view, &layer->view_list.link, layer_link.link) {
+		weston_view_geometry_dirty(view);
+	}
 }
 
+WL_EXPORT bool
+weston_layer_mask_is_infinite(struct weston_layer *layer)
+{
+	return layer->mask.x1 == INT32_MIN &&
+	       layer->mask.y1 == INT32_MIN &&
+	       layer->mask.x2 == INT32_MAX &&
+	       layer->mask.y2 == INT32_MAX;
+}
+
+/**
+ * \ingroup output
+ */
 WL_EXPORT void
 weston_output_schedule_repaint(struct weston_output *output)
 {
@@ -2597,7 +3099,7 @@ weston_output_schedule_repaint(struct weston_output *output)
 		return;
 
 	if (!output->repaint_needed)
-		TL_POINT("core_repaint_req", TLP_OUTPUT(output), TLP_END);
+		TL_POINT(compositor, "core_repaint_req", TLP_OUTPUT(output), TLP_END);
 
 	loop = wl_display_get_event_loop(compositor->wl_display);
 	output->repaint_needed = true;
@@ -2610,10 +3112,15 @@ weston_output_schedule_repaint(struct weston_output *output)
 		return;
 
 	output->repaint_status = REPAINT_BEGIN_FROM_IDLE;
-	wl_event_loop_add_idle(loop, idle_repaint, output);
-	TL_POINT("core_repaint_enter_loop", TLP_OUTPUT(output), TLP_END);
+	assert(!output->idle_repaint_source);
+	output->idle_repaint_source = wl_event_loop_add_idle(loop, idle_repaint,
+							     output);
+	TL_POINT(compositor, "core_repaint_enter_loop", TLP_OUTPUT(output), TLP_END);
 }
 
+/** weston_compositor_schedule_repaint
+ *  \ingroup compositor
+ */
 WL_EXPORT void
 weston_compositor_schedule_repaint(struct weston_compositor *compositor)
 {
@@ -2986,6 +3493,32 @@ apply_damage_buffer(pixman_region32_t *dest,
 }
 
 static void
+weston_surface_set_desired_protection(struct weston_surface *surface,
+				      enum weston_hdcp_protection protection)
+{
+	if (surface->desired_protection == protection)
+		return;
+	surface->desired_protection = protection;
+	weston_surface_damage(surface);
+}
+
+static void
+weston_surface_set_protection_mode(struct weston_surface *surface,
+				   enum weston_surface_protection_mode p_mode)
+{
+	struct content_protection *cp = surface->compositor->content_protection;
+	struct protected_surface *psurface;
+
+	surface->protection_mode = p_mode;
+	wl_list_for_each(psurface, &cp->protected_list, link) {
+		if (!psurface || psurface->surface != surface)
+			continue;
+		weston_protected_surface_send_event(psurface,
+						    surface->current_protection);
+	}
+}
+
+static void
 weston_surface_commit_state(struct weston_surface *surface,
 			    struct weston_surface_state *state)
 {
@@ -2999,9 +3532,18 @@ weston_surface_commit_state(struct weston_surface *surface,
 	surface->buffer_viewport = state->buffer_viewport;
 
 	/* wl_surface.attach */
-	if (state->newly_attached)
+	if (state->newly_attached) {
+		/* zwp_surface_synchronization_v1.set_acquire_fence */
+		fd_move(&surface->acquire_fence_fd,
+			&state->acquire_fence_fd);
+		/* zwp_surface_synchronization_v1.get_release */
+		weston_buffer_release_move(&surface->buffer_release_ref,
+					   &state->buffer_release_ref);
 		weston_surface_attach(surface, state->buffer);
+	}
 	weston_surface_state_set_buffer(state, NULL);
+	assert(state->acquire_fence_fd == -1);
+	assert(state->buffer_release_ref.buffer_release == NULL);
 
 	weston_surface_build_buffer_matrix(surface,
 					   &surface->surface_to_buffer_matrix);
@@ -3020,10 +3562,9 @@ weston_surface_commit_state(struct weston_surface *surface,
 	state->buffer_viewport.changed = 0;
 
 	/* wl_surface.damage and wl_surface.damage_buffer */
-	if (weston_timeline_enabled_ &&
-	    (pixman_region32_not_empty(&state->damage_surface) ||
-	     pixman_region32_not_empty(&state->damage_buffer)))
-		TL_POINT("core_commit_damage", TLP_SURFACE(surface), TLP_END);
+	if (pixman_region32_not_empty(&state->damage_surface) ||
+	     pixman_region32_not_empty(&state->damage_buffer))
+		TL_POINT(surface->compositor, "core_commit_damage", TLP_SURFACE(surface), TLP_END);
 
 	pixman_region32_union(&surface->damage, &surface->damage,
 			      &state->damage_surface);
@@ -3065,6 +3606,14 @@ weston_surface_commit_state(struct weston_surface *surface,
 	wl_list_insert_list(&surface->feedback_list,
 			    &state->feedback_list);
 	wl_list_init(&state->feedback_list);
+
+	/* weston_protected_surface.enforced/relaxed */
+	if (surface->protection_mode != state->protection_mode)
+		weston_surface_set_protection_mode(surface,
+						   state->protection_mode);
+
+	/* weston_protected_surface.set_type */
+	weston_surface_set_desired_protection(surface, state->desired_protection);
 
 	wl_signal_emit(&surface->commit_signal, surface);
 }
@@ -3108,6 +3657,46 @@ surface_commit(struct wl_client *client, struct wl_resource *resource)
 		wl_resource_post_error(surface->viewport_resource,
 			WP_VIEWPORT_ERROR_BAD_SIZE,
 			"wl_surface@%d viewport dst size not integer",
+			wl_resource_get_id(resource));
+		return;
+	}
+
+	if (surface->pending.acquire_fence_fd >= 0) {
+		assert(surface->synchronization_resource);
+
+		if (!surface->pending.buffer) {
+			fd_clear(&surface->pending.acquire_fence_fd);
+			wl_resource_post_error(surface->synchronization_resource,
+				ZWP_LINUX_SURFACE_SYNCHRONIZATION_V1_ERROR_NO_BUFFER,
+				"wl_surface@%"PRIu32" no buffer for synchronization",
+				wl_resource_get_id(resource));
+			return;
+		}
+
+		/* We support fences for both wp_linux_dmabuf and opaque EGL
+		 * buffers, as mandated by minor version 2 of the
+		 * zwp_linux_explicit_synchronization_v1 protocol. Since
+		 * renderers that support fences currently only support these
+		 * two buffer types plus SHM buffers, we can just check for the
+		 * SHM buffer case here.
+		 */
+		if (wl_shm_buffer_get(surface->pending.buffer->resource)) {
+			fd_clear(&surface->pending.acquire_fence_fd);
+			wl_resource_post_error(surface->synchronization_resource,
+				ZWP_LINUX_SURFACE_SYNCHRONIZATION_V1_ERROR_UNSUPPORTED_BUFFER,
+				"wl_surface@%"PRIu32" unsupported buffer for synchronization",
+				wl_resource_get_id(resource));
+			return;
+		}
+	}
+
+	if (surface->pending.buffer_release_ref.buffer_release &&
+	    !surface->pending.buffer) {
+		assert(surface->synchronization_resource);
+
+		wl_resource_post_error(surface->synchronization_resource,
+			ZWP_LINUX_SURFACE_SYNCHRONIZATION_V1_ERROR_NO_BUFFER,
+			"wl_surface@%"PRIu32" no buffer for synchronization",
 			wl_resource_get_id(resource));
 		return;
 	}
@@ -3318,7 +3907,17 @@ weston_subsurface_commit_to_cache(struct weston_subsurface *sub)
 					surface->pending.buffer);
 		weston_presentation_feedback_discard_list(
 					&sub->cached.feedback_list);
+		/* zwp_surface_synchronization_v1.set_acquire_fence */
+		fd_move(&sub->cached.acquire_fence_fd,
+			&surface->pending.acquire_fence_fd);
+		/* zwp_surface_synchronization_v1.get_release */
+		weston_buffer_release_move(&sub->cached.buffer_release_ref,
+					   &surface->pending.buffer_release_ref);
 	}
+	sub->cached.desired_protection = surface->pending.desired_protection;
+	sub->cached.protection_mode = surface->pending.protection_mode;
+	assert(surface->pending.acquire_fence_fd == -1);
+	assert(surface->pending.buffer_release_ref.buffer_release == NULL);
 	sub->cached.sx += surface->pending.sx;
 	sub->cached.sy += surface->pending.sy;
 
@@ -3523,7 +4122,8 @@ weston_surface_set_label_func(struct weston_surface *surface,
 					  char *, size_t))
 {
 	surface->get_label = desc;
-	surface->timeline.force_refresh = 1;
+	weston_timeline_refresh_subscription_objects(surface->compositor,
+						     surface);
 }
 
 /** Get the size of surface contents
@@ -3625,7 +4225,7 @@ weston_surface_get_bounding_box(struct weston_surface *surface)
  * The rectangle defined by src_x, src_y, width, height must fit in
  * the surface contents. Otherwise an error is returned.
  *
- * Use surface_get_data_size to determine the content size; the
+ * Use weston_surface_get_content_size to determine the content size; the
  * needed target buffer size and rectangle limits.
  *
  * CURRENT IMPLEMENTATION RESTRICTIONS:
@@ -4081,6 +4681,7 @@ weston_compositor_dpms(struct weston_compositor *compositor,
  * signal will fire.
  *
  * Restarts the idle timer.
+ * \ingroup compositor
  */
 WL_EXPORT void
 weston_compositor_wake(struct weston_compositor *compositor)
@@ -4113,6 +4714,8 @@ weston_compositor_wake(struct weston_compositor *compositor)
  * compositor is shutting down.
  *
  * Stops the idle timer.
+ *
+ * \ingroup compositor
  */
 WL_EXPORT void
 weston_compositor_offscreen(struct weston_compositor *compositor)
@@ -4136,6 +4739,8 @@ weston_compositor_offscreen(struct weston_compositor *compositor)
  * in sleep mode.
  *
  * Stops the idle timer.
+ *
+ * \ingroup compositor
  */
 WL_EXPORT void
 weston_compositor_sleep(struct weston_compositor *compositor)
@@ -4206,6 +4811,9 @@ weston_plane_release(struct weston_plane *plane)
 	wl_list_remove(&plane->link);
 }
 
+/** weston_compositor_stack_plane
+ * \ingroup compositor
+ */
 WL_EXPORT void
 weston_compositor_stack_plane(struct weston_compositor *ec,
 			      struct weston_plane *plane,
@@ -4237,7 +4845,8 @@ static void
 bind_output(struct wl_client *client,
 	    void *data, uint32_t version, uint32_t id)
 {
-	struct weston_output *output = data;
+	struct weston_head *head = data;
+	struct weston_output *output = head->output;
 	struct weston_mode *mode;
 	struct wl_resource *resource;
 
@@ -4248,16 +4857,18 @@ bind_output(struct wl_client *client,
 		return;
 	}
 
-	wl_list_insert(&output->resource_list, wl_resource_get_link(resource));
-	wl_resource_set_implementation(resource, &output_interface, data, unbind_resource);
+	wl_list_insert(&head->resource_list, wl_resource_get_link(resource));
+	wl_resource_set_implementation(resource, &output_interface, head,
+				       unbind_resource);
 
+	assert(output);
 	wl_output_send_geometry(resource,
 				output->x,
 				output->y,
-				output->mm_width,
-				output->mm_height,
-				output->subpixel,
-				output->make, output->model,
+				head->mm_width,
+				head->mm_height,
+				head->subpixel,
+				head->make, head->model,
 				output->transform);
 	if (version >= WL_OUTPUT_SCALE_SINCE_VERSION)
 		wl_output_send_scale(resource,
@@ -4275,14 +4886,54 @@ bind_output(struct wl_client *client,
 		wl_output_send_done(resource);
 }
 
+static void
+weston_head_add_global(struct weston_head *head)
+{
+	head->global = wl_global_create(head->compositor->wl_display,
+					&wl_output_interface, 3,
+					head, bind_output);
+}
+
+/** Remove the global wl_output protocol object
+ *
+ * \param head The head whose global to remove.
+ *
+ * Also orphans the wl_resources for this head (wl_output).
+ */
+static void
+weston_head_remove_global(struct weston_head *head)
+{
+	struct wl_resource *resource, *tmp;
+
+	if (head->global)
+		wl_global_destroy(head->global);
+	head->global = NULL;
+
+	wl_resource_for_each_safe(resource, tmp, &head->resource_list) {
+		unbind_resource(resource);
+		wl_resource_set_destructor(resource, NULL);
+		wl_resource_set_user_data(resource, NULL);
+	}
+
+	wl_resource_for_each(resource, &head->xdg_output_resource_list) {
+		/* It's sufficient to unset the destructor, then the list elements
+		 * won't be accessed.
+		 */
+		wl_resource_set_destructor(resource, NULL);
+	}
+	wl_list_init(&head->xdg_output_resource_list);
+}
+
 /** Get the backing object of wl_output
  *
  * \param resource A wl_output protocol object.
  * \return The backing object (user data) of a wl_resource representing a
  * wl_output protocol object.
+ *
+ * \ingroup head
  */
-WL_EXPORT struct weston_output *
-weston_output_from_resource(struct wl_resource *resource)
+WL_EXPORT struct weston_head *
+weston_head_from_resource(struct wl_resource *resource)
 {
 	assert(wl_resource_instance_of(resource, &wl_output_interface,
 				       &output_interface));
@@ -4290,6 +4941,739 @@ weston_output_from_resource(struct wl_resource *resource)
 	return wl_resource_get_user_data(resource);
 }
 
+/** Initialize a pre-allocated weston_head
+ *
+ * \param head The head to initialize.
+ * \param name The head name, e.g. the connector name or equivalent.
+ *
+ * The head will be safe to attach, detach and release.
+ *
+ * The name is used in logs, and can be used by compositors as a configuration
+ * identifier.
+ *
+ * \ingroup head
+ * \internal
+ */
+WL_EXPORT void
+weston_head_init(struct weston_head *head, const char *name)
+{
+	/* Add some (in)sane defaults which can be used
+	 * for checking if an output was properly configured
+	 */
+	memset(head, 0, sizeof *head);
+
+	wl_list_init(&head->compositor_link);
+	wl_signal_init(&head->destroy_signal);
+	wl_list_init(&head->output_link);
+	wl_list_init(&head->resource_list);
+	wl_list_init(&head->xdg_output_resource_list);
+	head->name = strdup(name);
+	head->current_protection = WESTON_HDCP_DISABLE;
+}
+
+/** Send output heads changed signal
+ *
+ * \param output The output that changed.
+ *
+ * Notify that the enabled output gained and/or lost heads, or that the
+ * associated heads may have changed their connection status. This does not
+ * include cases where the output becomes enabled or disabled. The registered
+ * callbacks are called after the change has successfully happened.
+ *
+ * If connection status change causes the compositor to attach or detach a head
+ * to an enabled output, the registered callbacks may be called multiple times.
+ *
+ * \ingroup output
+ */
+static void
+weston_output_emit_heads_changed(struct weston_output *output)
+{
+	wl_signal_emit(&output->compositor->output_heads_changed_signal,
+		       output);
+}
+
+/** Idle task for emitting heads_changed_signal */
+static void
+weston_compositor_call_heads_changed(void *data)
+{
+	struct weston_compositor *compositor = data;
+	struct weston_head *head;
+
+	compositor->heads_changed_source = NULL;
+
+	wl_signal_emit(&compositor->heads_changed_signal, compositor);
+
+	wl_list_for_each(head, &compositor->head_list, compositor_link) {
+		if (head->output && head->output->enabled)
+			weston_output_emit_heads_changed(head->output);
+	}
+}
+
+/** Schedule a call on idle to heads_changed callback
+ *
+ * \param compositor The Compositor.
+ *
+ * \ingroup compositor
+ * \internal
+ */
+static void
+weston_compositor_schedule_heads_changed(struct weston_compositor *compositor)
+{
+	struct wl_event_loop *loop;
+
+	if (compositor->heads_changed_source)
+		return;
+
+	loop = wl_display_get_event_loop(compositor->wl_display);
+	compositor->heads_changed_source = wl_event_loop_add_idle(loop,
+			weston_compositor_call_heads_changed, compositor);
+}
+
+/** Register a new head
+ *
+ * \param compositor The compositor.
+ * \param head The head to register, must not be already registered.
+ *
+ * This signals the core that a new head has become available, leading to
+ * heads_changed hook being called later.
+ *
+ * \ingroup compositor
+ * \internal
+ */
+WL_EXPORT void
+weston_compositor_add_head(struct weston_compositor *compositor,
+			   struct weston_head *head)
+{
+	assert(wl_list_empty(&head->compositor_link));
+	assert(head->name);
+
+	wl_list_insert(compositor->head_list.prev, &head->compositor_link);
+	head->compositor = compositor;
+	weston_compositor_schedule_heads_changed(compositor);
+}
+
+/** Adds a listener to be called when heads change
+ *
+ * \param compositor The compositor.
+ * \param listener The listener to add.
+ *
+ * The listener notify function argument is weston_compositor.
+ *
+ * The listener function will be called after heads are added or their
+ * connection status has changed. Several changes may be accumulated into a
+ * single call. The user is expected to iterate over the existing heads and
+ * check their statuses to find out what changed.
+ *
+ * \sa weston_compositor_iterate_heads, weston_head_is_connected,
+ * weston_head_is_enabled
+ * \ingroup compositor
+ */
+WL_EXPORT void
+weston_compositor_add_heads_changed_listener(struct weston_compositor *compositor,
+					     struct wl_listener *listener)
+{
+	wl_signal_add(&compositor->heads_changed_signal, listener);
+}
+
+/** Iterate over available heads
+ *
+ * \param compositor The compositor.
+ * \param iter The iterator, or NULL for start.
+ * \return The next available head in the list.
+ *
+ * Returns all available heads, regardless of being connected or enabled.
+ *
+ * You can iterate over all heads as follows:
+ * \code
+ * struct weston_head *head = NULL;
+ *
+ * while ((head = weston_compositor_iterate_heads(compositor, head))) {
+ * 	...
+ * }
+ * \endcode
+ *
+ *  If you cause \c iter to be removed from the list, you cannot use it to
+ * continue iterating. Removing any other item is safe.
+ *
+ * \ingroup compositor
+ */
+WL_EXPORT struct weston_head *
+weston_compositor_iterate_heads(struct weston_compositor *compositor,
+				struct weston_head *iter)
+{
+	struct wl_list *list = &compositor->head_list;
+	struct wl_list *node;
+
+	assert(compositor);
+	assert(!iter || iter->compositor == compositor);
+
+	if (iter)
+		node = iter->compositor_link.next;
+	else
+		node = list->next;
+
+	assert(node);
+	assert(!iter || node != &iter->compositor_link);
+
+	if (node == list)
+		return NULL;
+
+	return container_of(node, struct weston_head, compositor_link);
+}
+
+/** Iterate over attached heads
+ *
+ * \param output The output whose heads to iterate.
+ * \param iter The iterator, or NULL for start.
+ * \return The next attached head in the list.
+ *
+ * Returns all heads currently attached to the output.
+ *
+ * You can iterate over all heads as follows:
+ * \code
+ * struct weston_head *head = NULL;
+ *
+ * while ((head = weston_output_iterate_heads(output, head))) {
+ * 	...
+ * }
+ * \endcode
+ *
+ *  If you cause \c iter to be removed from the list, you cannot use it to
+ * continue iterating. Removing any other item is safe.
+ *
+ * \ingroup ouput
+ */
+WL_EXPORT struct weston_head *
+weston_output_iterate_heads(struct weston_output *output,
+			    struct weston_head *iter)
+{
+	struct wl_list *list = &output->head_list;
+	struct wl_list *node;
+
+	assert(output);
+	assert(!iter || iter->output == output);
+
+	if (iter)
+		node = iter->output_link.next;
+	else
+		node = list->next;
+
+	assert(node);
+	assert(!iter || node != &iter->output_link);
+
+	if (node == list)
+		return NULL;
+
+	return container_of(node, struct weston_head, output_link);
+}
+
+/** Attach a head to an output
+ *
+ * \param output The output to attach to.
+ * \param head The head that is not yet attached.
+ * \return 0 on success, -1 on failure.
+ *
+ * Attaches the given head to the output. All heads of an output are clones
+ * and share the resolution and timings.
+ *
+ * Cloning heads this way uses less resources than creating an output for
+ * each head, but is not always possible due to environment, driver and hardware
+ * limitations.
+ *
+ * On failure, the head remains unattached. Success of this function does not
+ * guarantee the output configuration is actually valid. The final checks are
+ * made on weston_output_enable() unless the output was already enabled.
+ *
+ * \ingroup output
+ */
+WL_EXPORT int
+weston_output_attach_head(struct weston_output *output,
+			  struct weston_head *head)
+{
+	char *head_names;
+
+	if (!wl_list_empty(&head->output_link))
+		return -1;
+
+	if (output->attach_head) {
+		if (output->attach_head(output, head) < 0)
+			return -1;
+	} else if (!wl_list_empty(&output->head_list)) {
+		/* No support for clones in the legacy path. */
+		return -1;
+	}
+
+	head->output = output;
+	wl_list_insert(output->head_list.prev, &head->output_link);
+
+	if (output->enabled) {
+		weston_head_add_global(head);
+
+		head_names = weston_output_create_heads_string(output);
+		weston_log("Output '%s' updated to have head(s) %s\n",
+			   output->name, head_names);
+		free(head_names);
+
+		weston_output_emit_heads_changed(output);
+	}
+
+	return 0;
+}
+
+/** Detach a head from its output
+ *
+ * \param head The head to detach.
+ *
+ * It is safe to detach a non-attached head.
+ *
+ * If the head is attached to an enabled output and the output will be left
+ * with no heads, the output will be disabled.
+ *
+ * \ingroup head
+ * \sa weston_output_disable
+ */
+WL_EXPORT void
+weston_head_detach(struct weston_head *head)
+{
+	struct weston_output *output = head->output;
+	char *head_names;
+
+	wl_list_remove(&head->output_link);
+	wl_list_init(&head->output_link);
+	head->output = NULL;
+
+	if (!output)
+		return;
+
+	if (output->detach_head)
+		output->detach_head(output, head);
+
+	if (output->enabled) {
+		weston_head_remove_global(head);
+
+		if (wl_list_empty(&output->head_list)) {
+			weston_log("Output '%s' no heads left, disabling.\n",
+				   output->name);
+			weston_output_disable(output);
+		} else {
+			head_names = weston_output_create_heads_string(output);
+			weston_log("Output '%s' updated to have head(s) %s\n",
+				   output->name, head_names);
+			free(head_names);
+
+			weston_output_emit_heads_changed(output);
+		}
+	}
+}
+
+/** Destroy a head
+ *
+ * \param head The head to be released.
+ *
+ * Destroys the head. The caller is responsible for freeing the memory pointed
+ * to by \c head.
+ *
+ * \ingroup head
+ * \internal
+ */
+WL_EXPORT void
+weston_head_release(struct weston_head *head)
+{
+	wl_signal_emit(&head->destroy_signal, head);
+
+	weston_head_detach(head);
+
+	free(head->make);
+	free(head->model);
+	free(head->serial_number);
+	free(head->name);
+
+	wl_list_remove(&head->compositor_link);
+}
+
+static void
+weston_head_set_device_changed(struct weston_head *head)
+{
+	head->device_changed = true;
+
+	if (head->compositor)
+		weston_compositor_schedule_heads_changed(head->compositor);
+}
+
+/** String equal comparison with NULLs being equal */
+static bool
+str_null_eq(const char *a, const char *b)
+{
+	if (!a && !b)
+		return true;
+
+	if (!!a != !!b)
+		return false;
+
+	return strcmp(a, b) == 0;
+}
+
+/** Store monitor make, model and serial number
+ *
+ * \param head The head to modify.
+ * \param make The monitor make. If EDID is available, the PNP ID. Otherwise
+ * any string, or NULL for none.
+ * \param model The monitor model or name, or a made-up string, or NULL for
+ * none.
+ * \param serialno The monitor serial number, a made-up string, or NULL for
+ * none.
+ *
+ * This may set the device_changed flag.
+ *
+ * \ingroup head
+ * \internal
+ */
+WL_EXPORT void
+weston_head_set_monitor_strings(struct weston_head *head,
+				const char *make,
+				const char *model,
+				const char *serialno)
+{
+	if (str_null_eq(head->make, make) &&
+	    str_null_eq(head->model, model) &&
+	    str_null_eq(head->serial_number, serialno))
+		return;
+
+	free(head->make);
+	free(head->model);
+	free(head->serial_number);
+
+	head->make = make ? strdup(make) : NULL;
+	head->model = model ? strdup(model) : NULL;
+	head->serial_number = serialno ? strdup(serialno) : NULL;
+
+	weston_head_set_device_changed(head);
+}
+
+/** Store display non-desktop status
+ *
+ * \param head The head to modify.
+ * \param non_desktop Whether the head connects to a non-desktop display.
+ *
+ * \ingroup head
+ * \internal
+ */
+WL_EXPORT void
+weston_head_set_non_desktop(struct weston_head *head, bool non_desktop)
+{
+	if (head->non_desktop == non_desktop)
+		return;
+
+	head->non_desktop = non_desktop;
+
+	weston_head_set_device_changed(head);
+}
+
+/** Store physical image size
+ *
+ * \param head The head to modify.
+ * \param mm_width Image area width in millimeters.
+ * \param mm_height Image area height in millimeters.
+ *
+ * This may set the device_changed flag.
+ *
+ * \ingroup head
+ * \internal
+ */
+WL_EXPORT void
+weston_head_set_physical_size(struct weston_head *head,
+			      int32_t mm_width, int32_t mm_height)
+{
+	if (head->mm_width == mm_width &&
+	    head->mm_height == mm_height)
+		return;
+
+	head->mm_width = mm_width;
+	head->mm_height = mm_height;
+
+	weston_head_set_device_changed(head);
+}
+
+/** Store monitor sub-pixel layout
+ *
+ * \param head The head to modify.
+ * \param sp Sub-pixel layout. The possible values are:
+ * - WL_OUTPUT_SUBPIXEL_UNKNOWN,
+ * - WL_OUTPUT_SUBPIXEL_NONE,
+ * - WL_OUTPUT_SUBPIXEL_HORIZONTAL_RGB,
+ * - WL_OUTPUT_SUBPIXEL_HORIZONTAL_BGR,
+ * - WL_OUTPUT_SUBPIXEL_VERTICAL_RGB,
+ * - WL_OUTPUT_SUBPIXEL_VERTICAL_BGR
+ *
+ * This may set the device_changed flag.
+ *
+ * \ingroup head
+ * \internal
+ */
+WL_EXPORT void
+weston_head_set_subpixel(struct weston_head *head,
+			 enum wl_output_subpixel sp)
+{
+	if (head->subpixel == sp)
+		return;
+
+	head->subpixel = sp;
+
+	weston_head_set_device_changed(head);
+}
+
+/** Mark the monitor as internal
+ *
+ * This is used for embedded screens, like laptop panels.
+ *
+ * \param head The head to mark as internal.
+ *
+ * By default a head is external. The type is often inferred from the physical
+ * connector type.
+ *
+ * \ingroup head
+ * \internal
+ */
+WL_EXPORT void
+weston_head_set_internal(struct weston_head *head)
+{
+	head->connection_internal = true;
+}
+
+/** Store connector status
+ *
+ * \param head The head to modify.
+ * \param connected Whether the head is connected.
+ *
+ * Connectors are created as disconnected. This function can be used to
+ * set the connector status.
+ *
+ * The status should be set to true when a physical connector is connected to
+ * a video sink device like a monitor and to false when the connector is
+ * disconnected. For nested backends, the connection status should reflect the
+ * connection to the parent display server.
+ *
+ * When the connection status changes, it schedules a call to the heads_changed
+ * hook and sets the device_changed flag.
+ *
+ * \sa weston_compositor_set_heads_changed_cb
+ * \ingroup head
+ * \internal
+ */
+WL_EXPORT void
+weston_head_set_connection_status(struct weston_head *head, bool connected)
+{
+	if (head->connected == connected)
+		return;
+
+	head->connected = connected;
+
+	weston_head_set_device_changed(head);
+}
+
+static void
+weston_output_compute_protection(struct weston_output *output)
+{
+	struct weston_head *head;
+	enum weston_hdcp_protection op_protection;
+	bool op_protection_valid = false;
+	struct weston_compositor *wc = output->compositor;
+
+	wl_list_for_each(head, &output->head_list, output_link) {
+		if (!op_protection_valid) {
+			op_protection = head->current_protection;
+			op_protection_valid = true;
+		}
+		if (head->current_protection < op_protection)
+			op_protection = head->current_protection;
+	}
+
+	if (!op_protection_valid)
+		op_protection = WESTON_HDCP_DISABLE;
+
+	if (output->current_protection != op_protection) {
+		output->current_protection = op_protection;
+		weston_output_damage(output);
+		weston_schedule_surface_protection_update(wc);
+	}
+}
+
+WL_EXPORT void
+weston_head_set_content_protection_status(struct weston_head *head,
+					  enum weston_hdcp_protection status)
+{
+	head->current_protection = status;
+	if (head->output)
+		weston_output_compute_protection(head->output);
+}
+
+/** Is the head currently connected?
+ *
+ * \param head The head to query.
+ * \return Connection status.
+ *
+ * Returns true if the head is physically connected to a monitor, or in
+ * case of a nested backend returns true when there is a connection to the
+ * parent display server.
+ *
+ * This is independent from the head being enabled.
+ *
+ * \sa weston_head_is_enabled
+ * \ingroup head
+ */
+WL_EXPORT bool
+weston_head_is_connected(struct weston_head *head)
+{
+	return head->connected;
+}
+
+/** Is the head currently enabled?
+ *
+ * \param head The head to query.
+ * \return Video status.
+ *
+ * Returns true if the head is currently transmitting a video stream.
+ *
+ * This is independent of the head being connected.
+ *
+ * \sa weston_head_is_connected
+ * \ingroup head
+ */
+WL_EXPORT bool
+weston_head_is_enabled(struct weston_head *head)
+{
+	if (!head->output)
+		return false;
+
+	return head->output->enabled;
+}
+
+/** Has the device information changed?
+ *
+ * \param head The head to query.
+ * \return True if the device information has changed since last reset.
+ *
+ * The information about the connected display device, e.g. a monitor, may
+ * change without being disconnected in between. Changing information
+ * causes a call to the heads_changed hook.
+ *
+ * The information includes make, model, serial number, physical size,
+ * and sub-pixel type. The connection status is also included.
+ *
+ * \sa weston_head_reset_device_changed, weston_compositor_set_heads_changed_cb
+ * \ingroup head
+ */
+WL_EXPORT bool
+weston_head_is_device_changed(struct weston_head *head)
+{
+	return head->device_changed;
+}
+
+/** Does the head represent a non-desktop display?
+ *
+ * \param head The head to query.
+ * \return True if the device is a non-desktop display.
+ *
+ * Non-desktop heads are not attached to outputs by default.
+ * This stops weston from extending the desktop onto head mounted displays.
+ *
+ * \ingroup head
+ */
+WL_EXPORT bool
+weston_head_is_non_desktop(struct weston_head *head)
+{
+	return head->non_desktop;
+}
+
+/** Acknowledge device information change
+ *
+ * \param head The head to acknowledge.
+ *
+ * Clears the device changed flag on this head. When a compositor has processed
+ * device information, it should call this to be able to notice further
+ * changes.
+ *
+ * \sa weston_head_is_device_changed
+ * \ingroup head
+ */
+WL_EXPORT void
+weston_head_reset_device_changed(struct weston_head *head)
+{
+	head->device_changed = false;
+}
+
+/** Get the name of a head
+ *
+ * \param head The head to query.
+ * \return The head's name, not NULL.
+ *
+ * The name depends on the backend. The DRM backend uses connector names,
+ * other backends may use hardcoded names or user-given names.
+ *
+ * \ingroup head
+ */
+WL_EXPORT const char *
+weston_head_get_name(struct weston_head *head)
+{
+	return head->name;
+}
+
+/** Get the output the head is attached to
+ *
+ * \param head The head to query.
+ * \return The output the head is attached to, or NULL if detached.
+ * \ingroup head
+ */
+WL_EXPORT struct weston_output *
+weston_head_get_output(struct weston_head *head)
+{
+	return head->output;
+}
+
+/** Add destroy callback for a head
+ *
+ * \param head The head to watch for.
+ * \param listener The listener to add. The \c notify member must be set.
+ *
+ * Heads may get destroyed for various reasons by the backends. If a head is
+ * attached to an output, the compositor should listen for head destruction
+ * and reconfigure or destroy the output if necessary.
+ *
+ * The destroy callbacks will be called on weston_head destruction before any
+ * automatic detaching from an associated weston_output and before any
+ * weston_head information is lost.
+ *
+ * The \c data argument to the notify callback is the weston_head being
+ * destroyed.
+ *
+ * \ingroup head
+ */
+WL_EXPORT void
+weston_head_add_destroy_listener(struct weston_head *head,
+				 struct wl_listener *listener)
+{
+	wl_signal_add(&head->destroy_signal, listener);
+}
+
+/** Look up destroy listener for a head
+ *
+ * \param head The head to query.
+ * \param notify The notify function used used for the added destroy listener.
+ * \return The listener, or NULL if not found.
+ *
+ * This looks up the previously added destroy listener struct based on the
+ * notify function it has. The listener can be used to access user data
+ * through \c container_of().
+ *
+ * \sa wl_signal_get()
+ * \ingroup head
+ */
+WL_EXPORT struct wl_listener *
+weston_head_get_destroy_listener(struct weston_head *head,
+				 wl_notify_func_t notify)
+{
+	return wl_signal_get(&head->destroy_signal, notify);
+}
 
 /* Move other outputs when one is resized so the space remains contiguous. */
 static void
@@ -4394,19 +5778,21 @@ weston_output_init_geometry(struct weston_output *output, int x, int y)
 	output->x = x;
 	output->y = y;
 
-	pixman_region32_fini(&output->previous_damage);
-	pixman_region32_init(&output->previous_damage);
-
 	pixman_region32_fini(&output->region);
 	pixman_region32_init_rect(&output->region, x, y,
 				  output->width,
 				  output->height);
 }
 
+/**
+ * \ingroup output
+ */
 WL_EXPORT void
 weston_output_move(struct weston_output *output, int x, int y)
 {
+	struct weston_head *head;
 	struct wl_resource *resource;
+	int ver;
 
 	output->move_x = x - output->x;
 	output->move_y = y - output->y;
@@ -4422,19 +5808,29 @@ weston_output_move(struct weston_output *output, int x, int y)
 	wl_signal_emit(&output->compositor->output_moved_signal, output);
 
 	/* Notify clients of the change for output position. */
-	wl_resource_for_each(resource, &output->resource_list) {
-		wl_output_send_geometry(resource,
-					output->x,
-					output->y,
-					output->mm_width,
-					output->mm_height,
-					output->subpixel,
-					output->make,
-					output->model,
-					output->transform);
+	wl_list_for_each(head, &output->head_list, output_link) {
+		wl_resource_for_each(resource, &head->resource_list) {
+			wl_output_send_geometry(resource,
+						output->x,
+						output->y,
+						head->mm_width,
+						head->mm_height,
+						head->subpixel,
+						head->make,
+						head->model,
+						output->transform);
 
-		if (wl_resource_get_version(resource) >= WL_OUTPUT_DONE_SINCE_VERSION)
-			wl_output_send_done(resource);
+			ver = wl_resource_get_version(resource);
+			if (ver >= WL_OUTPUT_DONE_SINCE_VERSION)
+				wl_output_send_done(resource);
+		}
+
+		wl_resource_for_each(resource, &head->xdg_output_resource_list) {
+			zxdg_output_v1_send_logical_position(resource,
+							     output->x,
+							     output->y);
+			zxdg_output_v1_send_done(resource);
+		}
 	}
 }
 
@@ -4450,12 +5846,14 @@ weston_output_move(struct weston_output *output, int x, int y)
  * \param output The output to be added.
  *
  * \internal
+ * \ingroup compositor
  */
 static void
 weston_compositor_add_output(struct weston_compositor *compositor,
                              struct weston_output *output)
 {
 	struct weston_view *view, *next;
+	struct weston_head *head;
 
 	assert(!output->enabled);
 
@@ -4473,9 +5871,8 @@ weston_compositor_add_output(struct weston_compositor *compositor,
 	wl_list_insert(compositor->output_list.prev, &output->link);
 	output->enabled = true;
 
-	output->global = wl_global_create(compositor->wl_display,
-					  &wl_output_interface, 3,
-					  output, bind_output);
+	wl_list_for_each(head, &output->head_list, output_link)
+		weston_head_add_global(head);
 
 	wl_signal_emit(&compositor->output_created_signal, output);
 
@@ -4485,16 +5882,17 @@ weston_compositor_add_output(struct weston_compositor *compositor,
 
 /** Transform device coordinates into global coordinates
  *
- * \param device_x[in] X coordinate in device units.
- * \param device_y[in] Y coordinate in device units.
- * \param x[out] X coordinate in the global space.
- * \param y[out] Y coordinate in the global space.
+ * \param output the weston_output object
+ * \param[in] device_x X coordinate in device units.
+ * \param[in] device_y Y coordinate in device units.
+ * \param[out] x X coordinate in the global space.
+ * \param[out] y Y coordinate in the global space.
  *
- * Transforms coordinates from the device coordinate space
- * (physical pixel units) to the global coordinate space (logical pixel units).
- * This takes into account output transform and scale.
+ * Transforms coordinates from the device coordinate space (physical pixel
+ * units) to the global coordinate space (logical pixel units).  This takes
+ * into account output transform and scale.
  *
- * \memberof weston_output
+ * \ingroup output
  * \internal
  */
 WL_EXPORT void
@@ -4538,15 +5936,15 @@ weston_output_transform_coordinate(struct weston_output *output,
  *
  * - The output's internal ID is released.
  *
- * \memberof weston_output
+ * \ingroup compositor
  * \internal
  */
 static void
 weston_compositor_remove_output(struct weston_output *output)
 {
 	struct weston_compositor *compositor = output->compositor;
-	struct wl_resource *resource;
 	struct weston_view *view;
+	struct weston_head *head;
 
 	assert(output->destroying);
 	assert(output->enabled);
@@ -4558,7 +5956,7 @@ weston_compositor_remove_output(struct weston_output *output)
 
 	weston_presentation_feedback_discard_list(&output->feedback_list);
 
-	weston_compositor_reflow_outputs(compositor, output, output->width);
+	weston_compositor_reflow_outputs(compositor, output, -output->width);
 
 	wl_list_remove(&output->link);
 	wl_list_insert(compositor->pending_output_list.prev, &output->link);
@@ -4567,11 +5965,8 @@ weston_compositor_remove_output(struct weston_output *output)
 	wl_signal_emit(&compositor->output_destroyed_signal, output);
 	wl_signal_emit(&output->destroy_signal, output);
 
-	wl_global_destroy(output->global);
-	output->global = NULL;
-	wl_resource_for_each(resource, &output->resource_list) {
-		wl_resource_set_destructor(resource, NULL);
-	}
+	wl_list_for_each(head, &output->head_list, output_link)
+		weston_head_remove_global(head);
 
 	compositor->output_id_pool &= ~(1u << output->id);
 	output->id = 0xffffffff; /* invalid */
@@ -4585,7 +5980,7 @@ weston_compositor_remove_output(struct weston_output *output)
  * It only supports setting scale for an output that
  * is not enabled and it can only be ran once.
  *
- * \memberof weston_output
+ * \ingroup ouput
  */
 WL_EXPORT void
 weston_output_set_scale(struct weston_output *output,
@@ -4605,26 +6000,83 @@ weston_output_set_scale(struct weston_output *output,
  * \param output    The weston_output object that the transform is set for.
  * \param transform Transform value for the given output.
  *
- * It only supports setting transform for an output that is
- * not enabled and it can only be ran once.
- *
  * Refer to wl_output::transform section located at
  * https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_output
  * for list of values that can be passed to this function.
  *
- * \memberof weston_output
+ * \ingroup output
  */
 WL_EXPORT void
 weston_output_set_transform(struct weston_output *output,
 			    uint32_t transform)
 {
-	/* We can only set transform on a disabled output */
-	assert(!output->enabled);
+	struct weston_pointer_motion_event ev;
+	struct wl_resource *resource;
+	struct weston_seat *seat;
+	pixman_region32_t old_region;
+	int mid_x, mid_y;
+	struct weston_head *head;
+	int ver;
 
-	/* We only want to set transform once */
-	assert(output->transform == UINT32_MAX);
+	if (!output->enabled && output->transform == UINT32_MAX) {
+		output->transform = transform;
+		return;
+	}
 
-	output->transform = transform;
+	weston_output_transform_scale_init(output, transform, output->scale);
+
+	pixman_region32_init(&old_region);
+	pixman_region32_copy(&old_region, &output->region);
+
+	weston_output_init_geometry(output, output->x, output->y);
+
+	output->dirty = 1;
+
+	/* Notify clients of the change for output transform. */
+	wl_list_for_each(head, &output->head_list, output_link) {
+		wl_resource_for_each(resource, &head->resource_list) {
+			wl_output_send_geometry(resource,
+						output->x,
+						output->y,
+						head->mm_width,
+						head->mm_height,
+						head->subpixel,
+						head->make,
+						head->model,
+						output->transform);
+
+			ver = wl_resource_get_version(resource);
+			if (ver >= WL_OUTPUT_DONE_SINCE_VERSION)
+				wl_output_send_done(resource);
+		}
+		wl_resource_for_each(resource, &head->xdg_output_resource_list) {
+			zxdg_output_v1_send_logical_position(resource,
+							     output->x,
+							     output->y);
+			zxdg_output_v1_send_logical_size(resource,
+							 output->width,
+							 output->height);
+			zxdg_output_v1_send_done(resource);
+		}
+	}
+
+	/* we must ensure that pointers are inside output, otherwise they disappear */
+	mid_x = output->x + output->width / 2;
+	mid_y = output->y + output->height / 2;
+
+	ev.mask = WESTON_POINTER_MOTION_ABS;
+	ev.x = wl_fixed_to_double(wl_fixed_from_int(mid_x));
+	ev.y = wl_fixed_to_double(wl_fixed_from_int(mid_y));
+
+	wl_list_for_each(seat, &output->compositor->seat_list, link) {
+		struct weston_pointer *pointer = weston_seat_get_pointer(seat);
+
+		if (pointer && pixman_region32_contains_point(&old_region,
+							      wl_fixed_to_int(pointer->x),
+							      wl_fixed_to_int(pointer->y),
+							      NULL))
+			weston_pointer_move(pointer, &ev);
+	}
 }
 
 /** Initializes a weston_output object with enough data so
@@ -4632,37 +6084,42 @@ weston_output_set_transform(struct weston_output *output,
  *
  * \param output     The weston_output object to initialize
  * \param compositor The compositor instance.
+ * \param name       Name for the output (the string is copied).
  *
  * Sets initial values for fields that are expected to be
  * configured either by compositors or backends.
  *
- * \memberof weston_output
+ * The name is used in logs, and can be used by compositors as a configuration
+ * identifier.
+ *
+ * \ingroup output
  * \internal
  */
 WL_EXPORT void
 weston_output_init(struct weston_output *output,
-		   struct weston_compositor *compositor)
+		   struct weston_compositor *compositor,
+		   const char *name)
 {
 	output->compositor = compositor;
 	output->destroying = 0;
-
-	/* Backends must set output->name */
-	assert(output->name);
-
+	output->name = strdup(name);
 	wl_list_init(&output->link);
+	wl_signal_init(&output->user_destroy_signal);
 	output->enabled = false;
+	output->desired_protection = WESTON_HDCP_DISABLE;
+	output->allow_protection = true;
+
+	wl_list_init(&output->head_list);
 
 	/* Add some (in)sane defaults which can be used
 	 * for checking if an output was properly configured
 	 */
-	output->mm_width = 0;
-	output->mm_height = 0;
 	output->scale = 0;
 	/* Can't use -1 on uint32_t and 0 is valid enum value */
 	output->transform = UINT32_MAX;
 
-	pixman_region32_init(&output->previous_damage);
 	pixman_region32_init(&output->region);
+	wl_list_init(&output->mode_list);
 }
 
 /** Adds weston_output object to pending output list.
@@ -4670,12 +6127,9 @@ weston_output_init(struct weston_output *output,
  * \param output     The weston_output object to add
  * \param compositor The compositor instance.
  *
- * Also notifies the compositor that an output is pending for
- * configuration.
+ * The opposite of this operation is built into weston_output_release().
  *
- * The opposite of this operation is built into weston_output_destroy().
- *
- * \memberof weston_output
+ * \ingroup compositor
  * \internal
  */
 WL_EXPORT void
@@ -4687,13 +6141,40 @@ weston_compositor_add_pending_output(struct weston_output *output,
 
 	wl_list_remove(&output->link);
 	wl_list_insert(compositor->pending_output_list.prev, &output->link);
-	wl_signal_emit(&compositor->output_pending_signal, output);
+}
+
+/** Create a string with the attached heads' names.
+ *
+ * The string must be free()'d.
+ *
+ * \ingroup output
+ */
+static char *
+weston_output_create_heads_string(struct weston_output *output)
+{
+	FILE *fp;
+	char *str = NULL;
+	size_t size = 0;
+	struct weston_head *head;
+	const char *sep = "";
+
+	fp = open_memstream(&str, &size);
+	if (!fp)
+		return NULL;
+
+	wl_list_for_each(head, &output->head_list, output_link) {
+		fprintf(fp, "%s%s", sep, head->name);
+		sep = ", ";
+	}
+	fclose(fp);
+
+	return str;
 }
 
 /** Constructs a weston_output object that can be used by the compositor.
  *
  * \param output The weston_output object that needs to be enabled. Must not
- * be enabled already.
+ * be enabled already. Must have at least one head attached.
  *
  * Output coordinates are calculated and each new output is by default
  * assigned to the right of previous one.
@@ -4722,18 +6203,39 @@ weston_compositor_add_pending_output(struct weston_output *output,
  * to be reconfigured or just so it can be destroyed at shutdown.
  *
  * 0 is returned on success, -1 on failure.
+ *
+ * \ingroup output
  */
 WL_EXPORT int
 weston_output_enable(struct weston_output *output)
 {
 	struct weston_compositor *c = output->compositor;
 	struct weston_output *iterator;
+	struct weston_head *head;
+	char *head_names;
 	int x = 0, y = 0;
 
 	if (output->enabled) {
 		weston_log("Error: attempt to enable an enabled output '%s'\n",
 			   output->name);
 		return -1;
+	}
+
+	if (wl_list_empty(&output->head_list)) {
+		weston_log("Error: cannot enable output '%s' without heads.\n",
+			   output->name);
+		return -1;
+	}
+
+	if (wl_list_empty(&output->mode_list) || !output->current_mode) {
+		weston_log("Error: no video mode for output '%s'.\n",
+			   output->name);
+		return -1;
+	}
+
+	wl_list_for_each(head, &output->head_list, output_link) {
+		assert(head->make);
+		assert(head->model);
 	}
 
 	iterator = container_of(c->output_list.prev,
@@ -4753,16 +6255,16 @@ weston_output_enable(struct weston_output *output)
 	output->dirty = 1;
 	output->original_scale = output->scale;
 
+	wl_signal_init(&output->frame_signal);
+	wl_signal_init(&output->destroy_signal);
+
 	weston_output_transform_scale_init(output, output->transform, output->scale);
 	weston_output_init_zoom(output);
 
 	weston_output_init_geometry(output, x, y);
 	weston_output_damage(output);
 
-	wl_signal_init(&output->frame_signal);
-	wl_signal_init(&output->destroy_signal);
 	wl_list_init(&output->animation_list);
-	wl_list_init(&output->resource_list);
 	wl_list_init(&output->feedback_list);
 
 	/* Enable the output (set up the crtc or create a
@@ -4775,6 +6277,11 @@ weston_output_enable(struct weston_output *output)
 	}
 
 	weston_compositor_add_output(output->compositor, output);
+
+	head_names = weston_output_create_heads_string(output);
+	weston_log("Output '%s' enabled with head(s) %s\n",
+		   output->name, head_names);
+	free(head_names);
 
 	return 0;
 }
@@ -4804,6 +6311,8 @@ weston_output_enable(struct weston_output *output)
  * If the output has never been enabled yet, this function can still be
  * called to ensure that the output is actually turned off rather than left
  * in the state it was discovered in.
+ *
+ * \ingroup output
  */
 WL_EXPORT void
 weston_output_disable(struct weston_output *output)
@@ -4828,17 +6337,68 @@ weston_output_disable(struct weston_output *output)
 	output->destroying = 0;
 }
 
-/** Emits a signal to indicate that there are outputs waiting to be configured.
+/** Forces a synchronous call to heads_changed hook
  *
  * \param compositor The compositor instance
+ *
+ * If there are new or changed heads, calls the heads_changed hook and
+ * returns after the hook returns.
+ *
+ * \ingroup compositor
  */
 WL_EXPORT void
-weston_pending_output_coldplug(struct weston_compositor *compositor)
+weston_compositor_flush_heads_changed(struct weston_compositor *compositor)
 {
-	struct weston_output *output, *next;
+	if (compositor->heads_changed_source) {
+		wl_event_source_remove(compositor->heads_changed_source);
+		weston_compositor_call_heads_changed(compositor);
+	}
+}
 
-	wl_list_for_each_safe(output, next, &compositor->pending_output_list, link)
-		wl_signal_emit(&compositor->output_pending_signal, output);
+/** Add destroy callback for an output
+ *
+ * \param output The output to watch.
+ * \param listener The listener to add. The \c notify member must be set.
+ *
+ * The listener callback will be called when user destroys an output. This
+ * may be delayed by a backend in some cases. The main purpose of the
+ * listener is to allow hooking up custom data to the output. The custom data
+ * can be fetched via weston_output_get_destroy_listener() followed by
+ * container_of().
+ *
+ * The \c data argument to the notify callback is the weston_output being
+ * destroyed.
+ *
+ * @note This is for the final destruction of an output, not when it gets
+ * disabled. If you want to keep track of enabled outputs, this is not it.
+ *
+ * \ingroup ouput
+ */
+WL_EXPORT void
+weston_output_add_destroy_listener(struct weston_output *output,
+				   struct wl_listener *listener)
+{
+	wl_signal_add(&output->user_destroy_signal, listener);
+}
+
+/** Look up destroy listener for an output
+ *
+ * \param output The output to query.
+ * \param notify The notify function used used for the added destroy listener.
+ * \return The listener, or NULL if not found.
+ *
+ * This looks up the previously added destroy listener struct based on the
+ * notify function it has. The listener can be used to access user data
+ * through \c container_of().
+ *
+ * \sa wl_signal_get() weston_output_add_destroy_listener()
+ * \ingroup output
+ */
+WL_EXPORT struct wl_listener *
+weston_output_get_destroy_listener(struct weston_output *output,
+				   wl_notify_func_t notify)
+{
+	return wl_signal_get(&output->user_destroy_signal, notify);
 }
 
 /** Uninitialize an output
@@ -4850,21 +6410,250 @@ weston_pending_output_coldplug(struct weston_compositor *compositor)
  * All fields of weston_output become uninitialized, i.e. should not be used
  * anymore. The caller can free the memory after this.
  *
- * \memberof weston_output
+ * \ingroup ouput
  * \internal
  */
 WL_EXPORT void
-weston_output_destroy(struct weston_output *output)
+weston_output_release(struct weston_output *output)
 {
+	struct weston_head *head, *tmp;
+
 	output->destroying = 1;
+
+	wl_signal_emit(&output->user_destroy_signal, output);
+
+	if (output->idle_repaint_source)
+		wl_event_source_remove(output->idle_repaint_source);
 
 	if (output->enabled)
 		weston_compositor_remove_output(output);
 
 	pixman_region32_fini(&output->region);
-	pixman_region32_fini(&output->previous_damage);
 	wl_list_remove(&output->link);
+
+	wl_list_for_each_safe(head, tmp, &output->head_list, output_link)
+		weston_head_detach(head);
+
 	free(output->name);
+}
+
+/** Find an output by its given name
+ *
+ * \param compositor The compositor to search in.
+ * \param name The output name to search for.
+ * \return An existing output with the given name, or NULL if not found.
+ *
+ * \ingroup compositor
+ */
+WL_EXPORT struct weston_output *
+weston_compositor_find_output_by_name(struct weston_compositor *compositor,
+				      const char *name)
+{
+	struct weston_output *output;
+
+	wl_list_for_each(output, &compositor->output_list, link)
+		if (strcmp(output->name, name) == 0)
+			return output;
+
+	wl_list_for_each(output, &compositor->pending_output_list, link)
+		if (strcmp(output->name, name) == 0)
+			return output;
+
+	return NULL;
+}
+
+/** Create a named output
+ *
+ * \param compositor The compositor.
+ * \param name The name for the output.
+ * \return A new \c weston_output, or NULL on failure.
+ *
+ * This creates a new weston_output that starts with no heads attached.
+ *
+ * An output must be configured and it must have at least one head before
+ * it can be enabled.
+ *
+ * \ingroup compositor
+ */
+WL_EXPORT struct weston_output *
+weston_compositor_create_output(struct weston_compositor *compositor,
+				const char *name)
+{
+	assert(compositor->backend->create_output);
+
+	if (weston_compositor_find_output_by_name(compositor, name)) {
+		weston_log("Warning: attempted to create an output with a "
+			   "duplicate name '%s'.\n", name);
+		return NULL;
+	}
+
+	return compositor->backend->create_output(compositor, name);
+}
+
+/** Create an output for an unused head
+ *
+ * \param compositor The compositor.
+ * \param head The head to attach to the output.
+ * \return A new \c weston_output, or NULL on failure.
+ *
+ * This creates a new weston_output that starts with the given head attached.
+ * The output inherits the name of the head. The head must not be already
+ * attached to another output.
+ *
+ * An output must be configured before it can be enabled.
+ *
+ * \ingroup compositor
+ */
+WL_EXPORT struct weston_output *
+weston_compositor_create_output_with_head(struct weston_compositor *compositor,
+					  struct weston_head *head)
+{
+	struct weston_output *output;
+
+	output = weston_compositor_create_output(compositor, head->name);
+	if (!output)
+		return NULL;
+
+	if (weston_output_attach_head(output, head) < 0) {
+		weston_output_destroy(output);
+		return NULL;
+	}
+
+	return output;
+}
+
+/** Destroy an output
+ *
+ * \param output The output to destroy.
+ *
+ * The heads attached to the given output are detached and become unused again.
+ *
+ * It is not necessary to explicitly destroy all outputs at compositor exit.
+ * weston_compositor_tear_down() will automatically destroy any remaining
+ * outputs.
+ *
+ * \ingroup ouput
+ */
+WL_EXPORT void
+weston_output_destroy(struct weston_output *output)
+{
+	output->destroy(output);
+}
+
+/** When you need a head...
+ *
+ * This function is a hack, used until all code has been converted to become
+ * multi-head aware.
+ *
+ * \param output The weston_output whose head to get.
+ * \return The first head in the output's list.
+ *
+ * \ingroup ouput
+ */
+WL_EXPORT struct weston_head *
+weston_output_get_first_head(struct weston_output *output)
+{
+	if (wl_list_empty(&output->head_list))
+		return NULL;
+
+	return container_of(output->head_list.next,
+			    struct weston_head, output_link);
+}
+
+/** Allow/Disallow content-protection support for an output
+ *
+ * This function sets the allow_protection member for an output. Setting of
+ * this field will allow the compositor to attempt content-protection for this
+ * output, for a backend that supports the content-protection protocol.
+ *
+ * \param output The weston_output for whom the content-protection is to be
+ * allowed.
+ * \param allow_protection The bool value which is to be set.
+ */
+WL_EXPORT void
+weston_output_allow_protection(struct weston_output *output,
+			       bool allow_protection)
+{
+	output->allow_protection = allow_protection;
+}
+
+static void
+xdg_output_unlist(struct wl_resource *resource)
+{
+	wl_list_remove(wl_resource_get_link(resource));
+}
+
+static void
+xdg_output_destroy(struct wl_client *client, struct wl_resource *resource)
+{
+	wl_resource_destroy(resource);
+}
+
+static const struct zxdg_output_v1_interface xdg_output_interface = {
+	xdg_output_destroy
+};
+
+static void
+xdg_output_manager_destroy(struct wl_client *client,
+                           struct wl_resource *resource)
+{
+	wl_resource_destroy(resource);
+}
+
+static void
+xdg_output_manager_get_xdg_output(struct wl_client *client,
+				  struct wl_resource *manager,
+				  uint32_t id,
+				  struct wl_resource *output_resource)
+{
+	int version = wl_resource_get_version(manager);
+	struct weston_head *head = wl_resource_get_user_data(output_resource);
+	struct weston_output *output = head->output;
+	struct wl_resource *resource;
+
+	resource = wl_resource_create(client, &zxdg_output_v1_interface,
+				      version, id);
+	if (resource == NULL) {
+		wl_client_post_no_memory(client);
+		return;
+	}
+
+	wl_list_insert(&head->xdg_output_resource_list,
+		       wl_resource_get_link(resource));
+
+	wl_resource_set_implementation(resource, &xdg_output_interface,
+				       NULL, xdg_output_unlist);
+
+	zxdg_output_v1_send_logical_position(resource, output->x, output->y);
+	zxdg_output_v1_send_logical_size(resource,
+					 output->width,
+					 output->height);
+	if (version >= ZXDG_OUTPUT_V1_NAME_SINCE_VERSION)
+		zxdg_output_v1_send_name(resource, head->name);
+
+	zxdg_output_v1_send_done(resource);
+}
+
+static const struct zxdg_output_manager_v1_interface xdg_output_manager_interface = {
+	xdg_output_manager_destroy,
+	xdg_output_manager_get_xdg_output
+};
+
+static void
+bind_xdg_output_manager(struct wl_client *client,
+			void *data, uint32_t version, uint32_t id)
+{
+	struct wl_resource *resource;
+
+	resource = wl_resource_create(client, &zxdg_output_manager_v1_interface,
+				      version, id);
+	if (resource == NULL) {
+		wl_client_post_no_memory(client);
+		return;
+	}
+
+	wl_resource_set_implementation(resource, &xdg_output_manager_interface,
+				       NULL, NULL);
 }
 
 static void
@@ -5160,16 +6949,258 @@ weston_environment_get_fd(const char *env)
 	return fd;
 }
 
-static void
-timeline_key_binding_handler(struct weston_keyboard *keyboard, uint32_t time,
-			     uint32_t key, void *data)
+static const char *
+output_repaint_status_text(struct weston_output *output)
 {
-	struct weston_compositor *compositor = data;
+	switch (output->repaint_status) {
+	case REPAINT_NOT_SCHEDULED:
+		return "no repaint";
+	case REPAINT_BEGIN_FROM_IDLE:
+		return "start_repaint_loop scheduled";
+	case REPAINT_SCHEDULED:
+		return "repaint scheduled";
+	case REPAINT_AWAITING_COMPLETION:
+		return "awaiting completion";
+	}
 
-	if (weston_timeline_enabled_)
-		weston_timeline_close();
-	else
-		weston_timeline_open(compositor);
+	assert(!"output_repaint_status_text missing enum");
+	return NULL;
+}
+
+static void
+debug_scene_view_print_buffer(FILE *fp, struct weston_view *view)
+{
+	struct weston_buffer *buffer = view->surface->buffer_ref.buffer;
+	struct wl_shm_buffer *shm;
+	struct linux_dmabuf_buffer *dmabuf;
+	const struct pixel_format_info *pixel_info = NULL;
+
+	if (!buffer) {
+		fprintf(fp, "\t\t[buffer not available]\n");
+		return;
+	}
+
+	shm = wl_shm_buffer_get(buffer->resource);
+	if (shm) {
+		uint32_t _format = wl_shm_buffer_get_format(shm);
+		pixel_info = pixel_format_get_info_shm(_format);
+		fprintf(fp, "\t\tSHM buffer\n");
+		fprintf(fp, "\t\t\tformat: 0x%lx %s\n",
+			(unsigned long) _format,
+			pixel_info ? pixel_info->drm_format_name : "UNKNOWN");
+		return;
+	}
+
+	dmabuf = linux_dmabuf_buffer_get(buffer->resource);
+	if (dmabuf) {
+		pixel_info = pixel_format_get_info(dmabuf->attributes.format);
+		fprintf(fp, "\t\tdmabuf buffer\n");
+		fprintf(fp, "\t\t\tformat: 0x%lx %s\n",
+			(unsigned long) dmabuf->attributes.format,
+			pixel_info ? pixel_info->drm_format_name : "UNKNOWN");
+		fprintf(fp, "\t\t\tmodifier: 0x%llx\n",
+			(unsigned long long) dmabuf->attributes.modifier[0]);
+		return;
+	}
+
+	fprintf(fp, "\t\tEGL buffer\n");
+}
+
+static void
+debug_scene_view_print(FILE *fp, struct weston_view *view, int view_idx)
+{
+	struct weston_compositor *ec = view->surface->compositor;
+	struct weston_output *output;
+	char desc[512];
+	pixman_box32_t *box;
+	uint32_t surface_id = 0;
+	pid_t pid = 0;
+
+	if (view->surface->resource) {
+		struct wl_resource *resource = view->surface->resource;
+		wl_client_get_credentials(wl_resource_get_client(resource),
+				  	  &pid, NULL, NULL);
+		surface_id = wl_resource_get_id(view->surface->resource);
+	}
+
+	if (!view->surface->get_label ||
+	    view->surface->get_label(view->surface, desc, sizeof(desc)) < 0) {
+		strcpy(desc, "[no description available]");
+	}
+	fprintf(fp, "\tView %d (role %s, PID %d, surface ID %u, %s, %p):\n",
+		view_idx, view->surface->role_name, pid, surface_id,
+		desc, view);
+
+	box = pixman_region32_extents(&view->transform.boundingbox);
+	fprintf(fp, "\t\tposition: (%d, %d) -> (%d, %d)\n",
+		box->x1, box->y1, box->x2, box->y2);
+	box = pixman_region32_extents(&view->transform.opaque);
+
+	if (pixman_region32_equal(&view->transform.opaque,
+				  &view->transform.boundingbox)) {
+		fprintf(fp, "\t\t[fully opaque]\n");
+	} else if (!pixman_region32_not_empty(&view->transform.opaque)) {
+		fprintf(fp, "\t\t[not opaque]\n");
+	} else {
+		fprintf(fp, "\t\t[opaque: (%d, %d) -> (%d, %d)]\n",
+			box->x1, box->y1, box->x2, box->y2);
+	}
+
+	if (view->alpha < 1.0)
+		fprintf(fp, "\t\talpha: %f\n", view->alpha);
+
+	if (view->output_mask != 0) {
+		bool first_output = true;
+		fprintf(fp, "\t\toutputs: ");
+		wl_list_for_each(output, &ec->output_list, link) {
+			if (!(view->output_mask & (1 << output->id)))
+				continue;
+			fprintf(fp, "%s%d (%s)%s",
+				(first_output) ? "" : ", ",
+				output->id, output->name,
+				(view->output == output) ? " (primary)" : "");
+			first_output = false;
+		}
+	} else {
+		fprintf(fp, "\t\t[no outputs]");
+	}
+
+	fprintf(fp, "\n");
+
+	debug_scene_view_print_buffer(fp, view);
+}
+
+static void
+debug_scene_view_print_tree(struct weston_view *view,
+			    FILE *fp, int *view_idx)
+{
+	struct weston_subsurface *sub;
+	struct weston_view *ev;
+
+	/*
+	 * print the view first, then we recursively go on printing
+	 * sub-surfaces. We bail out once no more sub-surfaces are available.
+	 */
+	debug_scene_view_print(fp, view, *view_idx);
+
+	/* no more sub-surfaces */
+	if (wl_list_empty(&view->surface->subsurface_list))
+		return;
+
+	wl_list_for_each(sub, &view->surface->subsurface_list, parent_link) {
+		wl_list_for_each(ev, &sub->surface->views, surface_link) {
+			/* do not print again the parent view */
+			if (view == ev)
+				continue;
+
+			(*view_idx)++;
+			debug_scene_view_print_tree(ev, fp, view_idx);
+		}
+	}
+}
+
+/**
+ * Output information on how libweston is currently composing the scene
+ * graph.
+ *
+ * \ingroup compositor
+ */
+WL_EXPORT char *
+weston_compositor_print_scene_graph(struct weston_compositor *ec)
+{
+	struct weston_output *output;
+	struct weston_layer *layer;
+	struct timespec now;
+	int layer_idx = 0;
+	FILE *fp;
+	char *ret;
+	size_t len;
+	int err;
+
+	fp = open_memstream(&ret, &len);
+	assert(fp);
+
+	weston_compositor_read_presentation_clock(ec, &now);
+	fprintf(fp, "Weston scene graph at %ld.%09ld:\n\n",
+		now.tv_sec, now.tv_nsec);
+
+	wl_list_for_each(output, &ec->output_list, link) {
+		struct weston_head *head;
+		int head_idx = 0;
+
+		fprintf(fp, "Output %d (%s):\n", output->id, output->name);
+		assert(output->enabled);
+
+		fprintf(fp, "\tposition: (%d, %d) -> (%d, %d)\n",
+			output->x, output->y,
+			output->x + output->width,
+			output->y + output->height);
+		fprintf(fp, "\tmode: %dx%d@%.3fHz\n",
+			output->current_mode->width,
+			output->current_mode->height,
+			output->current_mode->refresh / 1000.0);
+		fprintf(fp, "\tscale: %d\n", output->scale);
+
+		fprintf(fp, "\trepaint status: %s\n",
+			output_repaint_status_text(output));
+		if (output->repaint_status == REPAINT_SCHEDULED)
+			fprintf(fp, "\tnext repaint: %ld.%09ld\n",
+				output->next_repaint.tv_sec,
+				output->next_repaint.tv_nsec);
+
+		wl_list_for_each(head, &output->head_list, output_link) {
+			fprintf(fp, "\tHead %d (%s): %sconnected\n",
+				head_idx++, head->name,
+				(head->connected) ? "" : "not ");
+		}
+	}
+
+	fprintf(fp, "\n");
+
+	wl_list_for_each(layer, &ec->layer_list, link) {
+		struct weston_view *view;
+		int view_idx = 0;
+
+		fprintf(fp, "Layer %d (pos 0x%lx):\n", layer_idx++,
+			(unsigned long) layer->position);
+
+		if (!weston_layer_mask_is_infinite(layer)) {
+			fprintf(fp, "\t[mask: (%d, %d) -> (%d,%d)]\n\n",
+				layer->mask.x1, layer->mask.y1,
+				layer->mask.x2, layer->mask.y2);
+		}
+
+		wl_list_for_each(view, &layer->view_list.link, layer_link.link) {
+			debug_scene_view_print_tree(view, fp, &view_idx);
+			view_idx++;
+		}
+
+		if (wl_list_empty(&layer->view_list.link))
+			fprintf(fp, "\t[no views]\n");
+
+		fprintf(fp, "\n");
+	}
+
+	err = fclose(fp);
+	assert(err == 0);
+
+	return ret;
+}
+
+/**
+ * Called when the 'scene-graph' debug scope is bound by a client. This
+ * one-shot weston-debug scope prints the current scene graph when bound,
+ * and then terminates the stream.
+ */
+static void
+debug_scene_graph_cb(struct weston_log_subscription *sub, void *data)
+{
+	struct weston_compositor *ec = data;
+	char *str = weston_compositor_print_scene_graph(ec);
+
+	weston_log_subscription_printf(sub, "%s", str);
+	free(str);
+	weston_log_subscription_complete(sub);
 }
 
 /** Create the compositor.
@@ -5178,11 +7209,16 @@ timeline_key_binding_handler(struct weston_keyboard *keyboard, uint32_t time,
  *
  * \param display The Wayland display to be used.
  * \param user_data A pointer to an object that can later be retrieved
+ * \param log_ctx A pointer to weston_debug_compositor
  * using the \ref weston_compositor_get_user_data function.
  * \return The compositor instance on success or NULL on failure.
+ *
+ * \ingroup compositor
  */
 WL_EXPORT struct weston_compositor *
-weston_compositor_create(struct wl_display *display, void *user_data)
+weston_compositor_create(struct wl_display *display,
+			 struct weston_log_context *log_ctx,
+			 void *user_data)
 {
 	struct weston_compositor *ec;
 	struct wl_event_loop *loop;
@@ -5204,15 +7240,23 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 	wl_signal_init(&ec->hide_input_panel_signal);
 	wl_signal_init(&ec->update_input_panel_signal);
 	wl_signal_init(&ec->seat_created_signal);
-	wl_signal_init(&ec->output_pending_signal);
 	wl_signal_init(&ec->output_created_signal);
 	wl_signal_init(&ec->output_destroyed_signal);
 	wl_signal_init(&ec->output_moved_signal);
 	wl_signal_init(&ec->output_resized_signal);
+	wl_signal_init(&ec->heads_changed_signal);
+	wl_signal_init(&ec->output_heads_changed_signal);
 	wl_signal_init(&ec->session_signal);
-	ec->session_active = 1;
+	ec->session_active = true;
+
 	ec->output_id_pool = 0;
+	ec->repaint_msec = DEFAULT_REPAINT_WINDOW;
+
 	ec->activate_serial = 1;
+
+	ec->touch_mode = WESTON_TOUCH_MODE_NORMAL;
+
+	ec->content_protection = NULL;
 
 	if (!wl_global_create(ec->wl_display, &wl_compositor_interface, 4,
 			      ec, compositor_bind))
@@ -5226,8 +7270,15 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 			      ec, bind_viewporter))
 		goto fail;
 
+	if (!wl_global_create(ec->wl_display, &zxdg_output_manager_v1_interface, 2,
+			      ec, bind_xdg_output_manager))
+		goto fail;
+
 	if (!wl_global_create(ec->wl_display, &wp_presentation_interface, 1,
 			      ec, bind_presentation))
+		goto fail;
+
+	if (weston_log_ctx_compositor_setup(ec, log_ctx) < 0)
 		goto fail;
 
 	if (weston_input_init(ec) != 0)
@@ -5239,6 +7290,7 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 	wl_list_init(&ec->seat_list);
 	wl_list_init(&ec->pending_output_list);
 	wl_list_init(&ec->output_list);
+	wl_list_init(&ec->head_list);
 	wl_list_init(&ec->key_binding_list);
 	wl_list_init(&ec->modifier_binding_list);
 	wl_list_init(&ec->button_binding_list);
@@ -5257,6 +7309,9 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 
 	loop = wl_display_get_event_loop(ec->wl_display);
 	ec->idle_source = wl_event_loop_add_timer(loop, idle_handler, ec);
+	ec->repaint_timer =
+		wl_event_loop_add_timer(loop, output_repaint_timer_handler,
+					ec);
 
 	weston_layer_init(&ec->fade_layer, ec);
 	weston_layer_init(&ec->cursor_layer, ec);
@@ -5265,9 +7320,18 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 	weston_layer_set_position(&ec->cursor_layer,
 				  WESTON_LAYER_POSITION_CURSOR);
 
-	weston_compositor_add_debug_binding(ec, KEY_T,
-					    timeline_key_binding_handler, ec);
+	ec->debug_scene =
+		weston_compositor_add_log_scope(ec->weston_log_ctx, "scene-graph",
+						"Scene graph details\n",
+						debug_scene_graph_cb, NULL,
+						ec);
 
+	ec->timeline =
+		weston_compositor_add_log_scope(ec->weston_log_ctx, "timeline",
+						"Timeline event points\n",
+						weston_timeline_create_subscription,
+						weston_timeline_destroy_subscription,
+						ec);
 	return ec;
 
 fail:
@@ -5275,6 +7339,9 @@ fail:
 	return NULL;
 }
 
+/** weston_compositor_shutdown
+ * \ingroup compositor
+ */
 WL_EXPORT void
 weston_compositor_shutdown(struct weston_compositor *ec)
 {
@@ -5303,6 +7370,9 @@ weston_compositor_shutdown(struct weston_compositor *ec)
 	weston_plane_release(&ec->primary_plane);
 }
 
+/** weston_compositor_exit_with_code
+ * \ingroup compositor
+ */
 WL_EXPORT void
 weston_compositor_exit_with_code(struct weston_compositor *compositor,
 				 int exit_code)
@@ -5313,6 +7383,9 @@ weston_compositor_exit_with_code(struct weston_compositor *compositor,
 	weston_compositor_exit(compositor);
 }
 
+/** weston_compositor_set_default_pointer_grab
+ * \ingroup compositor
+ */
 WL_EXPORT void
 weston_compositor_set_default_pointer_grab(struct weston_compositor *ec,
 			const struct weston_pointer_grab_interface *interface)
@@ -5328,6 +7401,9 @@ weston_compositor_set_default_pointer_grab(struct weston_compositor *ec,
 	}
 }
 
+/** weston_compositor_set_presentation_clock
+ * \ingroup compositor
+ */
 WL_EXPORT int
 weston_compositor_set_presentation_clock(struct weston_compositor *compositor,
 					 clockid_t clk_id)
@@ -5342,9 +7418,10 @@ weston_compositor_set_presentation_clock(struct weston_compositor *compositor,
 	return 0;
 }
 
-/*
- * For choosing the software clock, when the display hardware or API
+/** For choosing the software clock, when the display hardware or API
  * does not expose a compatible presentation timestamp.
+ *
+ * \ingroup compositor
  */
 WL_EXPORT int
 weston_compositor_set_presentation_clock_software(
@@ -5373,7 +7450,7 @@ weston_compositor_set_presentation_clock_software(
 /** Read the current time from the Presentation clock
  *
  * \param compositor
- * \param ts[out] The current time.
+ * \param[out] ts The current time.
  *
  * \note Reading the current time in user space is always imprecise to some
  * degree.
@@ -5381,6 +7458,8 @@ weston_compositor_set_presentation_clock_software(
  * This function is never meant to fail. If reading the clock does fail,
  * an error message is logged and a zero time is returned. Callers are not
  * supposed to detect or react to failures.
+ *
+ * \ingroup compositor
  */
 WL_EXPORT void
 weston_compositor_read_presentation_clock(
@@ -5397,8 +7476,9 @@ weston_compositor_read_presentation_clock(
 
 		if (!warned)
 			weston_log("Error: failure to read "
-				   "the presentation clock %#x: '%m' (%d)\n",
-				   compositor->presentation_clock, errno);
+				   "the presentation clock %#x: '%s' (%d)\n",
+				   compositor->presentation_clock,
+				   strerror(errno), errno);
 		warned = true;
 	}
 }
@@ -5416,7 +7496,9 @@ weston_compositor_read_presentation_clock(
  * This hook is also used for detecting if the renderer supports
  * dmabufs at all. If the renderer hook is NULL, dmabufs are not
  * supported.
- * */
+ *
+ * \ingroup compositor
+ */
 WL_EXPORT bool
 weston_compositor_import_dmabuf(struct weston_compositor *compositor,
 				struct linux_dmabuf_buffer *buffer)
@@ -5431,29 +7513,16 @@ weston_compositor_import_dmabuf(struct weston_compositor *compositor,
 	return renderer->import_dmabuf(compositor, buffer);
 }
 
-/** Import gbmbuf buffer into current renderer
- *
- * \param compositor
- * \param buffer the gbmbuf buffer to import
- * \return true on usable buffers, false otherwise
- *
- * This function tests that the gbm_buffer is usable
- * for the current renderer. Returns false on unusable buffers. Usually
- * usability is tested by importing the gbmbuf for composition.
- *
- * This hook is also used for detecting if the renderer supports
- * gbmbuf at all. If the renderer hook is NULL, dmabufs are not
- * supported.
- * */
 WL_EXPORT bool
-weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
-				    struct gbm_buffer *buffer)
+weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
+		struct linux_dmabuf_buffer *buffer)
 {
-	struct weston_renderer *renderer;
-	renderer = compositor->renderer;
-	if (renderer->import_gbm_buffer == NULL)
+	struct weston_backend *backend = compositor->backend;
+
+	if (backend->can_scanout_dmabuf == NULL)
 		return false;
-	return renderer->import_gbm_buffer(compositor, buffer);
+
+	return backend->can_scanout_dmabuf(compositor, buffer);
 }
 
 WL_EXPORT void
@@ -5464,10 +7533,60 @@ weston_version(int *major, int *minor, int *micro)
 	*micro = WESTON_VERSION_MICRO;
 }
 
+/**
+ * Attempts to find a module path from the module map specified in the
+ * environment. If found, writes the full path into the path variable.
+ *
+ * The module map is a string in environment variable WESTON_MODULE_MAP, where
+ * each entry is of the form "name=path" and entries are separated by
+ * semicolons. Whitespace is significant.
+ *
+ * \param name The name to search for.
+ * \param path Where the path is written to if found.
+ * \param path_len Allocated bytes at \c path .
+ * \returns The length of the string written to path on success, or 0 if the
+ * module was not specified in the environment map or path_len was too small.
+ */
+WL_EXPORT size_t
+weston_module_path_from_env(const char *name, char *path, size_t path_len)
+{
+	const char *mapping = getenv("WESTON_MODULE_MAP");
+	const char *end;
+	const int name_len = strlen(name);
+
+	if (!mapping)
+		return 0;
+
+	end = mapping + strlen(mapping);
+	while (mapping < end && *mapping) {
+		const char *filename, *next;
+
+		/* early out: impossibly short string */
+		if (end - mapping < name_len + 1)
+			return 0;
+
+		filename = &mapping[name_len + 1];
+		next = strchrnul(mapping, ';');
+
+		if (strncmp(mapping, name, name_len) == 0 &&
+		    mapping[name_len] == '=') {
+			size_t file_len = next - filename; /* no trailing NUL */
+			if (file_len >= path_len)
+				return 0;
+			strncpy(path, filename, file_len);
+			path[file_len] = '\0';
+			return file_len;
+		}
+
+		mapping = next + 1;
+	}
+
+	return 0;
+}
+
 WL_EXPORT void *
 weston_load_module(const char *name, const char *entrypoint)
 {
-	const char *builddir = getenv("WESTON_BUILD_DIR");
 	char path[PATH_MAX];
 	void *module, *init;
 	size_t len;
@@ -5476,10 +7595,8 @@ weston_load_module(const char *name, const char *entrypoint)
 		return NULL;
 
 	if (name[0] != '/') {
-		if (builddir)
-			len = snprintf(path, sizeof path, "%s/.libs/%s",
-				       builddir, name);
-		else
+		len = weston_module_path_from_env(name, path, sizeof path);
+		if (len == 0)
 			len = snprintf(path, sizeof path, "%s/%s",
 				       LIBWESTON_MODULEDIR, name);
 	} else {
@@ -5495,15 +7612,13 @@ weston_load_module(const char *name, const char *entrypoint)
 	module = dlopen(path, RTLD_NOW | RTLD_NOLOAD);
 	if (module) {
 		weston_log("Module '%s' already loaded\n", path);
-		dlclose(module);
-		return NULL;
-	}
-
-	weston_log("Loading module '%s'\n", path);
-	module = dlopen(path, RTLD_NOW);
-	if (!module) {
-		weston_log("Failed to load module: %s\n", dlerror());
-		return NULL;
+	} else {
+		weston_log("Loading module '%s'\n", path);
+		module = dlopen(path, RTLD_NOW);
+		if (!module) {
+			weston_log("Failed to load module: %s\n", dlerror());
+			return NULL;
+		}
 	}
 
 	init = dlsym(module, entrypoint);
@@ -5516,15 +7631,55 @@ weston_load_module(const char *name, const char *entrypoint)
 	return init;
 }
 
+/** Add a compositor destroy listener only once
+ *
+ * \param compositor The compositor whose destroy to watch for.
+ * \param listener The listener struct to initialize.
+ * \param destroy_handler The callback when compositor is destroyed.
+ * \return True if listener is added, or false if there already is a listener
+ * with the given \c destroy_handler.
+ *
+ * This function does nothing and returns false if the given callback function
+ * is already present in the weston_compositor destroy callbacks list.
+ * Otherwise, this function initializes the given listener with the given
+ * callback pointer and adds it to the compositor's destroy callbacks list.
+ *
+ * This can be used to ensure that plugin initialization is done only once
+ * in case the same plugin is loaded multiple times. If this function returns
+ * false, the plugin should be already initialized successfully.
+ *
+ * All plugins should register a destroy listener for cleaning up. Note, that
+ * the plugin destruction order is not guaranteed: plugins that depend on other
+ * plugins must be able to be torn down in arbitrary order.
+ *
+ * \sa weston_compositor_tear_down, weston_compositor_destroy
+ */
+WL_EXPORT bool
+weston_compositor_add_destroy_listener_once(struct weston_compositor *compositor,
+					    struct wl_listener *listener,
+					    wl_notify_func_t destroy_handler)
+{
+	if (wl_signal_get(&compositor->destroy_signal, destroy_handler))
+		return false;
 
-/** Destroys the compositor.
+	listener->notify = destroy_handler;
+	wl_signal_add(&compositor->destroy_signal, listener);
+	return true;
+}
+
+/** Tear down the compositor.
  *
- * This function cleans up the compositor state and destroys it.
+ * This function cleans up the compositor state. While the compositor state has
+ * been cleaned do note that **only** weston_compositor_destroy() can be called
+ * afterwards, in order to destroy the compositor instance.
  *
- * \param compositor The compositor to be destroyed.
+ * @param compositor The compositor to be tear-down/cleaned.
+ *
+ * @ingroup compositor
+ * @sa weston_compositor_destroy
  */
 WL_EXPORT void
-weston_compositor_destroy(struct weston_compositor *compositor)
+weston_compositor_tear_down(struct weston_compositor *compositor)
 {
 	/* prevent further rendering while shutting down */
 	compositor->state = WESTON_COMPOSITOR_OFFSCREEN;
@@ -5536,8 +7691,33 @@ weston_compositor_destroy(struct weston_compositor *compositor)
 	if (compositor->backend)
 		compositor->backend->destroy(compositor);
 
+	/* The backend is responsible for destroying the heads. */
+	assert(wl_list_empty(&compositor->head_list));
+
 	weston_plugin_api_destroy_list(compositor);
 
+	if (compositor->heads_changed_source)
+		wl_event_source_remove(compositor->heads_changed_source);
+
+	weston_compositor_log_scope_destroy(compositor->debug_scene);
+	compositor->debug_scene = NULL;
+
+	weston_compositor_log_scope_destroy(compositor->timeline);
+	compositor->timeline = NULL;
+}
+
+/** Destroys the compositor.
+ *
+ * This function destroys the compositor. **Do not** call this before
+ * calling weston_compositor_tear_down()
+ *
+ * @param compositor The compositor to be destroyed.
+ * @ingroup compositor
+ * @sa weston_compositor_tear_down()
+ */
+WL_EXPORT void
+weston_compositor_destroy(struct weston_compositor *compositor)
+{
 	free(compositor);
 }
 
@@ -5548,6 +7728,8 @@ weston_compositor_destroy(struct weston_compositor *compositor)
  * tear down will happen immediately.
  *
  * \param compositor The compositor to tear down.
+ *
+ * \ingroup compositor
  */
 WL_EXPORT void
 weston_compositor_exit(struct weston_compositor *compositor)
@@ -5559,6 +7741,8 @@ weston_compositor_exit(struct weston_compositor *compositor)
  *
  * This function returns the user data pointer set with user_data parameter
  * to the \ref weston_compositor_create function.
+ *
+ * \ingroup compositor
  */
 WL_EXPORT void *
 weston_compositor_get_user_data(struct weston_compositor *compositor)
@@ -5586,6 +7770,8 @@ static const char * const backend_map[] = {
  * structure's 'base' member.
  *
  * \return 0 on success, or -1 on error.
+ *
+ * \ingroup compositor
  */
 WL_EXPORT int
 weston_compositor_load_backend(struct weston_compositor *compositor,
@@ -5595,6 +7781,11 @@ weston_compositor_load_backend(struct weston_compositor *compositor,
 	int (*backend_init)(struct weston_compositor *c,
 			    struct weston_backend_config *config_base);
 
+	if (compositor->backend) {
+		weston_log("Error: attempt to load a backend when one is already loaded\n");
+		return -1;
+	}
+
 	if (backend >= ARRAY_LENGTH(backend_map))
 		return -1;
 
@@ -5602,9 +7793,17 @@ weston_compositor_load_backend(struct weston_compositor *compositor,
 	if (!backend_init)
 		return -1;
 
-	return backend_init(compositor, config_base);
+	if (backend_init(compositor, config_base) < 0) {
+		compositor->backend = NULL;
+		return -1;
+	}
+
+	return 0;
 }
 
+/** weston_compositor_load_xwayland
+ * \ingroup compositor
+ */
 WL_EXPORT int
 weston_compositor_load_xwayland(struct weston_compositor *compositor)
 {
@@ -5616,4 +7815,67 @@ weston_compositor_load_xwayland(struct weston_compositor *compositor)
 	if (module_init(compositor) < 0)
 		return -1;
 	return 0;
+}
+
+/** Resolve an internal compositor error by disconnecting the client.
+ *
+ * This function is used in cases when the wl_buffer turns out
+ * unusable and there is no fallback path.
+ *
+ * It is possible the fault is caused by a compositor bug, the underlying
+ * graphics stack bug or normal behaviour, or perhaps a client mistake.
+ * In any case, the options are to either composite garbage or nothing,
+ * or disconnect the client. This is a helper function for the latter.
+ *
+ * The error is sent as an INVALID_OBJECT error on the client's wl_display.
+ *
+ * \param buffer The weston buffer that is unusable.
+ * \param msg A custom error message attached to the protocol error.
+ */
+WL_EXPORT void
+weston_buffer_send_server_error(struct weston_buffer *buffer,
+				      const char *msg)
+{
+	struct wl_client *client;
+	struct wl_resource *display_resource;
+	uint32_t id;
+
+	assert(buffer->resource);
+	id = wl_resource_get_id(buffer->resource);
+	client = wl_resource_get_client(buffer->resource);
+	display_resource = wl_client_get_object(client, 1);
+
+	assert(display_resource);
+	wl_resource_post_error(display_resource,
+			       WL_DISPLAY_ERROR_INVALID_OBJECT,
+			       "server error with "
+			       "wl_buffer@%u: %s", id, msg);
+}
+
+WL_EXPORT void
+weston_output_disable_planes_incr(struct weston_output *output)
+{
+	output->disable_planes++;
+	/*
+	 * If disable_planes changes from 0 to non-zero, it means some type of
+	 * recording of content has started, and therefore protection level of
+	 * the protected surfaces must be updated to avoid the recording of
+	 * the protected content.
+	 */
+	if (output->disable_planes == 1)
+		weston_schedule_surface_protection_update(output->compositor);
+}
+
+WL_EXPORT void
+weston_output_disable_planes_decr(struct weston_output *output)
+{
+	output->disable_planes--;
+	/*
+	 * If disable_planes changes from non-zero to 0, it means no content
+	 * recording is going on any more, and the protected and surfaces can be
+	 * shown without any apprehensions about content being recorded.
+	 */
+	if (output->disable_planes == 0)
+		weston_schedule_surface_protection_update(output->compositor);
+
 }

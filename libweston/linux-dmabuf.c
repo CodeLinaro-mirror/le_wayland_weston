@@ -30,9 +30,10 @@
 #include <unistd.h>
 #include <sys/types.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-unstable-v1-server-protocol.h"
+#include "libweston-internal.h"
 
 static void
 linux_dmabuf_buffer_destroy(struct linux_dmabuf_buffer *buffer)
@@ -111,8 +112,13 @@ params_add(struct wl_client *client,
 	buffer->attributes.fd[plane_idx] = name_fd;
 	buffer->attributes.offset[plane_idx] = offset;
 	buffer->attributes.stride[plane_idx] = stride;
-	buffer->attributes.modifier[plane_idx] = ((uint64_t)modifier_hi << 32) |
-	                                         modifier_lo;
+
+	if (wl_resource_get_version(params_resource) < ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION)
+		buffer->attributes.modifier[plane_idx] = DRM_FORMAT_MOD_INVALID;
+	else
+		buffer->attributes.modifier[plane_idx] = ((uint64_t)modifier_hi << 32) |
+							 modifier_lo;
+
 	buffer->attributes.n_planes++;
 }
 
@@ -253,15 +259,18 @@ params_create_common(struct wl_client *client,
 		}
 	}
 
-	/* XXX: Some additional sanity checks could be done with respect
-	 * to the fourcc format. A centralized collection (kernel or
-	 * libdrm) would be useful to avoid code duplication for these
-	 * checks (e.g. drm_format_num_planes).
-	 */
+	if (buffer->direct_display) {
+		if (!weston_compositor_dmabuf_can_scanout(buffer->compositor,
+							  buffer))
+			goto err_failed;
+
+		goto avoid_gpu_import;
+	}
 
 	if (!weston_compositor_import_dmabuf(buffer->compositor, buffer))
 		goto err_failed;
 
+avoid_gpu_import:
 	buffer->buffer_resource = wl_resource_create(client,
 						     &wl_buffer_interface,
 						     1, buffer_id);
@@ -368,6 +377,7 @@ linux_dmabuf_create_params(struct wl_client *client,
 		wl_resource_create(client,
 				   &zwp_linux_buffer_params_v1_interface,
 				   version, params_id);
+	buffer->direct_display = false;
 	if (!buffer->params_resource)
 		goto err_dealloc;
 
@@ -483,8 +493,6 @@ bind_linux_dmabuf(struct wl_client *client,
 	wl_resource_set_implementation(resource, &linux_dmabuf_implementation,
 				       compositor, NULL);
 
-	if (version < ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION)
-		return;
 	/*
 	 * Use EGL_EXT_image_dma_buf_import_modifiers to query and advertise
 	 * format/modifier codes.
@@ -505,11 +513,18 @@ bind_linux_dmabuf(struct wl_client *client,
 			modifiers = &modifier_invalid;
 		}
 		for (j = 0; j < num_modifiers; j++) {
-			uint32_t modifier_lo = modifiers[j] & 0xFFFFFFFF;
-			uint32_t modifier_hi = modifiers[j] >> 32;
-			zwp_linux_dmabuf_v1_send_modifier(resource, formats[i],
-							  modifier_hi,
-							  modifier_lo);
+			if (version >= ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION) {
+				uint32_t modifier_lo = modifiers[j] & 0xFFFFFFFF;
+				uint32_t modifier_hi = modifiers[j] >> 32;
+				zwp_linux_dmabuf_v1_send_modifier(resource,
+								  formats[i],
+								  modifier_hi,
+								  modifier_lo);
+			} else if (modifiers[j] == DRM_FORMAT_MOD_LINEAR ||
+				   modifiers == &modifier_invalid) {
+				zwp_linux_dmabuf_v1_send_format(resource,
+								formats[i]);
+			}
 		}
 		if (modifiers != &modifier_invalid)
 			free(modifiers);

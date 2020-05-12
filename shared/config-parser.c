@@ -39,7 +39,7 @@
 #include <errno.h>
 
 #include <wayland-util.h>
-#include "config-parser.h"
+#include <libweston/config-parser.h>
 #include "helpers.h"
 #include "string-helpers.h"
 
@@ -75,8 +75,7 @@ open_config_file(struct weston_config *c, const char *name)
 	}
 
 	/* Precedence is given to config files in the home directory,
-	 * and then to directories listed in XDG_CONFIG_DIRS and
-	 * finally to the current working directory. */
+	 * then to directories listed in XDG_CONFIG_DIRS. */
 
 	/* $XDG_CONFIG_HOME */
 	if (config_dir) {
@@ -111,10 +110,7 @@ open_config_file(struct weston_config *c, const char *name)
 			next++;
 	}
 
-	/* Current working directory. */
-	snprintf(c->path, sizeof c->path, "./%s", name);
-
-	return open(c->path, O_RDONLY | O_CLOEXEC);
+	return -1;
 }
 
 static struct weston_config_entry *
@@ -306,7 +302,7 @@ WL_EXPORT
 int
 weston_config_section_get_bool(struct weston_config_section *section,
 			       const char *key,
-			       int *value, int default_value)
+			       bool *value, bool default_value)
 {
 	struct weston_config_entry *entry;
 
@@ -318,9 +314,9 @@ weston_config_section_get_bool(struct weston_config_section *section,
 	}
 
 	if (strcmp(entry->value, "false") == 0)
-		*value = 0;
+		*value = false;
 	else if (strcmp(entry->value, "true") == 0)
-		*value = 1;
+		*value = true;
 	else {
 		*value = default_value;
 		errno = EINVAL;
@@ -331,17 +327,6 @@ weston_config_section_get_bool(struct weston_config_section *section,
 }
 
 WL_EXPORT
-const char *
-weston_config_get_libexec_dir(void)
-{
-	const char *path = getenv("WESTON_BUILD_DIR");
-
-	if (path)
-		return path;
-
-	return LIBEXECDIR;
-}
-
 const char *
 weston_config_get_name_from_env(void)
 {
@@ -403,6 +388,7 @@ section_add_entry(struct weston_config_section *section,
 	return entry;
 }
 
+WL_EXPORT
 struct weston_config *
 weston_config_parse(const char *name)
 {
@@ -484,6 +470,7 @@ weston_config_parse(const char *name)
 	return config;
 }
 
+WL_EXPORT
 const char *
 weston_config_get_full_path(struct weston_config *config)
 {
@@ -514,6 +501,7 @@ weston_config_next_section(struct weston_config *config,
 	return 1;
 }
 
+WL_EXPORT
 void
 weston_config_destroy(struct weston_config *config)
 {

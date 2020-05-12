@@ -24,7 +24,7 @@
 #ifndef WESTON_DESKTOP_INTERNAL_H
 #define WESTON_DESKTOP_INTERNAL_H
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 
 struct weston_desktop_seat;
 struct weston_desktop_client;
@@ -200,10 +200,6 @@ weston_desktop_surface_set_relative_to(struct weston_desktop_surface *surface,
 				       struct weston_desktop_surface *parent,
 				       int32_t x, int32_t y, bool use_geometry);
 void
-weston_desktop_surface_set_position(struct weston_desktop *desktop,
-					struct weston_desktop_surface *dsurface,
-				    uint32_t x, uint32_t y);
-void
 weston_desktop_surface_unset_relative_to(struct weston_desktop_surface *surface);
 void
 weston_desktop_surface_popup_grab(struct weston_desktop_surface *popup,
@@ -231,14 +227,15 @@ void
 weston_desktop_destroy_request(struct wl_client *client,
 			       struct wl_resource *resource);
 struct wl_global *
-weston_desktop_xdg_shell_v6_create(struct weston_desktop *desktop,
-				   struct wl_display *display);
+weston_desktop_xdg_wm_base_create(struct weston_desktop *desktop,
+				  struct wl_display *display);
 struct wl_global *
-weston_desktop_xdg_shell_v5_create(struct weston_desktop *desktop,
+weston_desktop_xdg_shell_v6_create(struct weston_desktop *desktop,
 				   struct wl_display *display);
 struct wl_global *
 weston_desktop_wl_shell_create(struct weston_desktop *desktop,
 			       struct wl_display *display);
+
 void
 weston_desktop_xwayland_init(struct weston_desktop *desktop);
 

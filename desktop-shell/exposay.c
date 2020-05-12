@@ -349,7 +349,8 @@ exposay_focus(struct weston_pointer_grab *grab)
 }
 
 static void
-exposay_motion(struct weston_pointer_grab *grab, uint32_t time,
+exposay_motion(struct weston_pointer_grab *grab,
+	       const struct timespec *time,
 	       struct weston_pointer_motion_event *event)
 {
 	struct desktop_shell *shell =
@@ -363,8 +364,8 @@ exposay_motion(struct weston_pointer_grab *grab, uint32_t time,
 }
 
 static void
-exposay_button(struct weston_pointer_grab *grab, uint32_t time, uint32_t button,
-               uint32_t state_w)
+exposay_button(struct weston_pointer_grab *grab, const struct timespec *time,
+	       uint32_t button, uint32_t state_w)
 {
 	struct desktop_shell *shell =
 		container_of(grab, struct desktop_shell, exposay.grab_ptr);
@@ -389,7 +390,8 @@ exposay_button(struct weston_pointer_grab *grab, uint32_t time, uint32_t button,
 
 static void
 exposay_axis(struct weston_pointer_grab *grab,
-	     uint32_t time, struct weston_pointer_axis_event *event)
+	     const struct timespec *time,
+	     struct weston_pointer_axis_event *event)
 {
 }
 
@@ -440,8 +442,8 @@ exposay_maybe_move(struct desktop_shell *shell, int row, int column)
 }
 
 static void
-exposay_key(struct weston_keyboard_grab *grab, uint32_t time, uint32_t key,
-            uint32_t state_w)
+exposay_key(struct weston_keyboard_grab *grab, const struct timespec *time,
+	    uint32_t key, uint32_t state_w)
 {
 	struct weston_seat *seat = grab->keyboard->seat;
 	struct desktop_shell *shell =

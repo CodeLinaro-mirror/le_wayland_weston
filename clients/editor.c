@@ -38,7 +38,7 @@
 
 #include <pango/pangocairo.h>
 
-#include "shared/config-parser.h"
+#include <libweston/config-parser.h>
 #include "shared/helpers.h"
 #include "shared/xalloc.h"
 #include "window.h"
@@ -49,6 +49,7 @@ struct text_entry {
 	struct window *window;
 	char *text;
 	int active;
+	bool panel_visible;
 	uint32_t cursor;
 	uint32_t anchor;
 	struct {
@@ -76,7 +77,7 @@ struct text_entry {
 	uint32_t serial;
 	uint32_t reset_serial;
 	uint32_t content_purpose;
-	uint32_t click_to_show;
+	bool click_to_show;
 	char *preferred_language;
 	bool button_pressed;
 };
@@ -499,8 +500,10 @@ text_input_leave(void *data,
 	text_entry_commit_and_reset(entry);
 	entry->active--;
 
-	if (!entry->active)
+	if (!entry->active) {
 		zwp_text_input_v1_hide_input_panel(text_input);
+		entry->panel_visible = false;
+	}
 
 	widget_schedule_redraw(entry->widget);
 }
@@ -577,7 +580,7 @@ data_source_send(void *data,
 	struct editor *editor = data;
 
 	if (write(fd, editor->selected_text, strlen(editor->selected_text) + 1) < 0)
-		fprintf(stderr, "write failed: %m\n");
+		fprintf(stderr, "write failed: %s\n", strerror(errno));
 
 	close(fd);
 }
@@ -636,6 +639,9 @@ editor_copy_cut(struct editor *editor, struct input *input, bool cut)
 
 		editor->selection =
 			display_create_data_source(editor->display);
+		if (!editor->selection)
+			return;
+
 		wl_data_source_offer(editor->selection,
 				     "text/plain;charset=utf-8");
 		wl_data_source_add_listener(editor->selection,
@@ -699,6 +705,7 @@ text_entry_create(struct editor *editor, const char *text)
 	entry->window = editor->window;
 	entry->text = strdup(text);
 	entry->active = 0;
+	entry->panel_visible = false;
 	entry->cursor = strlen(text);
 	entry->anchor = entry->cursor;
 	entry->text_input =
@@ -787,7 +794,12 @@ text_entry_activate(struct text_entry *entry,
 	struct wl_surface *surface = window_get_wl_surface(entry->window);
 
 	if (entry->click_to_show && entry->active) {
-		zwp_text_input_v1_show_input_panel(entry->text_input);
+		entry->panel_visible = !entry->panel_visible;
+
+		if (entry->panel_visible)
+			zwp_text_input_v1_show_input_panel(entry->text_input);
+		else
+			zwp_text_input_v1_hide_input_panel(entry->text_input);
 
 		return;
 	}
@@ -1492,10 +1504,10 @@ global_handler(struct display *display, uint32_t name,
 }
 
 /** Display help for command line options, and exit */
-static uint32_t opt_help = 0;
+static bool opt_help = false;
 
 /** Require a distinct click to show the input panel (virtual keyboard) */
-static uint32_t opt_click_to_show = 0;
+static bool opt_click_to_show = false;
 
 /** Set a specific (RFC-3066) language.  Used for the virtual keyboard, etc. */
 static const char *opt_preferred_language = NULL;
@@ -1597,7 +1609,8 @@ main(int argc, char *argv[])
 
 		text_buffer = read_file(argv[1]);
 		if (text_buffer == NULL) {
-			fprintf(stderr, "could not read file '%s': %m\n", argv[1]);
+			fprintf(stderr, "could not read file '%s': %s\n",
+				argv[1], strerror(errno));
 			return -1;
 		}
 	}
@@ -1606,7 +1619,8 @@ main(int argc, char *argv[])
 
 	editor.display = display_create(&argc, argv);
 	if (editor.display == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		free(text_buffer);
 		return -1;
 	}

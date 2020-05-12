@@ -32,8 +32,9 @@
 #include <stdio.h>
 #include <assert.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 #include "shared/helpers.h"
+#include "shared/timespec-util.h"
 
 struct weston_drag {
 	struct wl_client *client;
@@ -218,6 +219,13 @@ data_offer_finish(struct wl_client *client, struct wl_resource *resource)
 
 	if (!offer->source || offer->source->offer != offer)
 		return;
+
+	if (offer->source->set_selection) {
+		wl_resource_post_error(offer->resource,
+				       WL_DATA_OFFER_ERROR_INVALID_FINISH,
+				       "finish only valid for drag n drop");
+		return;
+	}
 
 	/* Disallow finish while we have a grab driving drag-and-drop, or
 	 * if the negotiation is not at the right stage
@@ -575,7 +583,8 @@ drag_grab_focus(struct weston_pointer_grab *grab)
 }
 
 static void
-drag_grab_motion(struct weston_pointer_grab *grab, uint32_t time,
+drag_grab_motion(struct weston_pointer_grab *grab,
+		 const struct timespec *time,
 		 struct weston_pointer_motion_event *event)
 {
 	struct weston_pointer_drag *drag =
@@ -583,6 +592,7 @@ drag_grab_motion(struct weston_pointer_grab *grab, uint32_t time,
 	struct weston_pointer *pointer = drag->grab.pointer;
 	float fx, fy;
 	wl_fixed_t sx, sy;
+	uint32_t msecs;
 
 	weston_pointer_move(pointer, event);
 
@@ -594,11 +604,12 @@ drag_grab_motion(struct weston_pointer_grab *grab, uint32_t time,
 	}
 
 	if (drag->base.focus_resource) {
+		msecs = timespec_to_msec(time);
 		weston_view_from_global_fixed(drag->base.focus,
 					      pointer->x, pointer->y,
 					      &sx, &sy);
 
-		wl_data_device_send_motion(drag->base.focus_resource, time, sx, sy);
+		wl_data_device_send_motion(drag->base.focus_resource, msecs, sx, sy);
 	}
 }
 
@@ -634,7 +645,8 @@ data_device_end_pointer_drag_grab(struct weston_pointer_drag *drag)
 
 static void
 drag_grab_button(struct weston_pointer_grab *grab,
-		 uint32_t time, uint32_t button, uint32_t state_w)
+		 const struct timespec *time,
+		 uint32_t button, uint32_t state_w)
 {
 	struct weston_pointer_drag *drag =
 		container_of(grab, struct weston_pointer_drag, grab);
@@ -675,7 +687,8 @@ drag_grab_button(struct weston_pointer_grab *grab,
 
 static void
 drag_grab_axis(struct weston_pointer_grab *grab,
-	       uint32_t time, struct weston_pointer_axis_event *event)
+	       const struct timespec *time,
+	       struct weston_pointer_axis_event *event)
 {
 }
 
@@ -712,8 +725,9 @@ static const struct weston_pointer_grab_interface pointer_drag_grab_interface = 
 };
 
 static void
-drag_grab_touch_down(struct weston_touch_grab *grab, uint32_t time,
-		int touch_id, wl_fixed_t sx, wl_fixed_t sy)
+drag_grab_touch_down(struct weston_touch_grab *grab,
+		     const struct timespec *time, int touch_id,
+		     wl_fixed_t sx, wl_fixed_t sy)
 {
 }
 
@@ -731,7 +745,7 @@ data_device_end_touch_drag_grab(struct weston_touch_drag *drag)
 
 static void
 drag_grab_touch_up(struct weston_touch_grab *grab,
-		uint32_t time, int touch_id)
+		   const struct timespec *time, int touch_id)
 {
 	struct weston_touch_drag *touch_drag =
 		container_of(grab, struct weston_touch_drag, grab);
@@ -763,14 +777,16 @@ drag_grab_touch_focus(struct weston_touch_drag *drag)
 }
 
 static void
-drag_grab_touch_motion(struct weston_touch_grab *grab, uint32_t time,
-		int touch_id, wl_fixed_t x, wl_fixed_t y)
+drag_grab_touch_motion(struct weston_touch_grab *grab,
+		       const struct timespec *time,
+		       int touch_id, wl_fixed_t x, wl_fixed_t y)
 {
 	struct weston_touch_drag *touch_drag =
 		container_of(grab, struct weston_touch_drag, grab);
 	struct weston_touch *touch = grab->touch;
 	wl_fixed_t view_x, view_y;
 	float fx, fy;
+	uint32_t msecs;
 
 	if (touch_id != touch->grab_touch_id)
 		return;
@@ -784,11 +800,12 @@ drag_grab_touch_motion(struct weston_touch_grab *grab, uint32_t time,
 	}
 
 	if (touch_drag->base.focus_resource) {
+		msecs = timespec_to_msec(time);
 		weston_view_from_global_fixed(touch_drag->base.focus,
 					touch->grab_x, touch->grab_y,
 					&view_x, &view_y);
-		wl_data_device_send_motion(touch_drag->base.focus_resource, time,
-					view_x, view_y);
+		wl_data_device_send_motion(touch_drag->base.focus_resource,
+					   msecs, view_x, view_y);
 	}
 }
 
@@ -818,7 +835,7 @@ static const struct weston_touch_grab_interface touch_drag_grab_interface = {
 
 static void
 drag_grab_keyboard_key(struct weston_keyboard_grab *grab,
-		       uint32_t time, uint32_t key, uint32_t state)
+		       const struct timespec *time, uint32_t key, uint32_t state)
 {
 }
 
@@ -1136,6 +1153,9 @@ weston_seat_set_selection(struct weston_seat *seat,
 	seat->selection_data_source = source;
 	seat->selection_serial = serial;
 
+	if (source)
+		source->set_selection = true;
+
 	if (keyboard)
 		focus = keyboard->focus;
 	if (focus && focus->resource) {
@@ -1157,9 +1177,10 @@ data_device_set_selection(struct wl_client *client,
 			  struct wl_resource *resource,
 			  struct wl_resource *source_resource, uint32_t serial)
 {
+	struct weston_seat *seat = wl_resource_get_user_data(resource);
 	struct weston_data_source *source;
 
-	if (!source_resource)
+	if (!seat || !source_resource)
 		return;
 
 	source = wl_resource_get_user_data(source_resource);
@@ -1172,8 +1193,7 @@ data_device_set_selection(struct wl_client *client,
 	}
 
 	/* FIXME: Store serial and check against incoming serial here. */
-	weston_seat_set_selection(wl_resource_get_user_data(resource),
-				  source, serial);
+	weston_seat_set_selection(seat, source, serial);
 }
 static void
 data_device_release(struct wl_client *client, struct wl_resource *resource)
@@ -1257,6 +1277,7 @@ create_data_source(struct wl_client *client,
 	source->dnd_actions = 0;
 	source->current_dnd_action = WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE;
 	source->compositor_action = WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE;
+	source->set_selection = false;
 
 	wl_array_init(&source->mime_types);
 
@@ -1286,8 +1307,13 @@ get_data_device(struct wl_client *client,
 		return;
 	}
 
-	wl_list_insert(&seat->drag_resource_list,
-		       wl_resource_get_link(resource));
+	if (seat) {
+		wl_list_insert(&seat->drag_resource_list,
+			       wl_resource_get_link(resource));
+	} else {
+		wl_list_init(wl_resource_get_link(resource));
+	}
+
 	wl_resource_set_implementation(resource, &data_device_interface,
 				       seat, unbind_data_device);
 }

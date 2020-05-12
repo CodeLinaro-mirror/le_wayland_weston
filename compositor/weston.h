@@ -30,7 +30,8 @@
 extern "C" {
 #endif
 
-#include <compositor.h>
+#include <libweston/libweston.h>
+#include <libweston/config-parser.h>
 
 void
 screenshooter_create(struct weston_compositor *ec);
@@ -77,6 +78,12 @@ int
 module_init(struct weston_compositor *compositor,
 	    int *argc, char *argv[]);
 
+char *
+wet_get_libexec_path(const char *name);
+
+char *
+wet_get_bindir_path(const char *name);
+
 int
 wet_load_xwayland(struct weston_compositor *comp);
 
@@ -87,6 +94,9 @@ text_backend_init(struct weston_compositor *ec);
 
 void
 text_backend_destroy(struct text_backend *text_backend);
+
+int
+wet_main(int argc, char *argv[]);
 
 #ifdef  __cplusplus
 }

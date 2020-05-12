@@ -31,13 +31,13 @@
 #include <stdlib.h>
 #include <math.h>
 
-#ifdef IN_WESTON
-#include <wayland-server.h>
-#else
+#ifdef UNIT_TEST
 #define WL_EXPORT
+#else
+#include <wayland-server.h>
 #endif
 
-#include "matrix.h"
+#include <libweston/matrix.h>
 
 
 /*

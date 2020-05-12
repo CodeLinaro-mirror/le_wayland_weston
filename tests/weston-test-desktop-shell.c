@@ -37,13 +37,9 @@
 #include <sys/types.h>
 
 #include "compositor/weston.h"
-#include "shared/config-parser.h"
+#include <libweston/config-parser.h>
 #include "shared/helpers.h"
-#include "libweston-desktop/libweston-desktop.h"
-
-#ifndef static_assert
-#define static_assert(cond, msg)
-#endif
+#include <libweston-desktop/libweston-desktop.h>
 
 struct desktest_shell {
 	struct wl_listener compositor_destroy_listener;
@@ -185,8 +181,12 @@ wet_shell_init(struct weston_compositor *ec,
 	if (!dts)
 		return -1;
 
-	dts->compositor_destroy_listener.notify = shell_destroy;
-	wl_signal_add(&ec->destroy_signal, &dts->compositor_destroy_listener);
+	if (!weston_compositor_add_destroy_listener_once(ec,
+							 &dts->compositor_destroy_listener,
+							 shell_destroy)) {
+		free(dts);
+		return 0;
+	}
 
 	weston_layer_init(&dts->layer, ec);
 	weston_layer_init(&dts->background_layer, ec);
@@ -228,6 +228,7 @@ out_surface:
 	weston_surface_destroy(dts->background_surface);
 
 out_free:
+	wl_list_remove(&dts->compositor_destroy_listener.link);
 	free(dts);
 
 	return -1;

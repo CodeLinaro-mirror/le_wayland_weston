@@ -31,8 +31,9 @@
 #include <linux/input.h>
 #include <wayland-util.h>
 #include <libinput.h>
+#include <stdbool.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 
 enum evdev_device_seat_capability {
 	EVDEV_SEAT_POINTER = (1 << 0),
@@ -44,12 +45,13 @@ struct evdev_device {
 	struct weston_seat *seat;
 	enum evdev_device_seat_capability seat_caps;
 	struct libinput_device *device;
+	struct weston_touch_device *touch_device;
 	struct wl_list link;
 	struct weston_output *output;
 	struct wl_listener output_destroy_listener;
-	char *devnode;
 	char *output_name;
 	int fd;
+	bool override_wl_calibration;
 };
 
 void

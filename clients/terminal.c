@@ -23,6 +23,7 @@
 
 #include "config.h"
 
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -44,13 +45,13 @@
 
 #include <wayland-client.h>
 
-#include "shared/config-parser.h"
+#include <libweston/config-parser.h>
 #include "shared/helpers.h"
 #include "shared/xalloc.h"
 #include "window.h"
 
-static int option_fullscreen;
-static int option_maximize;
+static bool option_fullscreen;
+static bool option_maximize;
 static char *option_font;
 static int option_font_size;
 static char *option_term;
@@ -1686,6 +1687,7 @@ handle_escape(struct terminal *terminal)
 				fprintf(stderr, "Unimplemented windowOp %d\n", args[0]);
 			break;
 		}
+		break;
 	case 'u':    /* Restore cursor location */
 		terminal->row = terminal->saved_row;
 		terminal->column = terminal->saved_column;
@@ -2206,10 +2208,29 @@ data_source_cancelled(void *data, struct wl_data_source *source)
 	wl_data_source_destroy(source);
 }
 
+static void
+data_source_dnd_drop_performed(void *data, struct wl_data_source *source)
+{
+}
+
+static void
+data_source_dnd_finished(void *data, struct wl_data_source *source)
+{
+}
+
+static void
+data_source_action(void *data,
+		   struct wl_data_source *source, uint32_t dnd_action)
+{
+}
+
 static const struct wl_data_source_listener data_source_listener = {
 	data_source_target,
 	data_source_send,
-	data_source_cancelled
+	data_source_cancelled,
+	data_source_dnd_drop_performed,
+	data_source_dnd_finished,
+	data_source_action
 };
 
 static const char text_mime_type[] = "text/plain;charset=utf-8";
@@ -2264,6 +2285,9 @@ terminal_copy(struct terminal *terminal, struct input *input)
 {
 	terminal->selection =
 		display_create_data_source(terminal->display);
+	if (!terminal->selection)
+		return;
+
 	wl_data_source_offer(terminal->selection,
 			     "text/plain;charset=utf-8");
 	wl_data_source_add_listener(terminal->selection,
@@ -2606,7 +2630,7 @@ recompute_selection(struct terminal *terminal)
 	int side_margin, top_margin;
 	int start_x, end_x;
 	int cw, ch;
-	union utf8_char *data;
+	union utf8_char *data = NULL;
 
 	cw = terminal->average_width;
 	ch = terminal->extents.height;
@@ -3064,11 +3088,12 @@ terminal_run(struct terminal *terminal, const char *path)
 		setenv("TERM", option_term, 1);
 		setenv("COLORTERM", option_term, 1);
 		if (execl(path, path, NULL)) {
-			printf("exec failed: %m\n");
+			printf("exec failed: %s\n", strerror(errno));
 			exit(EXIT_FAILURE);
 		}
 	} else if (pid < 0) {
-		fprintf(stderr, "failed to fork and create pty (%m).\n");
+		fprintf(stderr, "failed to fork and create pty (%s).\n",
+			strerror(errno));
 		return -1;
 	}
 
@@ -3103,6 +3128,7 @@ int main(int argc, char *argv[])
 	struct display *d;
 	struct terminal *terminal;
 	const char *config_file;
+	struct sigaction sigpipe;
 	struct weston_config *config;
 	struct weston_config_section *s;
 
@@ -3133,9 +3159,18 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
+	/* Disable SIGPIPE so that paste operations do not crash the program
+	 * when the file descriptor provided to receive data is a pipe or
+	 * socket whose reading end has been closed */
+	sigpipe.sa_handler = SIG_IGN;
+	sigemptyset(&sigpipe.sa_mask);
+	sigpipe.sa_flags = 0;
+	sigaction(SIGPIPE, &sigpipe, NULL);
+
 	d = display_create(&argc, argv);
 	if (d == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 

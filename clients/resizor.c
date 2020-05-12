@@ -31,6 +31,7 @@
 #include <cairo.h>
 #include <math.h>
 #include <assert.h>
+#include <errno.h>
 
 #include <linux/input.h>
 #include <wayland-client.h>
@@ -53,6 +54,7 @@ struct resizor {
 	struct spring height;
 	struct wl_callback *frame_callback;
 	bool pointer_locked;
+	bool locked_frame_callback_registered;
 	struct input *locked_input;
 	float pointer_x;
 	float pointer_y;
@@ -330,11 +332,15 @@ button_handler(struct widget *widget,
 						  handle_pointer_unlocked);
 		resizor->locked_input = input;
 
+		if (resizor->locked_frame_callback_registered)
+			return;
+
 		surface = window_get_wl_surface(resizor->window);
 		callback = wl_surface_frame(surface);
 		wl_callback_add_listener(callback,
 					 &locked_pointer_frame_listener,
 					 resizor);
+		resizor->locked_frame_callback_registered = true;
 	} else if (button == BTN_LEFT &&
 		   state == WL_POINTER_BUTTON_STATE_RELEASED) {
 		input_set_pointer_image(input, CURSOR_LEFT_PTR);
@@ -434,7 +440,8 @@ main(int argc, char *argv[])
 
 	display = display_create(&argc, argv);
 	if (display == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 

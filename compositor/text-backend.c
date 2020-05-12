@@ -33,11 +33,12 @@
 #include <unistd.h>
 #include <time.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 #include "weston.h"
 #include "text-input-unstable-v1-server-protocol.h"
 #include "input-method-unstable-v1-server-protocol.h"
 #include "shared/helpers.h"
+#include "shared/timespec-util.h"
 
 struct text_input_manager;
 struct input_method;
@@ -64,7 +65,7 @@ struct text_input_manager {
 	struct wl_global *text_input_manager_global;
 	struct wl_listener destroy_listener;
 
-	struct text_input *current_panel;
+	struct text_input *current_text_input;
 
 	struct weston_compositor *ec;
 };
@@ -105,7 +106,7 @@ struct text_backend {
 		struct wl_client *client;
 
 		unsigned deathcount;
-		uint32_t deathstamp;
+		struct timespec deathstamp;
 	} input_method;
 
 	struct wl_listener client_listener;
@@ -140,11 +141,15 @@ deactivate_input_method(struct input_method *input_method)
 	input_method->context = NULL;
 
 	if (wl_list_empty(&text_input->input_methods) &&
-	    text_input->input_panel_visible) {
+	    text_input->input_panel_visible &&
+	    text_input->manager->current_text_input == text_input) {
 		wl_signal_emit(&ec->hide_input_panel_signal, ec);
 		text_input->input_panel_visible = false;
-		text_input->manager->current_panel = NULL;
 	}
+
+	if (text_input->manager->current_text_input == text_input)
+		text_input->manager->current_text_input = NULL;
+
 	zwp_text_input_v1_send_leave(text_input->resource);
 }
 
@@ -188,10 +193,14 @@ text_input_activate(struct wl_client *client,
 {
 	struct text_input *text_input = wl_resource_get_user_data(resource);
 	struct weston_seat *weston_seat = wl_resource_get_user_data(seat);
-	struct input_method *input_method = weston_seat->input_method;
+	struct input_method *input_method;
 	struct weston_compositor *ec = text_input->ec;
 	struct text_input *current;
 
+	if (!weston_seat)
+		return;
+
+	input_method = weston_seat->input_method;
 	if (input_method->input == text_input)
 		return;
 
@@ -206,12 +215,11 @@ text_input_activate(struct wl_client *client,
 
 	input_method_context_create(text_input, input_method);
 
-	current = text_input->manager->current_panel;
+	current = text_input->manager->current_text_input;
 
 	if (current && current != text_input) {
 		current->input_panel_visible = false;
 		wl_signal_emit(&ec->hide_input_panel_signal, ec);
-		text_input->manager->current_panel = NULL;
 	}
 
 	if (text_input->input_panel_visible) {
@@ -219,8 +227,8 @@ text_input_activate(struct wl_client *client,
 			       text_input->surface);
 		wl_signal_emit(&ec->update_input_panel_signal,
 			       &text_input->cursor_rectangle);
-		text_input->manager->current_panel = text_input;
 	}
+	text_input->manager->current_text_input = text_input;
 
 	zwp_text_input_v1_send_enter(text_input->resource,
 				     text_input->surface->resource);
@@ -233,7 +241,7 @@ text_input_deactivate(struct wl_client *client,
 {
 	struct weston_seat *weston_seat = wl_resource_get_user_data(seat);
 
-	if (weston_seat->input_method->input)
+	if (weston_seat && weston_seat->input_method->input)
 		deactivate_input_method(weston_seat->input_method);
 }
 
@@ -335,7 +343,8 @@ text_input_show_input_panel(struct wl_client *client,
 
 	text_input->input_panel_visible = true;
 
-	if (!wl_list_empty(&text_input->input_methods)) {
+	if (!wl_list_empty(&text_input->input_methods) &&
+	    text_input == text_input->manager->current_text_input) {
 		wl_signal_emit(&ec->show_input_panel_signal,
 			       text_input->surface);
 		wl_signal_emit(&ec->update_input_panel_signal,
@@ -353,10 +362,8 @@ text_input_hide_input_panel(struct wl_client *client,
 	text_input->input_panel_visible = false;
 
 	if (!wl_list_empty(&text_input->input_methods) &&
-	    text_input == text_input->manager->current_panel) {
-		text_input->manager->current_panel = NULL;
+	    text_input == text_input->manager->current_text_input)
 		wl_signal_emit(&ec->hide_input_panel_signal, ec);
-	}
 }
 
 static void
@@ -445,6 +452,7 @@ text_input_manager_notifier_destroy(struct wl_listener *listener, void *data)
 			     struct text_input_manager,
 			     destroy_listener);
 
+	wl_list_remove(&text_input_manager->destroy_listener.link);
 	wl_global_destroy(text_input_manager->text_input_manager_global);
 
 	free(text_input_manager);
@@ -607,11 +615,13 @@ unbind_keyboard(struct wl_resource *resource)
 
 static void
 input_method_context_grab_key(struct weston_keyboard_grab *grab,
-			      uint32_t time, uint32_t key, uint32_t state_w)
+			      const struct timespec *time, uint32_t key,
+			      uint32_t state_w)
 {
 	struct weston_keyboard *keyboard = grab->keyboard;
 	struct wl_display *display;
 	uint32_t serial;
+	uint32_t msecs;
 
 	if (!keyboard->input_method_resource)
 		return;
@@ -619,8 +629,9 @@ input_method_context_grab_key(struct weston_keyboard_grab *grab,
 	display = wl_client_get_display(
 		wl_resource_get_client(keyboard->input_method_resource));
 	serial = wl_display_next_serial(display);
+	msecs = timespec_to_msec(time);
 	wl_keyboard_send_key(keyboard->input_method_resource,
-			     serial, time, key, state_w);
+			     serial, msecs, key, state_w);
 }
 
 static void
@@ -669,9 +680,7 @@ input_method_context_grab_keyboard(struct wl_client *client,
 
 	context->keyboard = cr;
 
-	wl_keyboard_send_keymap(cr, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
-				keyboard->xkb_info->keymap_fd,
-				keyboard->xkb_info->keymap_size);
+	weston_keyboard_send_keymap(keyboard, cr);
 
 	if (keyboard->grab != &keyboard->default_grab) {
 		weston_keyboard_end_grab(keyboard);
@@ -693,8 +702,11 @@ input_method_context_key(struct wl_client *client,
 	struct weston_seat *seat = context->input_method->seat;
 	struct weston_keyboard *keyboard = weston_seat_get_keyboard(seat);
 	struct weston_keyboard_grab *default_grab = &keyboard->default_grab;
+	struct timespec ts;
 
-	default_grab->interface->key(default_grab, time, key, state_w);
+	timespec_from_msec(&ts, time);
+
+	default_grab->interface->key(default_grab, &ts, key, state_w);
 }
 
 static void
@@ -931,11 +943,14 @@ static void launch_input_method(struct text_backend *text_backend);
 static void
 respawn_input_method_process(struct text_backend *text_backend)
 {
-	uint32_t time;
+	struct timespec time;
+	int64_t tdiff;
 
 	/* if input_method dies more than 5 times in 10 seconds, give up */
-	time = weston_compositor_get_time();
-	if (time - text_backend->input_method.deathstamp > 10000) {
+	weston_compositor_get_time(&time);
+	tdiff = timespec_sub_to_msec(&time,
+				     &text_backend->input_method.deathstamp);
+	if (tdiff > 10000) {
 		text_backend->input_method.deathstamp = time;
 		text_backend->input_method.deathcount = 0;
 	}
@@ -1031,14 +1046,10 @@ text_backend_configuration(struct text_backend *text_backend)
 	struct weston_config *config = wet_get_config(text_backend->compositor);
 	struct weston_config_section *section;
 	char *client;
-	int ret;
 
 	section = weston_config_get_section(config,
 					    "input-method", NULL, NULL);
-	ret = asprintf(&client, "%s/weston-keyboard",
-		       weston_config_get_libexec_dir());
-	if (ret < 0)
-		client = NULL;
+	client = wet_get_libexec_path("weston-keyboard");
 	weston_config_section_get_string(section, "path",
 					 &text_backend->input_method.path,
 					 client);
@@ -1048,6 +1059,8 @@ text_backend_configuration(struct text_backend *text_backend)
 WL_EXPORT void
 text_backend_destroy(struct text_backend *text_backend)
 {
+	wl_list_remove(&text_backend->seat_created_listener.link);
+
 	if (text_backend->input_method.client) {
 		/* disable respawn */
 		wl_list_remove(&text_backend->client_listener.link);
