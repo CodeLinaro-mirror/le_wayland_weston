@@ -174,6 +174,14 @@ gbm_buffer_backend_set_user_data(struct gbm_buffer *buffer,
 */
 bool is_yuv_format(uint32_t fmt);
 
+/** check whether the buffer is yuv format
+ *
+ * \param buffer A weston buffer.
+ * \return true if the buffer is yuv.
+ * \return false if the buffer is not yuv.
+*/
+bool is_yuv_buffer(struct weston_buffer *buffer);
+
 void
 gbm_buffer_send_server_error(struct gbm_buffer *buffer,
                       const char *msg);
