@@ -944,11 +944,12 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
 
     uint32_t GPUTarget_index = layer_count-1;
     Layer *GpuTargetlayer;
-    uint32_t fb_id = output->next->fb_id;
 
     GpuTargetlayer = layer_stack_.layers.at(GPUTarget_index);
 
-    GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
+    /* if no need gpu composition, output->next could be NULL*/
+    if (output->next)
+        GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
 
     PreCommit();
 
