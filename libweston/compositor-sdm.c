@@ -1225,6 +1225,7 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
             continue;
         }
 
+        pixman_region32_copy(&ev->clip, &above_opaque);
         if (is_completely_covered_view(ev, &above_opaque)) {
             if(es->keep_buffer == false)
                weston_view_move_to_plane(ev, primary);
@@ -1397,9 +1398,6 @@ drm_output_destroy(struct weston_output *output_base)
 	drm_output_deinit(&output->base);
 
     drm_mode_list_destroy(b, &output->base.mode_list);
-
-    weston_plane_release(&output->fb_plane);
-    weston_plane_release(&output->cursor_plane);
 
     weston_output_release(&output->base);
 
@@ -2493,12 +2491,6 @@ drm_output_enable(struct weston_output *base)
 	output->base.set_gamma = NULL;
 	output->base.enable_ppm = drm_enable_ppm;
 	output->base.set_ppm = drm_set_ppm;
-	weston_plane_init(&output->cursor_plane, b->compositor, 0, 0);
-	weston_plane_init(&output->fb_plane, b->compositor, 0, 0);
-
-	weston_compositor_stack_plane(b->compositor, &output->cursor_plane, NULL);
-	weston_compositor_stack_plane(b->compositor, &output->fb_plane,
-						 &b->compositor->primary_plane);
 
 	drm_output_print_modes(output);
 	output->prev_layer_none_commit = true;

@@ -210,8 +210,6 @@ struct drm_output {
 
        struct gbm_surface *surface;
        struct gbm_bo *cursor_bo[2];
-       struct weston_plane cursor_plane;
-       struct weston_plane fb_plane;
         /* TODO(user):   Decide whether to use drm_plane or weston_plane */
         /* TODO(user):   struct drm_plane *primary_plane;                */
         /* TODO(user):   or struct weston_plane *primary_plane;          */
