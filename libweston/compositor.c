@@ -2158,7 +2158,12 @@ view_accumulate_damage(struct weston_view *view,
 	pixman_region32_union(&view->plane->damage,
 			      &view->plane->damage, &damage);
 	pixman_region32_fini(&damage);
-	pixman_region32_copy(&view->clip, opaque);
+	/* move this line to assign planes in sdm backend
+	 * no matter what value of view->plane, the view->clip should be the same
+	 * but our overlay implementation let view->plane equal to NULL, it can't
+	 * calculate correct clip region here, so calculate it in sdm backend
+	 */
+	//pixman_region32_copy(&view->clip, opaque);
 	pixman_region32_union(opaque, opaque, &view->transform.opaque);
 }
 
