@@ -2514,7 +2514,6 @@ weston_output_finish_frame(struct weston_output *output,
 
 	output->frame_time = timespec_to_msec(stamp);
 #ifdef COMPILE_WITH_DRM
-	timespec_add_nsec(&output->next_repaint, stamp, refresh_nsec);
 	timespec_add_msec(&output->next_repaint, &output->next_repaint, -compositor->repaint_msec);
 	msec_rel = timespec_sub_to_msec(&output->next_repaint, &now);
 	if (msec_rel < -1000 || msec_rel > 1000) {
