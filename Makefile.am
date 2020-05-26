@@ -157,7 +157,9 @@ libsession_helper_la_CPPFLAGS = -Wundef -Wno-trigraphs --std=c++11 -std=c++11 \
 	$(COMPOSITOR_CFLAGS)			\
 	$(EGL_CFLAGS)				\
 	$(DRM_COMPOSITOR_CFLAGS)		\
-	$(AM_CFLAGS)
+	$(AM_CFLAGS)				\
+	$(AM_CPPFLAGS)				\
+	-I$(top_srcdir)/sdm-service
 
 libsession_helper_la_LIBADD = $(LIBDRM_LIBS)
 
