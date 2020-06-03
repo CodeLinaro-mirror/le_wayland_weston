@@ -62,6 +62,8 @@
 #include "presentation-time-server-protocol.h"
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-unstable-v1-server-protocol.h"
+#include "src/gbm-buffer-backend.h"
+#include "gbm-buffer-backend-server-protocol.h"
 
 #ifndef DRM_CAP_TIMESTAMP_MONOTONIC
 #define DRM_CAP_TIMESTAMP_MONOTONIC 0x6
@@ -1190,6 +1192,7 @@ drm_output_prepare_overlay_view(struct drm_output *output,
 	pixman_box32_t *box, tbox;
 	uint32_t format;
 	wl_fixed_t sx1, sy1, sx2, sy2;
+	struct gbm_buffer *gbm_buf;
 
 	if (b->sprites_are_broken)
 		return NULL;
@@ -1268,6 +1271,17 @@ drm_output_prepare_overlay_view(struct drm_output *output,
 #else
 		return NULL;
 #endif
+	} else if ((gbm_buf = gbm_buffer_get(buffer_resource))) {
+		struct gbm_buf_info gbm_bufinfo = {
+			.fd = gbm_buf->fd,
+			.metadata_fd = gbm_buf->metadata_fd,
+			.width = gbm_buf->width,
+			.height = gbm_buf->height,
+			.format = gbm_buf->format
+		};
+		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
+							&gbm_bufinfo,
+							GBM_BO_USE_SCANOUT);
 	} else {
 		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_WL_BUFFER,
 				   buffer_resource, GBM_BO_USE_SCANOUT);
@@ -3655,6 +3669,12 @@ drm_backend_create(struct weston_compositor *compositor,
 	if (compositor->renderer->import_dmabuf) {
 		if (linux_dmabuf_setup(compositor) < 0)
 			weston_log("Error: initializing dmabuf "
+				   "support failed.\n");
+	}
+
+	if (compositor->renderer->import_gbm_buffer) {
+		if (gbm_buffer_backend_setup(compositor) < 0)
+			weston_log("Error: initializing gbm_buffer_backend_setup"
 				   "support failed.\n");
 	}
 
