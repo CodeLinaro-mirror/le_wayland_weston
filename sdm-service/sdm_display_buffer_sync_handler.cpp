@@ -39,7 +39,7 @@ SdmDisplayBufferSyncHandler::SdmDisplayBufferSyncHandler() {
 }
 
 DisplayError SdmDisplayBufferSyncHandler::SyncWait(int fd) {
-  DLOGW("Not supported.");
+  DLOGV("Not supported.");
 
   return kErrorNone;
 }

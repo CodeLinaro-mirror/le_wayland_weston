@@ -150,20 +150,19 @@ void HandlePrimaryDisplayInfo()
 
 void HandleNonPrimaryDisplayInfos(DisplayType type)
 {
-        HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
-        int slot = sdm_displays_info_.size();
+	HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
+	int slot = sdm_displays_info_.size();
 
-        for (iter; iter != hw_displays_info_.end(); ++iter) {
-                if (iter->second.is_primary)
-                        continue;
-                if (iter->second.display_type != type)
-                        continue;
-                if (!iter->second.is_connected)
-                        continue;
-
-                sdm_displays_info_[slot] = iter->second;
+	for (iter; iter != hw_displays_info_.end(); ++iter) {
+		if (iter->second.is_primary)
+			continue;
+		if (iter->second.display_type != type)
+			continue;
+		if (!iter->second.is_connected)
+			continue;
+		sdm_displays_info_[slot] = iter->second;
 		slot++;
-        }
+	}
 }
 
 int GetDisplayInfos(void)

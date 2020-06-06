@@ -93,8 +93,11 @@ static std::map<uint32_t, uint32_t> display_id_connid = {};
 struct early_display {
 	uint32_t max_blend_stages;
 	DRMAtomicReqInterface *drm_atomic_intf_;
+	/* this token_ could be freed early in unRegisterDisplay*/
 	DRMDisplayToken token_;
 	int32_t hw_block_id;
+	int32_t connector_id;
+	int32_t crtc_id;
 };
 
 int early_get_drm_master() {
@@ -216,7 +219,7 @@ int early_get_connector_count(uint32_t *count) {
 			continue;
 		is_connected = iter.second.is_connected ? 1 : 0;
 		if (!is_connected)
-                        continue;
+			continue;
 		switch (iter.second.type) {
 			case DRM_MODE_CONNECTOR_DSI:
 				display_id_connid[i] = iter.first;
@@ -235,7 +238,7 @@ int early_get_connector_count(uint32_t *count) {
 			continue;
 		is_connected = iter.second.is_connected ? 1 : 0;
 		if (!is_connected)
-                        continue;
+			continue;
 		switch (iter.second.type) {
 			case DRM_MODE_CONNECTOR_TV:
 			case DRM_MODE_CONNECTOR_HDMIA:
@@ -325,6 +328,8 @@ int early_create_display(uint32_t display_id, struct EarlyDisplayInfo *dispinfo)
 	early_disp->token_.conn_id = token_.conn_id;
 	early_disp->token_.encoder_id = token_.encoder_id;
 	early_disp->hw_block_id = token_.crtc_index;
+	early_disp->connector_id = token_.conn_id;
+	early_disp->crtc_id = token_.crtc_id;
 	weston_log("%s registered, reserved CRTC %d, reserved Connector %d\n",
 		name, token_.crtc_id, token_.conn_id);
 
@@ -357,7 +362,7 @@ int early_create_display(uint32_t display_id, struct EarlyDisplayInfo *dispinfo)
 	return 0;
 
 err_commit:
-	drm_mgr_intf_->UnregisterDisplay(token_);
+	drm_mgr_intf_->UnregisterDisplay(&token_);
 err_register:
 	free(early_disp);
 	return -1;
@@ -704,7 +709,7 @@ static void early_layer_setup_atomic(struct early_layer *layer,
 	assert(drm_atomic_intf_ != NULL);
 
 	drm_atomic_intf_->Perform(DRMOps::PLANE_SET_CRTC,
-			layer->pipe_id, early_disp->token_.crtc_id);
+			layer->pipe_id, early_disp->crtc_id);
 	drm_atomic_intf_->Perform(DRMOps::PLANE_SET_FB_ID,
 			layer->pipe_id, layer->fb_id);
 
@@ -794,7 +799,7 @@ int early_commit(struct drm_output *output) {
 	int64_t retire_fence = -1;
 
 	drm_atomic_intf_->Perform(DRMOps::CONNECTOR_GET_RETIRE_FENCE,
-		early_disp->token_.conn_id, &retire_fence);
+		early_disp->connector_id, &retire_fence);
 
 	int ret = drm_atomic_intf_->Commit(false, false);
 	if(ret) {
@@ -829,7 +834,7 @@ void early_unregister_display(void *early_display_intf)
 		return;
 
 	if (early_disp->token_.crtc_id)
-		drm_mgr_intf_->UnregisterDisplay(early_disp->token_);
+		drm_mgr_intf_->UnregisterDisplay(&early_disp->token_);
 }
 
 void early_destroy_display(void *early_display_intf) {
