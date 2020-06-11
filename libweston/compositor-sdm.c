@@ -771,8 +771,8 @@ output_repaint(struct weston_output *output_base,
     if (output->destroy_pending || output->disable_pending)
         return -1;
 
-    if (!is_virtual_output && !output->next) {
-        drm_output_render(output, damage);
+    if (!is_virtual_output && !output->next && output_base->need_gpu_composition) {
+	drm_output_render(output, damage);
     }
     assert(wl_list_empty(&output->plane_flip_list));
 
@@ -1060,6 +1060,24 @@ is_skip_view(struct weston_view *ev, struct drm_output *output)
     return skip;
 }
 
+static bool
+is_completely_covered_view(struct weston_view *ev, pixman_region32_t *above_opaque)
+{
+	pixman_region32_t temp;
+
+	pixman_region32_init(&temp);
+	pixman_region32_copy(&temp, &ev->transform.boundingbox);
+	pixman_region32_subtract(&temp, &temp, above_opaque);
+
+	if (pixman_region32_not_empty(&temp))
+		ev->is_completely_covered = false;
+	else
+		ev->is_completely_covered = true;
+	pixman_region32_fini(&temp);
+
+	return ev->is_completely_covered;
+}
+
 static void
 drm_assign_planes_early(struct weston_output *output_base)
 {
@@ -1140,7 +1158,7 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
         (struct drm_backend *)output_base->compositor->backend;
     struct drm_output *output = (struct drm_output *)output_base;
     struct weston_view *ev, *next;
-    pixman_region32_t overlap, surface_overlap;
+    pixman_region32_t above_opaque, surface_opaque;
     struct weston_plane *primary, *next_plane;
     struct sdm_layer *sdm_layer, *next_sdm_layer;
     output->view_count = 0;
@@ -1161,7 +1179,7 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
      * the client buffer can be used directly for the sprite surface
      * as we do for flipping full screen surfaces.
      */
-    pixman_region32_init(&overlap);
+    pixman_region32_init(&above_opaque);
     primary = &output_base->compositor->primary_plane;
 
     /* 1. Compute how many views which can be handled by SDM module */
@@ -1199,26 +1217,33 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
         if (is_screen_capture_view(ev))
             continue;
 
-        pixman_region32_init(&surface_overlap);
-        pixman_region32_intersect(&surface_overlap, &overlap,
-                      &ev->transform.boundingbox);
 
         /* Skip view that doesn't belong to the output, no need to increase overhead for SDM */
         if (!(ev->output_mask & (1u << output->base.id))) {
             if(es->keep_buffer == false)
                weston_view_move_to_plane(ev, primary);
-            pixman_region32_fini(&surface_overlap);
-            pixman_region32_union(&overlap, &overlap, &ev->transform.boundingbox);
             continue;
         }
 
+        pixman_region32_copy(&ev->clip, &above_opaque);
+        if (is_completely_covered_view(ev, &above_opaque)) {
+            if(es->keep_buffer == false)
+               weston_view_move_to_plane(ev, primary);
+            else
+               ev->plane = NULL;
+            continue;
+	}
+
         is_skip = is_skip_view(ev, output);
 
-        sdm_layer = create_sdm_layer(output, ev, &surface_overlap, is_cursor, is_skip);
+        sdm_layer = create_sdm_layer(output, ev, &above_opaque, is_cursor, is_skip);
         wl_list_insert(output->sdm_layer_list.prev, &sdm_layer->link);
 
         output->view_count++;
-        pixman_region32_fini(&surface_overlap);
+        pixman_region32_union(&above_opaque, &above_opaque, &ev->transform.opaque);
+	/* if it's yuv buffer and alpha is 1.0, its whole boundingbox is the opaque region*/
+	if ((es->buffer_ref.buffer) && is_yuv_buffer(es->buffer_ref.buffer) && ev->alpha == 1.0)
+            pixman_region32_union(&above_opaque, &above_opaque, &ev->transform.boundingbox);
     }
     /*
      * SDM always need FB target layer, however, in Weston there is no explicit
@@ -1267,7 +1292,7 @@ err_out:
         }
     }
 
-    pixman_region32_fini(&overlap);
+    pixman_region32_fini(&above_opaque);
 
     return has_GPU_composition;
 }
@@ -1373,9 +1398,6 @@ drm_output_destroy(struct weston_output *output_base)
 	drm_output_deinit(&output->base);
 
     drm_mode_list_destroy(b, &output->base.mode_list);
-
-    weston_plane_release(&output->fb_plane);
-    weston_plane_release(&output->cursor_plane);
 
     weston_output_release(&output->base);
 
@@ -2469,12 +2491,6 @@ drm_output_enable(struct weston_output *base)
 	output->base.set_gamma = NULL;
 	output->base.enable_ppm = drm_enable_ppm;
 	output->base.set_ppm = drm_set_ppm;
-	weston_plane_init(&output->cursor_plane, b->compositor, 0, 0);
-	weston_plane_init(&output->fb_plane, b->compositor, 0, 0);
-
-	weston_compositor_stack_plane(b->compositor, &output->cursor_plane, NULL);
-	weston_compositor_stack_plane(b->compositor, &output->fb_plane,
-						 &b->compositor->primary_plane);
 
 	drm_output_print_modes(output);
 	output->prev_layer_none_commit = true;

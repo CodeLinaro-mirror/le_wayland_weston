@@ -978,7 +978,6 @@ clear_view(struct weston_view *ev, struct weston_output *output,
 
 	pixman_region32_init(&repaint);
 	pixman_region32_intersect(&repaint, &ev->transform.boundingbox, damage);
-	pixman_region32_init_rect(&ev->clip, 0, 0, 0, 0);
 	pixman_region32_subtract(&repaint, &repaint, &ev->clip);
 
 	if (!pixman_region32_not_empty(&repaint))
@@ -1123,11 +1122,23 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
 		 /* Skip screen capture buffer during GPU composition */
 		if (is_screen_capture_view(view))
 			continue;
+		if (view->is_completely_covered)
+			continue;
 
 		if (view->plane == &compositor->primary_plane) {
 			have_primary_view = true;
 			draw_view(view, output, damage);
 		} else {
+			/* The invisible layer could be marked as SDE by strategy, which means both gpu
+			 * and MDP could ignore this kind of view, no hardware pipe for it. But the buffer
+			 * could be NULL in this case, add this judgement to avoid crash.
+			 */
+			if (view->surface->buffer_ref.buffer == NULL) {
+				/* TODO: check why it's happen since invisible layers should be handled
+				 * by view->is_completely_covered.
+				 */
+				continue;
+			}
 			/* this view is composed directly by overlay */
 			/* compute whether this view has no blending */
 			pixman_region32_init_rect(&r, 0, 0, view->surface->width,
