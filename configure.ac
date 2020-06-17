@@ -186,6 +186,23 @@ if test x$enable_drm_compositor = xyes; then
 		    [AC_MSG_WARN([gbm does not support dmabuf import, will omit that capability])])
 fi
 
+AC_ARG_WITH(sanitized-headers,
+   AS_HELP_STRING([--with-sanitized-headers=DIR],
+       [Specify the location of the sanitized Linux headers]),
+       [sanitized_headers=$withval], [with_sanitized_headers=no])
+if test "x${sanitized_headers}" != "xno"; then
+   CFLAGS="${CFLAGS} -I${sanitized_headers}"
+   CPPFLAGS="${CPPFLAGS} -I${sanitized_headers}"
+fi
+
+AC_ARG_WITH([gbm], [--with-gbm], [gbm="${enableval}"], [gbm="no"])
+
+if test "x$gbm" = "xyes"; then
+  CPPFLAGS="${CPPFLAGS} -D__GBM__"
+fi
+
+AC_ARG_WITH([sdm], [--with-sdm=DIR], [CPPFLAGS="$CPPFLAGS -I${with_sdm} -I${with_sdm}/core"])
+
 
 PKG_CHECK_MODULES(LIBINPUT_BACKEND, [libinput >= 0.8.0])
 PKG_CHECK_MODULES(COMPOSITOR, [$COMPOSITOR_MODULES])

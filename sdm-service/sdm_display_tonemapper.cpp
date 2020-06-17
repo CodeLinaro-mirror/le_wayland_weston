@@ -199,7 +199,7 @@ void SdmDisplayToneMapper::ToneMap(Layer* layer, ToneMapSession *session) {
   gbo_info.height = buffer_info.buffer_config.height;
 
   uint32_t gbm_format;
-  uint64_t alloc_flags = 0;
+  uint32_t alloc_flags = 0;
   int error = buffer_allocator_->SetBufferInfo(buffer_info.alloc_buffer_info.format,
                                                &gbm_format, &alloc_flags);
   gbo_info.format = gbm_format;
