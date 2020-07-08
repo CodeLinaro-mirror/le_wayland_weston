@@ -2370,6 +2370,8 @@ weston_output_maybe_repaint(struct weston_output *output, struct timespec *now,
 	if (!output->repaint_needed)
 		goto err;
 
+	/*Revisit: frame_time is needed by clients to track the presented time.*/
+	output->frame_time = timespec_to_msec(now);
 	/* If repaint fails, we aren't going to get weston_output_finish_frame
 	 * to trigger a new repaint, so drop it from repaint and hope
 	 * something schedules a successful repaint later. As repainting may
@@ -2377,8 +2379,6 @@ weston_output_maybe_repaint(struct weston_output *output, struct timespec *now,
 	 * output. */
 	ret = weston_output_repaint(output, repaint_data);
 	weston_compositor_read_presentation_clock(compositor, now);
-	/*Revisit: frame_time is needed by clients to track the presented time.*/
-	output->frame_time = timespec_to_msec(now);
 	if (ret != 0)
 		goto err;
 
