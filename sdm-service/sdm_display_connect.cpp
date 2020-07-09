@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -49,6 +49,7 @@ enum {
 };
 
 CoreInterface *core_intf_ = NULL;
+NotifierInterface *notifier_intf_ = NULL;
 SdmDisplayBufferAllocator buffer_allocator_;
 SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
@@ -79,6 +80,11 @@ int CreateCore()
     DLOGD("successfully created.");
     #endif
 
+    core_intf_->GetNotifierInterface(&notifier_intf_);
+    if (!notifier_intf_) {
+        DLOGE("GetNotifierInterface failed. Error = %d", error);
+        return error;
+    }
 
     return kErrorNone;
 }
@@ -111,6 +117,7 @@ int DestroyCore()
         return error;
     }
     core_intf_ = NULL;
+    notifier_intf_ = NULL;
 
     #if SDM_DISPLAY_DEBUG
     DLOGD("Core was destroyed successfully");
@@ -545,10 +552,9 @@ int UpdateDisplayPll(int display_id, int enable)
     return display_[display_id]->UpdateDisplayPll(enable);
 }
 
-int SetPlaneInitState(uint32_t plane_id, int sync_handle, int32_t hw_block_id, bool aquired)
+int SetPlaneInitState()
 {
-    /*ToDo: pending on SDM implement SetPlaneInitState */
-    //return core_intf_->SetPlaneInitState(plane_id, sync_handle, hw_block_id, aquired);
+	return notifier_intf_->PipesStateChanged();
 }
 
 WL_EXPORT struct sdm_service_interface sdm_service_interface {
