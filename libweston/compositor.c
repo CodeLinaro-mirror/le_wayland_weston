@@ -64,6 +64,8 @@
 #include "version.h"
 #include "plugin-registry.h"
 
+#define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
+
 static void
 weston_output_update_matrix(struct weston_output *output);
 
@@ -2446,12 +2448,6 @@ output_repaint_timer_handler(void *data)
 		repaint_data = compositor->backend->repaint_begin(compositor);
 
 	wl_list_for_each(output, &compositor->output_list, link) {
-		/* Revisit: May need cleanup to utilise this flag properly.*/
-		/* We are not ready for repainting from idle,
-		 * repaint in next cycle*/
-		if (output->repaint_status == REPAINT_BEGIN_FROM_IDLE)
-			continue;
-		output->repaint_status = REPAINT_SCHEDULED;
 		ret = weston_output_maybe_repaint(output, &now, repaint_data);
 		if (ret)
 			break;
@@ -5267,6 +5263,8 @@ weston_compositor_create(struct wl_display *display, void *user_data)
 	wl_signal_init(&ec->session_signal);
 	ec->session_active = 1;
 	ec->output_id_pool = 0;
+	ec->repaint_msec = DEFAULT_REPAINT_WINDOW;
+
 	ec->activate_serial = 1;
 
 	if (!wl_global_create(ec->wl_display, &wl_compositor_interface, 4,
