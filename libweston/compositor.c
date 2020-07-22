@@ -316,6 +316,7 @@ weston_view_create(struct weston_surface *surface)
 	pixman_region32_init(&view->geometry.scissor);
 	pixman_region32_init(&view->transform.boundingbox);
 	view->transform.dirty = 1;
+	view->is_completely_covered = false;
 
 	return view;
 }
@@ -1230,6 +1231,8 @@ view_compute_bbox(struct weston_view *view, const pixman_box32_t *inbox,
 static void
 weston_view_update_transform_disable(struct weston_view *view)
 {
+	struct weston_view *parent = view->geometry.parent;
+
 	view->transform.enabled = 0;
 
 	/* round off fractions when not transformed */
@@ -1251,6 +1254,16 @@ weston_view_update_transform_disable(struct weston_view *view)
 				  0, 0,
 				  view->surface->width,
 				  view->surface->height);
+
+	 if (parent) {
+		if (parent->geometry.scissor_enabled) {
+			view->geometry.scissor_enabled = true;
+			weston_view_transfer_scissor(parent, view);
+		} else {
+			view->geometry.scissor_enabled = false;
+		}
+	}
+
 	if (view->geometry.scissor_enabled)
 		pixman_region32_intersect(&view->transform.boundingbox,
 					  &view->transform.boundingbox,
@@ -1306,6 +1319,15 @@ weston_view_update_transform_enable(struct weston_view *view)
 		pixman_region32_translate(&view->transform.opaque,
 					  matrix->d[12],
 					  matrix->d[13]);
+	}
+
+	if (parent) {
+		if (parent->geometry.scissor_enabled) {
+			view->geometry.scissor_enabled = true;
+			weston_view_transfer_scissor(parent, view);
+		} else {
+			view->geometry.scissor_enabled = false;
+		}
 	}
 
 	pixman_region32_init_rect(&surfregion, 0, 0,
@@ -1370,15 +1392,6 @@ weston_view_update_transform(struct weston_view *view)
 		pixman_region32_intersect(&view->transform.opaque,
 					  &view->transform.opaque, &mask);
 		pixman_region32_fini(&mask);
-	}
-
-	if (parent) {
-		if (parent->geometry.scissor_enabled) {
-			view->geometry.scissor_enabled = true;
-			weston_view_transfer_scissor(parent, view);
-		} else {
-			view->geometry.scissor_enabled = false;
-		}
 	}
 
 	weston_view_damage_below(view);
@@ -2145,7 +2158,12 @@ view_accumulate_damage(struct weston_view *view,
 	pixman_region32_union(&view->plane->damage,
 			      &view->plane->damage, &damage);
 	pixman_region32_fini(&damage);
-	pixman_region32_copy(&view->clip, opaque);
+	/* move this line to assign planes in sdm backend
+	 * no matter what value of view->plane, the view->clip should be the same
+	 * but our overlay implementation let view->plane equal to NULL, it can't
+	 * calculate correct clip region here, so calculate it in sdm backend
+	 */
+	//pixman_region32_copy(&view->clip, opaque);
 	pixman_region32_union(opaque, opaque, &view->transform.opaque);
 }
 

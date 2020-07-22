@@ -93,8 +93,11 @@ static std::map<uint32_t, uint32_t> display_id_connid = {};
 struct early_display {
 	uint32_t max_blend_stages;
 	DRMAtomicReqInterface *drm_atomic_intf_;
+	/* this token_ could be freed early in unRegisterDisplay*/
 	DRMDisplayToken token_;
 	int32_t hw_block_id;
+	int32_t connector_id;
+	int32_t crtc_id;
 };
 
 int early_get_drm_master() {
@@ -325,6 +328,8 @@ int early_create_display(uint32_t display_id, struct EarlyDisplayInfo *dispinfo)
 	early_disp->token_.conn_id = token_.conn_id;
 	early_disp->token_.encoder_id = token_.encoder_id;
 	early_disp->hw_block_id = token_.crtc_index;
+	early_disp->connector_id = token_.conn_id;
+	early_disp->crtc_id = token_.crtc_id;
 	weston_log("%s registered, reserved CRTC %d, reserved Connector %d\n",
 		name, token_.crtc_id, token_.conn_id);
 
@@ -357,7 +362,7 @@ int early_create_display(uint32_t display_id, struct EarlyDisplayInfo *dispinfo)
 	return 0;
 
 err_commit:
-	drm_mgr_intf_->UnregisterDisplay(token_);
+	drm_mgr_intf_->UnregisterDisplay(&token_);
 err_register:
 	free(early_disp);
 	return -1;
@@ -559,7 +564,7 @@ static void early_compute_src_dst_rect(struct drm_output *output, struct weston_
 	struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
 	pixman_region32_t src_rect, dest_rect;
 	pixman_box32_t *box, tbox;
-	wl_fixed_t sx1, sy1, sx2, sy2;
+	float sxf1, syf1, sxf2, syf2;
 
 	/* dst rect */
 	pixman_region32_init(&dest_rect);
@@ -619,80 +624,47 @@ static void early_compute_src_dst_rect(struct drm_output *output, struct weston_
 	/* src rect */
 	pixman_region32_init(&src_rect);
 	pixman_region32_intersect(&src_rect, &ev->transform.boundingbox,
-			&output->base.region);
+                  &output->base.region);
 	box = pixman_region32_extents(&src_rect);
 
-	weston_view_from_global_fixed(ev,
-			wl_fixed_from_int(box->x1),
-			wl_fixed_from_int(box->y1),
-			&sx1, &sy1);
-	weston_view_from_global_fixed(ev,
-			wl_fixed_from_int(box->x2),
-			wl_fixed_from_int(box->y2),
-			&sx2, &sy2);
-
-	if (sx1 < 0)
-		sx1 = 0;
-	if (sy1 < 0)
-		sy1 = 0;
-	if (sx2 > wl_fixed_from_int(ev->surface->width))
-		sx2 = wl_fixed_from_int(ev->surface->width);
-	if (sy2 > wl_fixed_from_int(ev->surface->height))
-		sy2 = wl_fixed_from_int(ev->surface->height);
-
-	tbox.x1 = sx1;
-	tbox.y1 = sy1;
-	tbox.x2 = sx2;
-	tbox.y2 = sy2;
-
-	{
-		enum wl_output_transform buffer_transform2 =
-			WL_OUTPUT_TRANSFORM_NORMAL;
-
-		switch(viewport->buffer.transform) {
-		case 0:
-			buffer_transform2 = WL_OUTPUT_TRANSFORM_NORMAL;
-			break;
-		case 1:
-			buffer_transform2 = WL_OUTPUT_TRANSFORM_90;
-			break;
-		case 2:
-			buffer_transform2 = WL_OUTPUT_TRANSFORM_180;
-			break;
-		case 3:
-			buffer_transform2 = WL_OUTPUT_TRANSFORM_270;
-			break;
-		case 4:
-			buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED;
-			break;
-		case 5:
-			buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_90;
-			break;
-		case 6:
-			buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_180;
-			break;
-		case 7:
-			buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_270;
-			break;
+	switch(viewport->buffer.transform) {
+		case WL_OUTPUT_TRANSFORM_NORMAL: break;
+		case WL_OUTPUT_TRANSFORM_90: break;
+		case WL_OUTPUT_TRANSFORM_180: break;
+		case WL_OUTPUT_TRANSFORM_270: break;
+		case WL_OUTPUT_TRANSFORM_FLIPPED: break;
+		case WL_OUTPUT_TRANSFORM_FLIPPED_90: break;
+		case WL_OUTPUT_TRANSFORM_FLIPPED_180: break;
+		case WL_OUTPUT_TRANSFORM_FLIPPED_270: break;
 		default:
-			weston_log("Invalid buffer transform not supported: %d",
-					viewport->buffer.transform);
+			weston_log("Invalid buffer transform not supported: %d", viewport->buffer.transform);
 			pixman_region32_fini(&src_rect);
 			return;
-		}
-
-		tbox = weston_transformed_rect(wl_fixed_from_int(ev->surface->width),
-					wl_fixed_from_int(ev->surface->height),
-					buffer_transform2,
-					viewport->buffer.scale,
-					tbox);
 	}
 
-	src_ret->left = (float)(tbox.x1 >> 8);
-	src_ret->top = (float)(tbox.y1 >> 8);
-	src_ret->right = (float)(tbox.x2 >> 8);
-	src_ret->bottom = (float)(tbox.y2 >> 8);
+	weston_view_from_global_float(ev, box->x1, box->y1, &sxf1, &syf1);
+	weston_surface_to_buffer_float(ev->surface, sxf1, syf1, &sxf1, &syf1);
+	weston_view_from_global_float(ev, box->x2, box->y2, &sxf2, &syf2);
+	weston_surface_to_buffer_float(ev->surface, sxf2, syf2, &sxf2, &syf2);
 	pixman_region32_fini(&src_rect);
+
+	/* Buffer transforms may mean that x2 is to the left of x1, and/or that
+	 * y2 is above y1. */
+	if (sxf2 < sxf1) {
+		double tmp = sxf1;
+		sxf1 = sxf2;
+		sxf2 = tmp;
+	}
+	if (syf2 < syf1) {
+		double tmp = syf1;
+		syf1 = syf2;
+		syf2 = tmp;
+	}
+
+	src_ret->left = (float)(sxf1);
+	src_ret->top = (float)(syf1);
+	src_ret->right = (float)(sxf2);
+	src_ret->bottom = (float)(syf2);
 }
 
 static void early_layer_setup_atomic(struct early_layer *layer,
@@ -704,7 +676,7 @@ static void early_layer_setup_atomic(struct early_layer *layer,
 	assert(drm_atomic_intf_ != NULL);
 
 	drm_atomic_intf_->Perform(DRMOps::PLANE_SET_CRTC,
-			layer->pipe_id, early_disp->token_.crtc_id);
+			layer->pipe_id, early_disp->crtc_id);
 	drm_atomic_intf_->Perform(DRMOps::PLANE_SET_FB_ID,
 			layer->pipe_id, layer->fb_id);
 
@@ -794,7 +766,7 @@ int early_commit(struct drm_output *output) {
 	int64_t retire_fence = -1;
 
 	drm_atomic_intf_->Perform(DRMOps::CONNECTOR_GET_RETIRE_FENCE,
-		early_disp->token_.conn_id, &retire_fence);
+		early_disp->connector_id, &retire_fence);
 
 	int ret = drm_atomic_intf_->Commit(false, false);
 	if(ret) {
@@ -829,7 +801,7 @@ void early_unregister_display(void *early_display_intf)
 		return;
 
 	if (early_disp->token_.crtc_id)
-		drm_mgr_intf_->UnregisterDisplay(early_disp->token_);
+		drm_mgr_intf_->UnregisterDisplay(&early_disp->token_);
 }
 
 void early_destroy_display(void *early_display_intf) {

@@ -210,6 +210,18 @@ WL_EXPORT bool is_yuv_format(uint32_t fmt)
     return is_yuv;
 }
 
+WL_EXPORT bool is_yuv_buffer(struct weston_buffer *buffer)
+{
+	bool is_yuv = false;
+	struct gbm_buffer *gbm_buffer;
+
+	gbm_buffer = gbm_buffer_get(buffer->resource);
+	if (gbm_buffer)
+		is_yuv = is_yuv_format(gbm_buffer->format);
+
+	return is_yuv;
+}
+
 static void
 destroy_gbm_buffer(struct wl_resource *resource)
 {

@@ -944,11 +944,12 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
 
     uint32_t GPUTarget_index = layer_count-1;
     Layer *GpuTargetlayer;
-    uint32_t fb_id = output->next->fb_id;
 
     GpuTargetlayer = layer_stack_.layers.at(GPUTarget_index);
 
-    GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
+    /* if no need gpu composition, output->next could be NULL*/
+    if (output->next)
+        GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
 
     PreCommit();
 
@@ -1256,7 +1257,7 @@ void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view
     struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
     pixman_region32_t src_rect, dest_rect;
     pixman_box32_t *box, tbox;
-    wl_fixed_t sx1, sy1, sx2, sy2;
+    float sxf1, syf1, sxf2, syf2;
 
     /* dst rect */
     pixman_region32_init(&dest_rect);
@@ -1301,58 +1302,43 @@ void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view
                   &output->base.region);
     box = pixman_region32_extents(&src_rect);
 
-    weston_view_from_global_fixed(ev,
-             wl_fixed_from_int(box->x1),
-             wl_fixed_from_int(box->y1),
-             &sx1, &sy1);
-    weston_view_from_global_fixed(ev,
-             wl_fixed_from_int(box->x2),
-             wl_fixed_from_int(box->y2),
-             &sx2, &sy2);
-
-    if (sx1 < 0)
-     sx1 = 0;
-    if (sy1 < 0)
-     sy1 = 0;
-    if (sx2 > wl_fixed_from_int(ev->surface->width))
-     sx2 = wl_fixed_from_int(ev->surface->width);
-    if (sy2 > wl_fixed_from_int(ev->surface->height))
-     sy2 = wl_fixed_from_int(ev->surface->height);
-
-    tbox.x1 = sx1;
-    tbox.y1 = sy1;
-    tbox.x2 = sx2;
-    tbox.y2 = sy2;
-
-    {
-     enum wl_output_transform buffer_transform2 = WL_OUTPUT_TRANSFORM_NORMAL;
-
-     switch(viewport->buffer.transform) {
-         case 0: buffer_transform2 = WL_OUTPUT_TRANSFORM_NORMAL; break;
-         case 1: buffer_transform2 = WL_OUTPUT_TRANSFORM_90; break;
-         case 2: buffer_transform2 = WL_OUTPUT_TRANSFORM_180; break;
-         case 3: buffer_transform2 = WL_OUTPUT_TRANSFORM_270; break;
-         case 4: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED; break;
-         case 5: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_90; break;
-         case 6: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_180; break;
-         case 7: buffer_transform2 = WL_OUTPUT_TRANSFORM_FLIPPED_270; break;
+    switch(viewport->buffer.transform) {
+         case WL_OUTPUT_TRANSFORM_NORMAL: break;
+         case WL_OUTPUT_TRANSFORM_90: break;
+         case WL_OUTPUT_TRANSFORM_180: break;
+         case WL_OUTPUT_TRANSFORM_270: break;
+         case WL_OUTPUT_TRANSFORM_FLIPPED: break;
+         case WL_OUTPUT_TRANSFORM_FLIPPED_90: break;
+         case WL_OUTPUT_TRANSFORM_FLIPPED_180: break;
+         case WL_OUTPUT_TRANSFORM_FLIPPED_270: break;
          default: DLOGE("Invalid buffer transform not supported: %d", viewport->buffer.transform);
             pixman_region32_fini(&src_rect);
             return;
-     }
-
-     tbox = weston_transformed_rect(wl_fixed_from_int(ev->surface->width),
-              wl_fixed_from_int(ev->surface->height),
-              buffer_transform2,
-              viewport->buffer.scale,
-              tbox);
     }
 
-    src_ret->left = (float)(tbox.x1 >> 8);
-    src_ret->top = (float)(tbox.y1 >> 8);
-    src_ret->right = (float)(tbox.x2 >> 8);
-    src_ret->bottom = (float)(tbox.y2 >> 8);
+    weston_view_from_global_float(ev, box->x1, box->y1, &sxf1, &syf1);
+    weston_surface_to_buffer_float(ev->surface, sxf1, syf1, &sxf1, &syf1);
+    weston_view_from_global_float(ev, box->x2, box->y2, &sxf2, &syf2);
+    weston_surface_to_buffer_float(ev->surface, sxf2, syf2, &sxf2, &syf2);
     pixman_region32_fini(&src_rect);
+
+    /* Buffer transforms may mean that x2 is to the left of x1, and/or that
+     * y2 is above y1. */
+    if (sxf2 < sxf1) {
+        double tmp = sxf1;
+        sxf1 = sxf2;
+        sxf2 = tmp;
+    }
+    if (syf2 < syf1) {
+        double tmp = syf1;
+        syf1 = syf2;
+        syf2 = tmp;
+    }
+
+    src_ret->left = (float)(sxf1);
+    src_ret->top = (float)(syf1);
+    src_ret->right = (float)(sxf2);
+    src_ret->bottom = (float)(syf2);
 }
 
 int SdmDisplay::ComputeDirtyRegion(struct weston_view *ev,
