@@ -1954,11 +1954,19 @@ notify_key(struct weston_seat *seat, uint32_t time, uint32_t key,
 
 	static bool display_on = true;
 	if (state == WL_KEYBOARD_KEY_STATE_PRESSED && key == KEY_POWER && display_on) {
+	#ifdef COMPILE_WITH_DRM
+		//disable power key in drm backend
+		return;
+	#endif
 		weston_compositor_sleep(compositor);
 		display_on = false;
 		weston_log("Display OFF \n");
 		return;
 	} else if (state == WL_KEYBOARD_KEY_STATE_PRESSED && key == KEY_POWER && !display_on) {
+	#ifdef COMPILE_WITH_DRM
+		//disable power key in drm backend
+		return;
+	#endif
 		weston_compositor_wake(compositor);
 		weston_compositor_schedule_repaint(compositor);
 		display_on = true;

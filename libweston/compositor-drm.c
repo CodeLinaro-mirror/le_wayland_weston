@@ -3095,7 +3095,10 @@ udev_event_is_hotplug(struct drm_backend *b, struct udev_device *device)
 	val = udev_device_get_property_value(device, "HOTPLUG");
 	if (!val)
 		return 0;
-
+#ifdef COMPILE_WITH_DRM
+	//Disable hotplug in weston drm compositor
+	return 0;
+#endif
 	return strcmp(val, "1") == 0;
 }
 
