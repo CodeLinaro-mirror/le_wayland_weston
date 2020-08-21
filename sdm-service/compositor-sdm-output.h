@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -232,7 +232,6 @@ struct drm_output {
        struct wl_list commited_layer_list;  /* sdm_layer::link */
        struct wl_list early_layer_list;  /* early_layer::link      */
        struct wl_list commited_early_list;  /* early_layer::link */
-       struct wl_list disappeared_layer_list;  /* early_layer::link */
 
        bool early_display_enable; /* whether hw display enabled in early stage */
        void *early_display_intf;
