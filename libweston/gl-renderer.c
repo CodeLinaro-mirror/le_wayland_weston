@@ -2996,7 +2996,10 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	EGLint format;
 	int i;
 
-	weston_buffer_reference(&gs->buffer_ref, buffer);
+	/* screen capture buffer will call weston_buffer_reference in screen_capture_attach */
+	if(!is_screen_capture_buffer(buffer)) {
+		weston_buffer_reference(&gs->buffer_ref, buffer);
+	}
 
 	if (!buffer) {
 		for (i = 0; i < gs->num_images; i++) {
