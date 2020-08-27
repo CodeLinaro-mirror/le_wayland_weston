@@ -64,7 +64,7 @@
 #include "version.h"
 #include "plugin-registry.h"
 
-#define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
+#define DEFAULT_REPAINT_WINDOW 19 /* milliseconds */
 
 static void
 weston_output_update_matrix(struct weston_output *output);
@@ -2427,8 +2427,8 @@ output_repaint_timer_arm(struct weston_compositor *compositor)
 	 * into the same call, which would not happen if we called
 	 * output_repaint_timer_handler() directly.
 	 */
-	if (msec_to_next < 1)
-		msec_to_next = 1;
+    /* Always set the minimum 1 ms delay */
+	msec_to_next = 1;
 	wl_event_source_timer_update(compositor->repaint_timer, msec_to_next);
 #endif
 }
