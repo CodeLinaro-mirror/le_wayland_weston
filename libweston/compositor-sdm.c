@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -539,16 +539,6 @@ retire_fence_cb(int fd, uint32_t mask, void *data)
     return 0;
 }
 
-static void add_disappeared_layer(struct drm_output *output, struct early_layer *layer)
-{
-    struct early_layer *early_layer, *next_early_layer;
-    wl_list_for_each_safe(early_layer, next_early_layer, &output->early_layer_list, link)
-        if (early_layer->pipe_id == layer->pipe_id)
-            return;
-    wl_list_remove(&layer->link);
-    wl_list_insert(output->disappeared_layer_list.prev, &layer->link);
-}
-
 static int
 retire_fence_early_cb(int fd, uint32_t mask, void *data)
 {
@@ -602,6 +592,8 @@ finish_init(struct drm_backend *b)
 {
     struct drm_output *output;
     int fd;
+    bool handoff = false;
+    int ret = 0;
 
     fd = weston_launcher_open(b->compositor->launcher,
                 b->drm.filename, O_RDWR);
@@ -650,38 +642,26 @@ finish_init(struct drm_backend *b)
     wl_list_for_each(output, &b->compositor->output_list, base.link) {
         struct early_layer *early_layer, *next_early_layer;
 
-        if (!wl_list_empty(&output->early_layer_list)) {
-            /*
-            * attach early pipe to sdm display to make sure the early pipe could
-            * be using correctly by sdm, current frame is using
-            */
-            wl_list_for_each_safe(early_layer, next_early_layer, &output->early_layer_list, link)
-                sdm_service->SetPlaneInitState(early_layer->pipe_id,
-                   dup(early_layer->sync_handle), early_layer->hw_block_id, true);
-        } else if (!wl_list_empty(&output->commited_early_list)) {
-            /*
-            * attach early pipe to sdm display to make sure the early pipe could
-            * be using correctly by sdm, current frame is using
-            */
-            wl_list_for_each_safe(early_layer, next_early_layer, &output->commited_early_list, link)
-                sdm_service->SetPlaneInitState(early_layer->pipe_id,
-                   dup(early_layer->sync_handle), early_layer->hw_block_id, true);
-        }
-        /*
-         * attach early pipe to sdm display to make sure the early pipe could
-         * be using correctly by sdm, current frame doesn't use but previous frmae used
-         */
-        wl_list_for_each_safe(early_layer, next_early_layer, &output->disappeared_layer_list, link) {
-            sdm_service->SetPlaneInitState(early_layer->pipe_id,
-                dup(early_layer->sync_handle), early_layer->hw_block_id, false);
-            destroy_early_layer(early_layer);
-        }
+        if (!wl_list_empty(&output->early_layer_list) || !wl_list_empty(&output->commited_early_list))
+            handoff = true;
+
         /*
         * Schedule a repaint for every output to make sure
         * outputs display consistently after switching.
         */
         weston_output_schedule_repaint(&output->base);
     }
+
+    /*
+     * attach early pipes to sdm display to make sure the early pipes could
+     * be using correctly by sdm, current frame is using the pipes
+     */
+    if (handoff) {
+        ret = sdm_service->SetPlaneInitState();
+        if (ret)
+            weston_log("handoff early pipes error %d\n", ret);
+    }
+
     wl_event_source_remove(b->finish_full_init);
 
     early_drm_display_deinit(false);
@@ -711,20 +691,6 @@ drm_output_repaint_early(struct weston_output *output_base)
             weston_place_marker("W - first early commit submitted");
         }
     }
-
-    /* destroy the disappeared early layers two frames layer.
-     * that's beacuse SDM reclaim the not using pipes two frames layer,
-     * we should save the previous layer to disappeared layer list before it's destroyed by
-     * retire_fence_early_cb, that's for pipes handoff to SDM layer
-     *
-     */
-    wl_list_for_each_safe(early_layer, next_early_layer, &output->disappeared_layer_list, link)
-        destroy_early_layer(early_layer);
-
-    assert(wl_list_empty(&output->disappeared_layer_list));
-
-    wl_list_for_each_safe(early_layer, next_early_layer, &output->commited_early_list, link)
-        add_disappeared_layer(output, early_layer);
 
     if (ret) {
         wl_list_for_each_safe(early_layer, next_early_layer, &output->commited_early_list, link)
@@ -2473,7 +2439,6 @@ drm_output_enable(struct weston_output *base)
 	wl_list_init(&output->early_layer_list);
 	wl_list_init(&output->commited_layer_list);
 	wl_list_init(&output->commited_early_list);
-	wl_list_init(&output->disappeared_layer_list);
 
 	if (b->sdm_repaint) {
 		if (b->use_pixman) {
@@ -2642,7 +2607,8 @@ drm_backend_create_sdm_heads(struct drm_backend *b)
 
         /* and create default display */
         rc = sdm_service->CreateDisplay(idx);
-        weston_log("CreateDisplay: %d successful\n", rc);
+	if (!rc)
+		weston_log("CreateDisplay: %d successful\n", idx);
 
         /* Now register callbacks with SDM services */
         sdm_cbs.hotplug_cb = hotplug_handler,

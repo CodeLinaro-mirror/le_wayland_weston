@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -278,19 +278,11 @@ int (*UpdateDisplayPll)(int display_id, int ppm);
 
 /*! @brief Method for set state of hardware pipe to SDM.
 
-    @param[in] plane_id \link int \endlink
-
-    @param[in] sync_handle \link int \endlink
-
-    @param[in] hw_block_id \link int \endlink
-
-    @param[in] aquired \link bool \endlink
-
     @return \link int \endlink
 
     @sa
 */
-int (*SetPlaneInitState)(uint32_t plane_id, int sync_handle, int32_t hw_block_id, bool aquired);
+int (*SetPlaneInitState)();
 
 /*! @brief Method to get connector name.
 
