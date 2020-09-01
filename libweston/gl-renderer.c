@@ -1407,6 +1407,12 @@ gl_renderer_attach_shm(struct weston_surface *es, struct weston_buffer *buffer,
 		gl_format[0] = GL_BGRA_EXT;
 		gl_pixel_type = GL_UNSIGNED_BYTE;
 		break;
+	case WL_SHM_FORMAT_RGB888:
+		gs->shader = &gr->texture_shader_rgbx;
+		pitch = wl_shm_buffer_get_stride(shm_buffer) / 3;
+		gl_format[0] = GL_RGB;
+		gl_pixel_type = GL_UNSIGNED_BYTE;
+		break;
 	case WL_SHM_FORMAT_RGB565:
 		gs->shader = &gr->texture_shader_rgbx;
 		pitch = wl_shm_buffer_get_stride(shm_buffer) / 2;
@@ -3565,6 +3571,7 @@ gl_renderer_display_create(struct weston_compositor *ec, EGLenum platform,
 	wl_display_add_shm_format(ec->wl_display, WL_SHM_FORMAT_YUV420);
 	wl_display_add_shm_format(ec->wl_display, WL_SHM_FORMAT_NV12);
 	wl_display_add_shm_format(ec->wl_display, WL_SHM_FORMAT_YUYV);
+	wl_display_add_shm_format(ec->wl_display, WL_SHM_FORMAT_RGB888);
 
 	wl_signal_init(&gr->destroy_signal);
 
