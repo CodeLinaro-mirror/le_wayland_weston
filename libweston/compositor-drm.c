@@ -3039,7 +3039,9 @@ update_outputs(struct drm_backend *b, struct udev_device *drm_device)
 
 		create_output_for_connector(b, resources,
 					    connector, drm_device);
+#ifndef COMPILE_WITH_DRM
 		weston_log("connector %d connected\n", connector_id);
+#endif
 	}
 
 	wl_list_for_each_safe(output, next, &b->compositor->output_list,
@@ -3056,8 +3058,10 @@ update_outputs(struct drm_backend *b, struct udev_device *drm_device)
 		if (!disconnected)
 			continue;
 
+#ifndef COMPILE_WITH_DRM
 		weston_log("connector %d disconnected\n", output->connector_id);
 		drm_output_destroy(&output->base);
+#endif
 	}
 
 	wl_list_for_each_safe(output, next, &b->compositor->pending_output_list,
@@ -3074,8 +3078,10 @@ update_outputs(struct drm_backend *b, struct udev_device *drm_device)
 		if (!disconnected)
 			continue;
 
+#ifndef COMPILE_WITH_DRM
 		weston_log("connector %d disconnected\n", output->connector_id);
 		drm_output_destroy(&output->base);
+#endif
 	}
 
 	free(connected);
@@ -3095,10 +3101,6 @@ udev_event_is_hotplug(struct drm_backend *b, struct udev_device *device)
 	val = udev_device_get_property_value(device, "HOTPLUG");
 	if (!val)
 		return 0;
-#ifdef COMPILE_WITH_DRM
-	//Disable hotplug in weston drm compositor
-	return 0;
-#endif
 	return strcmp(val, "1") == 0;
 }
 
