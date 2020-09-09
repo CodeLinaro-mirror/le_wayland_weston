@@ -151,6 +151,12 @@ struct gbm_buffer *gbm_buffer_get(struct wl_resource *resource);
  */
 int gbm_buf_info_get(struct wl_resource *resource, struct gbm_buf_info *gbo_info);
 
+void *gbm_buffer_backend_get_user_data(struct gbm_buffer *buffer);
+
+void gbm_buffer_backend_set_user_data(struct gbm_buffer *buffer,
+                  void *data,
+                  gbm_buffer_user_data_destroy_func func);
+
 #ifdef __cplusplus
 }
 #endif
