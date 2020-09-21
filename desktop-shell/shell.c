@@ -2281,7 +2281,10 @@ fade_out_done(struct weston_view_animation *animation, void *data)
 
 	if (weston_view_is_mapped(shsurf->view)) {
 		shsurf->view->is_mapped = false;
-		wl_event_loop_add_idle(loop, fade_out_done_idle_cb, shsurf);
+		//wl_event_loop_add_idle(loop, fade_out_done_idle_cb, shsurf);
+		//instead of fade_out_done_idle_cb by call function directly
+		weston_surface_destroy(shsurf->view->surface);
+		free(shsurf);
 	}
 }
 

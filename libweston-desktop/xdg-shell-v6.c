@@ -893,8 +893,12 @@ weston_desktop_xdg_surface_send_configure(void *user_data)
 {
 	struct weston_desktop_xdg_surface *surface = user_data;
 	struct weston_desktop_xdg_surface_configure *configure;
+	struct weston_compositor *compositor = weston_desktop_get_compositor(surface->desktop);
 
 	surface->configure_idle = NULL;
+	if(surface->surface == NULL || compositor == NULL){
+		return;
+	}
 
 	configure = zalloc(weston_desktop_surface_configure_biggest_size);
 	if (configure == NULL) {
@@ -954,7 +958,7 @@ weston_desktop_xdg_surface_schedule_configure(struct weston_desktop_xdg_surface 
 {
 	struct wl_display *display = weston_desktop_get_display(surface->desktop);
 	struct wl_event_loop *loop = wl_display_get_event_loop(display);
-	bool pending_same = !force;
+	bool pending_same = false;
 
 	switch (surface->role) {
 	case WESTON_DESKTOP_XDG_SURFACE_ROLE_NONE:
@@ -969,6 +973,7 @@ weston_desktop_xdg_surface_schedule_configure(struct weston_desktop_xdg_surface 
 	}
 
 	if (surface->configure_idle != NULL) {
+		surface->configure_idle = NULL;
 		if (!pending_same)
 			return;
 
@@ -1351,6 +1356,7 @@ weston_desktop_xdg_shell_protocol_get_xdg_surface(struct wl_client *wl_client,
 
 	surface->desktop = weston_desktop_client_get_desktop(client);
 	surface->surface = wsurface;
+	wl_list_init(&surface->configure_list);
 
 	surface->desktop_surface =
 		weston_desktop_surface_create(surface->desktop, client,
@@ -1377,7 +1383,6 @@ weston_desktop_xdg_shell_protocol_get_xdg_surface(struct wl_client *wl_client,
 		return;
 	}
 
-	wl_list_init(&surface->configure_list);
 }
 
 static void
