@@ -2535,7 +2535,14 @@ idle_repaint(void *data)
 {
 	struct weston_output *output = data;
 
+#ifndef COMPILE_WITH_DRM
 	assert(output->repaint_status == REPAINT_BEGIN_FROM_IDLE);
+#else
+	if(output->repaint_status != REPAINT_BEGIN_FROM_IDLE)
+	{
+		return;
+	}
+#endif
 	output->repaint_status = REPAINT_AWAITING_COMPLETION;
 	output->start_repaint_loop(output);
 }
