@@ -894,9 +894,10 @@ weston_desktop_xdg_surface_send_configure(void *user_data)
 	struct weston_desktop_xdg_surface *surface = user_data;
 	struct weston_desktop_xdg_surface_configure *configure;
 	struct weston_compositor *compositor = weston_desktop_get_compositor(surface->desktop);
+	struct wl_display *display = weston_desktop_get_display(surface->desktop);
 
 	surface->configure_idle = NULL;
-	if(surface->surface == NULL || compositor == NULL){
+	if(surface->surface == NULL || compositor == NULL || display == NULL){
 		return;
 	}
 
@@ -1255,6 +1256,7 @@ weston_desktop_xdg_surface_destroy(struct weston_desktop_surface *dsurface,
 
 	if (surface->configure_idle != NULL)
 		wl_event_source_remove(surface->configure_idle);
+	surface->configure_idle = NULL;
 
 	wl_list_for_each_safe(configure, temp, &surface->configure_list, link)
 		free(configure);
