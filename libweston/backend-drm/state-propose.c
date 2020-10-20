@@ -1039,7 +1039,7 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 	struct drm_plane_state *plane_state;
 	struct weston_view *ev;
 	struct weston_plane *primary = &output_base->compositor->primary_plane;
-	enum drm_output_propose_state_mode mode = DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY;
+	enum drm_output_propose_state_mode mode = DRM_OUTPUT_PROPOSE_STATE_RENDERER_ONLY;
 
 	drm_debug(b, "\t[repaint] preparing state for output %s (%lu)\n",
 		  output_base->name, (unsigned long) output_base->id);
