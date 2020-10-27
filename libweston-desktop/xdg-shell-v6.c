@@ -894,10 +894,13 @@ weston_desktop_xdg_surface_send_configure(void *user_data)
 	struct weston_desktop_xdg_surface *surface = user_data;
 	struct weston_desktop_xdg_surface_configure *configure;
 	struct weston_compositor *compositor = weston_desktop_get_compositor(surface->desktop);
-	struct wl_display *display = weston_desktop_get_display(surface->desktop);
 
 	surface->configure_idle = NULL;
-	if(surface->surface == NULL || compositor == NULL || display == NULL){
+	if(surface->surface == NULL || compositor == NULL){
+		return;
+	}
+	struct wl_display *display = weston_desktop_get_display(surface->desktop);
+	if(display == NULL){
 		return;
 	}
 
