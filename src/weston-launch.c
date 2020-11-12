@@ -53,6 +53,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <security/pam_appl.h>
+#include <sys/sysmacros.h>
 
 #ifdef HAVE_SYSTEMD_LOGIN
 #include <systemd/sd-login.h>

@@ -63,7 +63,7 @@
 #include "git-version.h"
 #include "version.h"
 
-#define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
+#define DEFAULT_REPAINT_WINDOW 15 /* milliseconds, to repaint as soon as possible when new frame requests */
 
 static void
 weston_output_transform_scale_init(struct weston_output *output,

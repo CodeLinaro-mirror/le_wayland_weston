@@ -41,7 +41,7 @@
 #include <sys/stat.h>
 #include <systemd/sd-login.h>
 #include <unistd.h>
-
+#include <sys/sysmacros.h>
 #include "compositor.h"
 #include "dbus.h"
 #include "logind-util.h"

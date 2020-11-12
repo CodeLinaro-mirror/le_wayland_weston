@@ -42,6 +42,7 @@
 #include <linux/vt.h>
 #include <linux/kd.h>
 #include <linux/major.h>
+#include <sys/sysmacros.h>
 
 #include "compositor.h"
 #include "launcher-util.h"
