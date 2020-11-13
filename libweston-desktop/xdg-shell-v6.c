@@ -670,7 +670,7 @@ weston_desktop_xdg_toplevel_committed(struct weston_desktop_xdg_toplevel *toplev
 	struct weston_geometry geometry =
 		weston_desktop_surface_get_geometry(toplevel->base.desktop_surface);
 
-	if ((toplevel->next.state.maximized || toplevel->next.state.fullscreen) &&
+	if ((toplevel->next.state.maximized) &&
 	    (toplevel->next.size.width != geometry.width ||
 	     toplevel->next.size.height != geometry.height)) {
 		struct weston_desktop_client *client =
@@ -684,6 +684,20 @@ weston_desktop_xdg_toplevel_committed(struct weston_desktop_xdg_toplevel *toplev
 		return;
 	}
 
+	if ((toplevel->next.state.fullscreen) &&
+	    (toplevel->next.size.width < geometry.width ||
+	     toplevel->next.size.height < geometry.height)) {
+		struct weston_desktop_client *client =
+			weston_desktop_surface_get_client(toplevel->base.desktop_surface);
+		struct wl_resource *client_resource =
+			weston_desktop_client_get_resource(client);
+
+		wl_resource_post_error(client_resource,
+				       ZXDG_SHELL_V6_ERROR_INVALID_SURFACE_STATE,
+				       "xdg_surface larger fullscreen buffer does not match the configured state");
+        weston_log("xljun xdg_surface buffer does not match the configured state here\n");
+		return;
+	}
 	toplevel->current.state = toplevel->next.state;
 	toplevel->current.min_size = toplevel->next.min_size;
 	toplevel->current.max_size = toplevel->next.max_size;

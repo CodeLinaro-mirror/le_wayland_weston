@@ -661,6 +661,10 @@ focus_state_surface_destroy(struct wl_listener *listener, void *data)
 		next = get_default_view(main_surface);
 
 	if (next) {
+        if (state->keyboard_focus) {
+             wl_list_remove(&state->surface_destroy_listener.link);
+             wl_list_init(&state->surface_destroy_listener.link);
+        }
 		state->keyboard_focus = NULL;
 		activate(state->shell, next, state->seat,
 			 WESTON_ACTIVATE_FLAG_CONFIGURE);
@@ -2131,6 +2135,12 @@ shell_configure_fullscreen(struct shell_surface *shsurf)
 	weston_layer_entry_remove(&shsurf->view->layer_link);
 	weston_layer_entry_insert(&shsurf->shell->fullscreen_layer.view_list,
 				  &shsurf->view->layer_link);
+    if (!shsurf->fullscreen_output) {
+    /* If there is no output, there's not much we can do.
+     * Position the window somewhere, whatever. */
+        weston_view_set_position(shsurf->view, 0, 0);
+        return;
+    }
 
 	shell_ensure_fullscreen_black_view(shsurf);
 
@@ -2572,6 +2582,18 @@ desktop_surface_committed(struct weston_desktop_surface *desktop_surface,
 			weston_view_update_transform(view);
 	}
 }
+static void
+get_maximized_size(struct shell_surface *shsurf, int32_t *width, int32_t *height)
+{
+    struct desktop_shell *shell;
+    pixman_rectangle32_t area;
+
+    shell = shell_surface_get_shell(shsurf);
+    get_output_work_area(shell, shsurf->output, &area);
+
+    *width = area.width;
+    *height = area.height;
+}
 
 static void
 set_fullscreen(struct shell_surface *shsurf, bool fullscreen,
@@ -2594,7 +2616,9 @@ set_fullscreen(struct shell_surface *shsurf, bool fullscreen,
 
 		width = shsurf->output->width;
 		height = shsurf->output->height;
-	}
+	} else if (weston_desktop_surface_get_maximized(desktop_surface)) {
+        get_maximized_size(shsurf, &width, &height);
+    }
 	weston_desktop_surface_set_fullscreen(desktop_surface, fullscreen);
 	weston_desktop_surface_set_size(desktop_surface, width, height);
 }
@@ -3681,7 +3705,8 @@ activate(struct desktop_shell *shell, struct weston_view *view,
 
 	/* Only demote fullscreen surfaces on the output of activated shsurf.
 	 * Leave fullscreen surfaces on unrelated outputs alone. */
-	lower_fullscreen_layer(shell, shsurf->output);
+    if (shsurf->output)
+	    lower_fullscreen_layer(shell, shsurf->output);
 
 	weston_view_activate(view, seat, flags);
 
