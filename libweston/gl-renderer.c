@@ -291,9 +291,11 @@ egl_image_create(struct gl_renderer *gr, EGLenum target,
 
 	if (img->image == EGL_NO_IMAGE_KHR) {
 		free(img);
+    weston_log("xljun 294 free egl image=0x%lx\n",img);
 		return NULL;
 	}
 
+    weston_log("xljun 298 create egl image=0x%lx\n",img);
 	return img;
 }
 
@@ -321,6 +323,7 @@ egl_image_unref(struct egl_image *image)
 
 	gr->destroy_image(gr->egl_display, image->image);
 	free(image);
+    weston_log("xljun 324 free egl image=0x%lx\n",image);
 
 	return 0;
 }
@@ -348,6 +351,7 @@ dmabuf_image_destroy(struct dmabuf_image *image)
 		linux_dmabuf_buffer_set_user_data(image->dmabuf, NULL, NULL);
 
 	wl_list_remove(&image->link);
+	free(image);
 }
 
 static const char *
@@ -1457,6 +1461,7 @@ gl_renderer_attach_shm(struct weston_surface *es, struct weston_buffer *buffer,
 		pitch = wl_shm_buffer_get_stride(shm_buffer) / 2;
 		gl_pixel_type = GL_UNSIGNED_BYTE;
 		num_planes = 2;
+		gs->offset[1] = 0;
 		gs->hsub[1] = 2;
 		gs->vsub[1] = 1;
 		if (gr->has_gl_texture_rg)
@@ -1973,7 +1978,7 @@ gl_renderer_query_dmabuf_modifiers(struct weston_compositor *wc, int format,
 
 	if (!gr->has_dmabuf_import_modifiers ||
 		!gr->query_dmabuf_modifiers(gr->egl_display, format, 0, NULL,
-					    NULL, &num)) {
+					    NULL, &num) || num == 0) {
 		*num_modifiers = 0;
 		return false;
 	}
@@ -2074,6 +2079,7 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	if ((gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
 		(gbmbuf->format == GBM_FORMAT_P010) ||
 		((gbmbuf->format == GBM_FORMAT_NV12) && secure_status)) {
+    weston_log("xljun 2081 image=0x%lx\n",image);
 		return image;
 	}
 	memset(attribs,0,sizeof(EGLint));
@@ -3582,6 +3588,7 @@ fail_terminate:
 	eglTerminate(gr->egl_display);
 fail:
 	free(gr);
+	ec->renderer = NULL;
 	return -1;
 }
 
