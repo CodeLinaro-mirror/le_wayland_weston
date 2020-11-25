@@ -2832,7 +2832,7 @@ drm_backend_create(struct weston_compositor *compositor,
 
 	compositor->backend = &b->base;
 
-	if (parse_gbm_format(config->gbm_format, DRM_FORMAT_XRGB8888, &b->gbm_format) < 0)
+	if (parse_gbm_format(config->gbm_format, DRM_FORMAT_ABGR8888, &b->gbm_format) < 0)
 		goto err_compositor;
 
 	/* Check if we run drm-backend using weston-launch */
