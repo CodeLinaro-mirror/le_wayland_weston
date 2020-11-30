@@ -1,5 +1,5 @@
 /*
- * Copyright © 2016 Quentin "Sardem FF7" Glidic
+ * Copyright © 2016, 2020 Quentin "Sardem FF7" Glidic
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -730,6 +730,16 @@ weston_desktop_surface_set_geometry(struct weston_desktop_surface *surface,
 {
 	surface->has_geometry = true;
 	surface->geometry = geometry;
+}
+
+void
+weston_desktop_surface_set_position(struct weston_desktop *desktop,
+                                       struct weston_desktop_surface *dsurface,
+                                   uint32_t x, uint32_t y)
+{
+       struct weston_desktop_view *view;
+       wl_list_for_each(view, &dsurface->view_list, link)
+               weston_view_set_position(view->view, x, y);
 }
 
 void
