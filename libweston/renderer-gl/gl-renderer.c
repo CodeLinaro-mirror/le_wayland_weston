@@ -115,6 +115,7 @@ struct egl_image {
 	struct gl_renderer *renderer;
 	EGLImageKHR image;
 	int refcount;
+	bool is_secure; // whether image is protected
 };
 
 enum import_type {
@@ -2107,7 +2108,7 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 	struct weston_compositor *ec = es->compositor;
 	struct gl_renderer *gr = get_renderer(ec);
 	struct gl_surface_state *gs = get_surface_state(es);
-	EGLint attribs[3];
+	EGLint attribs[5];
 	int i, num_planes;
 
 	buffer->legacy_buffer = (struct wl_buffer *)buffer->resource;
@@ -2157,10 +2158,39 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 	}
 
 	ensure_textures(gs, num_planes);
+
+	bool is_secure_buffer = false;
+	struct gbm_bo* gbm_bo_ptr = gbm_bo_import(
+			gr->gbm_hdle,
+			GBM_BO_IMPORT_GBM_BUF_TYPE,
+			wl_resource_get_user_data(es->buffer_ref.buffer->resource),
+			GBM_BO_USE_SCANOUT);
+	if (NULL == gbm_bo_ptr) {
+		weston_log("GBM_BO_IMPORT_GBM_BUF_TYPE failed\n");
+	} else {
+		int secure_status;
+		int result = gbm_perform(
+				GBM_PERFORM_GET_METADATA,
+				gbm_bo_ptr,
+				GBM_METADATA_GET_SECURE_BUF_STAT,
+				&secure_status);
+		if (GBM_ERROR_NONE == result) {
+			is_secure_buffer = (bool)secure_status;
+		} else {
+			weston_log("GBM_METADATA_GET_SECURE_BUF_STAT failed: %d\n", result);
+		}
+		gbm_bo_destroy(gbm_bo_ptr);
+	}
+
 	for (i = 0; i < num_planes; i++) {
-		attribs[0] = EGL_WAYLAND_PLANE_WL;
-		attribs[1] = i;
-		attribs[2] = EGL_NONE;
+		int atti = 0;
+		attribs[atti++] = EGL_WAYLAND_PLANE_WL;
+		attribs[atti++] = i;
+		if (is_secure_buffer) {
+			attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
+			attribs[atti++] = EGL_TRUE;
+		}
+		attribs[atti++] = EGL_NONE;
 		gs->images[i] = egl_image_create(gr,
 						 EGL_WAYLAND_BUFFER_WL,
 						 buffer->legacy_buffer,
@@ -2175,6 +2205,11 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 		glBindTexture(gs->target, gs->textures[i]);
 		gr->image_target_texture_2d(gs->target,
 					    gs->images[i]->image);
+
+		if (is_secure_buffer) {
+			gs->images[i]->is_secure = true;
+			glTexParameteri(gs->target, GL_TEXTURE_PROTECTED_EXT, GL_TRUE);
+		}
 	}
 
 	gs->pitch = buffer->width;
@@ -2786,7 +2821,7 @@ static struct egl_image *
 import_simple_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 {
 	struct egl_image *egl_image;
-	EGLint attribs[30];
+	EGLint attribs[50];
 	int atti = 0;
 	int colorspace = 0;
 	ColorMetaData colormeta = {0};
@@ -2897,6 +2932,20 @@ import_simple_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 			break;
 		}
 	}
+
+	bool is_secure_buffer = false;
+	int secure_status;
+	result = gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbmbuf->bo, &secure_status);
+	if (GBM_ERROR_NONE == result) {
+		if (secure_status) {
+			is_secure_buffer = true;
+			attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
+			attribs[atti++] = EGL_TRUE;
+		}
+	} else {
+		weston_log("GBM_PERFORM_GET_SECURE_BUFFER_STATUS failed: %d\n", result);
+	}
+
 	attribs[atti++] = EGL_NONE;
 
 	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->width=%d", gbmbuf->width);
@@ -2914,6 +2963,9 @@ import_simple_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[2]=%d", gbmbuf->stride[2]);
 
 	egl_image = egl_image_create(gr, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
+	if (is_secure_buffer && egl_image != NULL) {
+		egl_image->is_secure = true;
+	}
 
 	GBM_PROTOCOL_LOG(LOG_DBG,"import_simple_gbm_buffer::Image created =%p\n", egl_image);
 
@@ -3115,6 +3167,10 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 		glActiveTexture(GL_TEXTURE0 + i);
 		glBindTexture(gs->target, gs->textures[i]);
 		gr->image_target_texture_2d(gs->target, gs->images[i]->image);
+		if (gs->images[i]->is_secure)
+		{
+			glTexParameteri(gs->target, GL_TEXTURE_PROTECTED_EXT, GL_TRUE);
+		}
 	}
 
 	gs->shader = image->shader;
@@ -3761,6 +3817,16 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 	EGLSurface egl_surface = EGL_NO_SURFACE;
 	EGLConfig egl_config;
 
+	int atti = 0;
+	EGLint attribs[3];
+	int is_secure_surface = 0;
+	gbm_perform(GBM_PERFORM_GET_SURFACE_SECURE_STATUS, (struct gbm_surface *)window_for_platform, &is_secure_surface);
+	if (is_secure_surface) {
+		attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
+		attribs[atti++] = EGL_TRUE;
+	}
+	attribs[atti++] = EGL_NONE;
+
 	egl_config = gl_renderer_get_egl_config(gr, EGL_WINDOW_BIT,
 						drm_formats, drm_formats_count);
 	if (egl_config == EGL_NO_CONFIG_KHR)
@@ -3772,11 +3838,11 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 		egl_surface = gr->create_platform_window(gr->egl_display,
 							 egl_config,
 							 window_for_platform,
-							 NULL);
+							 attribs);
 	else
 		egl_surface = eglCreateWindowSurface(gr->egl_display,
 						     egl_config,
-						     window_for_legacy, NULL);
+						     window_for_legacy, attribs);
 
 	return egl_surface;
 }
@@ -4362,6 +4428,11 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	if (gr->has_context_priority) {
 		context_attribs[nattr++] = EGL_CONTEXT_PRIORITY_LEVEL_IMG;
 		context_attribs[nattr++] = EGL_CONTEXT_PRIORITY_HIGH_IMG;
+	}
+
+	if (property_get_bool("weston.protected_context", false)) {
+		context_attribs[nattr++] = EGL_PROTECTED_CONTENT_EXT;
+		context_attribs[nattr++] = EGL_TRUE;
 	}
 
 	assert(nattr < ARRAY_LENGTH(context_attribs));
