@@ -318,8 +318,13 @@ struct weston_output {
 			  uint16_t *g,
 			  uint16_t *b);
 
+	void (*enable_ppm)(struct weston_output *output, int32_t enable);
+	void (*set_ppm)(struct weston_output *output, int32_t ppm);
+
 	bool enabled; /**< is in the output_list, not pending list */
 	int scale;
+	/* Indicate current repainting need gpu do compositon. */
+	bool need_gpu_composition;
 
 	int (*enable)(struct weston_output *output);
 	int (*disable)(struct weston_output *output);
@@ -1299,6 +1304,9 @@ struct weston_view {
 	uint32_t psf_flags;
 
 	bool is_mapped;
+
+	/* Indicate if this view is completely covered by above opaque regions. */
+	bool is_completely_covered;
 };
 
 struct weston_surface_state {
@@ -1826,6 +1834,9 @@ weston_log(const char *fmt, ...)
 int
 weston_log_continue(const char *fmt, ...)
 	__attribute__ ((format (printf, 1, 2)));
+
+void
+weston_place_marker(const char *name);
 
 enum weston_screenshooter_outcome {
 	WESTON_SCREENSHOOTER_SUCCESS,

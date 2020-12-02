@@ -107,6 +107,13 @@ option(
 )
 
 option(
+        'sdm-service',
+        type: 'boolean',
+        value: true,
+        description: 'suport for DRM backend'
+)
+
+option(
 	'shell-desktop',
 	type: 'boolean',
 	value: true,

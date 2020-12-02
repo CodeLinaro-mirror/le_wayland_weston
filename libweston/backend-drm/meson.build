@@ -20,12 +20,7 @@ dep_backlight = declare_dependency(
 config_h.set('BUILD_DRM_COMPOSITOR', '1')
 
 srcs_drm = [
-	'drm.c',
-	'fb.c',
-	'modes.c',
-	'kms.c',
-	'state-helpers.c',
-	'state-propose.c',
+	'compositor-sdm.c',
 	linux_dmabuf_unstable_v1_protocol_c,
 	linux_dmabuf_unstable_v1_server_protocol_h,
 	presentation_time_server_protocol_h,
@@ -33,11 +28,14 @@ srcs_drm = [
 
 deps_drm = [
 	dep_libdl,
+	dep_libcutils,
 	dep_libweston_private,
 	dep_session_helper,
 	dep_libdrm,
 	dep_libinput_backend,
 	dependency('libudev', version: '>= 136'),
+	dep_libdrmutils,
+	dep_libsdedrm,
 	dep_backlight
 ]
 
@@ -53,7 +51,6 @@ if get_option('renderer-gl')
 		config_h.set('HAVE_GBM_FD_IMPORT', '1')
 	endif
 	deps_drm += dep_gbm
-	srcs_drm += 'drm-gbm.c'
 	config_h.set('BUILD_DRM_GBM', '1')
 endif
 

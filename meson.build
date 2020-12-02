@@ -1,9 +1,10 @@
 project('weston',
-	'c',
+	'c', 'cpp',
 	version: '8.0.0',
 	default_options: [
 		'warning_level=3',
 		'c_std=gnu99',
+		'cpp_std=c++11',
 		'b_lundef=true',
 	],
 	meson_version: '>= 0.47',
@@ -55,6 +56,7 @@ git_version_h = vcs_tag(
 config_h = configuration_data()
 
 cc = meson.get_compiler('c')
+cxx = meson.get_compiler('cpp')
 
 global_args = []
 global_args_maybe = [
@@ -70,11 +72,16 @@ foreach a : global_args_maybe
 	endif
 endforeach
 add_global_arguments(global_args, language: 'c')
+add_global_arguments(global_args, language: 'cpp')
 
 if cc.has_header_symbol('sys/sysmacros.h', 'major')
 	config_h.set('MAJOR_IN_SYSMACROS', 1)
 elif cc.has_header_symbol('sys/mkdev.h', 'major')
 	config_h.set('MAJOR_IN_MKDEV', 1)
+endif
+
+if cc.has_link_argument('-Wl,--warn-unresolved-symbols')
+  add_project_link_arguments('-Wl,--warn-unresolved-symbols', language : 'c')
 endif
 
 optional_libc_funcs = [
@@ -141,9 +148,13 @@ dep_libinput = dependency('libinput', version: '>= 0.8.0')
 dep_libevdev = dependency('libevdev')
 dep_libm = cc.find_library('m')
 dep_libdl = cc.find_library('dl')
-dep_libdrm = dependency('libdrm', version: '>= 2.4.86')
+dep_libcutils = cc.find_library('cutils')
+dep_libdrm = dependency('libdrm', version: '>= 2.4.66')
 dep_libdrm_headers = dep_libdrm.partial_dependency(compile_args: true)
 dep_threads = dependency('threads')
+dep_gbm = dependency('gbm', required: false)
+dep_libdrmutils = cxx.find_library('drmutils')
+dep_libsdedrm = cxx.find_library('sdedrm')
 
 subdir('include')
 subdir('protocol')
@@ -157,6 +168,7 @@ subdir('fullscreen-shell')
 subdir('ivi-shell')
 subdir('remoting')
 subdir('pipewire')
+subdir('sdm-service')
 subdir('clients')
 subdir('wcap')
 subdir('tests')

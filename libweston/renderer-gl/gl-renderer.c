@@ -988,14 +988,86 @@ out:
 }
 
 static void
+gl_renderer_surface_set_color(struct weston_surface *surface,
+		 float red, float green, float blue, float alpha);
+
+/* clear_view: It composes onto GPU composed layer a clear transparent
+			   bounding box of the size same as that of overlay layer
+			   to allow overlay plane to be visible through the GPU
+			   composed layer.
+   Inputs:
+			   struct weston_view   *ev	   : weston overlay view
+			   struct weston_output *output
+			   pixman_region32_t	*damage
+   Output:
+			   GPU composed layer ev->surface will have a clear
+			   transparent bounding box with alpha = 0 and all
+			   3 color channels also equal to 0.
+*/
+static void
+clear_view(struct weston_view *ev, struct weston_output *output,
+	   pixman_region32_t *damage) /* in global coordinates */
+{
+	struct weston_compositor *ec = ev->surface->compositor;
+	struct gl_renderer *gr = get_renderer(ec);
+	struct gl_surface_state *gs = get_surface_state(ev->surface);
+	/* repaint bounding region in global coordinates: */
+	pixman_region32_t repaint;
+	/* non-opaque region in surface coordinates: */
+	pixman_region32_t surface_blend;
+	struct gl_shader *shader;
+	int pitch, height;
+	enum buffer_type buffer_type;
+
+	if (!gs->shader) {
+		return;
+	}
+
+	/* gl_renderer_surface_set_color() called below will reset the surface_state,
+	 * so we save the original ones here. */
+	shader = gs->shader;
+	buffer_type =  gs->buffer_type;
+	pitch = gs->pitch;
+	height = gs->height;
+
+	pixman_region32_init(&repaint);
+	pixman_region32_intersect(&repaint, &ev->transform.boundingbox, damage);
+	pixman_region32_subtract(&repaint, &repaint, &ev->clip);
+
+	if (!pixman_region32_not_empty(&repaint))
+		goto out_clear_view;
+
+	glDisable(GL_BLEND);
+	gl_renderer_surface_set_color(ev->surface, 0.0f, 0.0f, 0.0f, 0.0f);
+
+	use_shader(gr, &gr->solid_shader);
+	shader_uniforms(&gr->solid_shader, ev, output);
+
+	pixman_region32_init_rect(&surface_blend, 0, 0,
+							  ev->surface->width, ev->surface->height);
+	repaint_region(ev, &repaint, &surface_blend);
+
+	pixman_region32_fini(&surface_blend);
+
+	/* restore gs setting */
+	gs->shader = shader;
+	gs->buffer_type = buffer_type;
+	gs->pitch = pitch;
+	gs->height = height;
+
+out_clear_view:
+	pixman_region32_fini(&repaint);
+}
+
+static void
 repaint_views(struct weston_output *output, pixman_region32_t *damage)
 {
 	struct weston_compositor *compositor = output->compositor;
 	struct weston_view *view;
 
 	wl_list_for_each_reverse(view, &compositor->view_list, link)
-		if (view->plane == &compositor->primary_plane)
-			draw_view(view, output, damage);
+        if (view->is_completely_covered)
+	    	draw_view(view, output, damage);
 }
 
 static int
@@ -1405,6 +1477,12 @@ gl_renderer_repaint_output(struct weston_output *output,
 		gr->destroy_sync(gr->egl_display, go->end_render_sync);
 
 	go->begin_render_sync = create_render_sync(gr);
+
+	/* Clear all unknown regions */
+	if (output->need_gpu_composition) {
+		glClearColor(0,0,0,0);
+		glClear(GL_COLOR_BUFFER_BIT);
+	}
 
 	/* Calculate the viewport */
 	glViewport(go->borders[GL_RENDERER_BORDER_LEFT].width,
@@ -2522,6 +2600,7 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	int i;
 
 	weston_buffer_reference(&gs->buffer_ref, buffer);
+
 	weston_buffer_release_reference(&gs->buffer_release_ref,
 					es->buffer_release_ref.buffer_release);
 

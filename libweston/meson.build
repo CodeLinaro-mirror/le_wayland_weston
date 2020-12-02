@@ -5,6 +5,7 @@ deps_libweston = [
 	dep_libdl,
 	dep_libdrm_headers,
 	dep_xkbcommon,
+	dep_gbm,
 	dep_matrix_c
 ]
 srcs_libweston = [
@@ -35,6 +36,8 @@ srcs_libweston = [
 	'zoom.c',
 	linux_dmabuf_unstable_v1_protocol_c,
 	linux_dmabuf_unstable_v1_server_protocol_h,
+	pll_protocol_c,
+	pll_server_protocol_h,
 	linux_explicit_synchronization_unstable_v1_protocol_c,
 	linux_explicit_synchronization_unstable_v1_server_protocol_h,
 	input_method_unstable_v1_protocol_c,

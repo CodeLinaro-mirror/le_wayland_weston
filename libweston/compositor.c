@@ -63,6 +63,7 @@
 #include "xdg-output-unstable-v1-server-protocol.h"
 #include "linux-explicit-synchronization-unstable-v1-server-protocol.h"
 #include "linux-explicit-synchronization.h"
+#include "pll-server-protocol.h"
 #include "shared/fd-util.h"
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
@@ -350,6 +351,7 @@ weston_view_create(struct weston_surface *surface)
 	pixman_region32_init(&view->geometry.scissor);
 	pixman_region32_init(&view->transform.boundingbox);
 	view->transform.dirty = 1;
+	view->is_completely_covered = false;
 
 	return view;
 }
@@ -2433,7 +2435,12 @@ view_accumulate_damage(struct weston_view *view,
 	pixman_region32_union(&view->plane->damage,
 			      &view->plane->damage, &damage);
 	pixman_region32_fini(&damage);
-	pixman_region32_copy(&view->clip, opaque);
+	/* move this line to assign planes in sdm backend
+	 * no matter what value of view->plane, the view->clip should be the same
+	 * but our overlay implementation let view->plane equal to NULL, it can't
+	 * calculate correct clip region here, so calculate it in sdm backend
+	 */
+	//pixman_region32_copy(&view->clip, opaque);
 	pixman_region32_union(opaque, opaque, &view->transform.opaque);
 }
 
@@ -6929,6 +6936,62 @@ compositor_bind(struct wl_client *client,
 				       compositor, NULL);
 }
 
+static void
+pll_destroy(struct wl_client *client,
+	struct wl_resource *resource)
+{
+	wl_resource_destroy(resource);
+}
+
+static void
+pll_enable_ppm(struct wl_client *client,
+	struct wl_resource *pll, int32_t enable)
+{
+	struct weston_compositor *compositor = wl_resource_get_user_data(pll);
+	struct weston_output *output, *next;
+
+	wl_list_for_each_safe(output, next, &compositor->output_list, link) {
+		if (output->enable_ppm)
+			output->enable_ppm(output, enable);
+	}
+}
+
+static void
+pll_set_ppm(struct wl_client *client,
+		    struct wl_resource *pll,
+		    int32_t ppm)
+{
+	struct weston_compositor *compositor = wl_resource_get_user_data(pll);
+	struct weston_output *output, *next;
+
+	wl_list_for_each_safe(output, next, &compositor->output_list, link) {
+		if (output->set_ppm)
+			output->set_ppm(output, ppm);
+	}
+}
+
+static const struct wl_pll_interface pll_interface = {
+	pll_destroy,
+	pll_enable_ppm,
+	pll_set_ppm
+};
+
+static void
+bind_pll(struct wl_client *client,
+	    void *data, uint32_t version, uint32_t id)
+{
+	struct wl_resource *resource;
+
+	resource = wl_resource_create(client, &wl_pll_interface, 1, id);
+	if (resource == NULL) {
+		wl_client_post_no_memory(client);
+		return;
+	}
+
+	wl_resource_set_implementation(resource, &pll_interface,
+		                       data, NULL);
+}
+
 WL_EXPORT int
 weston_environment_get_fd(const char *env)
 {
@@ -7276,6 +7339,10 @@ weston_compositor_create(struct wl_display *display,
 
 	if (!wl_global_create(ec->wl_display, &wp_presentation_interface, 1,
 			      ec, bind_presentation))
+		goto fail;
+
+	if (!wl_global_create(ec->wl_display, &wl_pll_interface, 1,
+			      ec, bind_pll))
 		goto fail;
 
 	if (weston_log_ctx_compositor_setup(ec, log_ctx) < 0)
