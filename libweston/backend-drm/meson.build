@@ -21,6 +21,9 @@ config_h.set('BUILD_DRM_COMPOSITOR', '1')
 
 srcs_drm = [
 	'compositor-sdm.c',
+	'../../drm-service/drm_display.cpp',
+	'../../drm-service/drm_display.h',
+	'early-renderer.c',
 	linux_dmabuf_unstable_v1_protocol_c,
 	linux_dmabuf_unstable_v1_server_protocol_h,
 	gbm_buffer_backend_protocol_c,

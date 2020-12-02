@@ -119,6 +119,16 @@ struct drm_backend {
   uint32_t min_width, max_width;
   uint32_t min_height, max_height;
 
+  /* Flag to indicate whether sdm service is ready */
+  bool sdm_repaint;
+  /* Timer to finish full initialization of backend */
+  struct wl_event_source *finish_full_init;
+  struct wl_event_source *input_init;
+  /* Whether skip full initialization when backend is created */
+  bool early_boot;
+  /* Whether is the first repaint for weston */
+  bool first_repaint;
+
   /* Screen capture data */
   struct screen_capture *screen_cap;
 };
@@ -139,6 +149,23 @@ struct sdm_layer {
   struct gbm_bo *bo;
   uint32_t composition_type; /* type: enum SDM_COMPOSITION_XXXXX */
   pixman_region32_t overlap;
+};
+
+/*
+ * for early stage
+ */
+struct early_layer {
+  struct wl_list link; /* drm_output::early_layer_list */
+  struct weston_view *view;
+  struct gbm_bo *bo;
+  struct weston_buffer_reference buffer_ref;
+  uint32_t fb_id;
+  uint32_t pipe_id;
+  bool yuv_required; /* whether need a yuv pipe*/
+  uint32_t z_order;
+  int32_t hw_block_id; /* store hw_block_id for early pipes handoff*/
+  bool secure; /* whether need secure pipe*/
+  int32_t sync_handle;
 };
 
 struct drm_output;
@@ -199,14 +226,17 @@ struct drm_output {
   struct wl_list plane_flip_list; /* drm_plane::flip_link */
   struct wl_list sdm_layer_list;  /* sdm_layer::link      */
   struct wl_list commited_layer_list;  /* sdm_layer::link */
+  struct wl_list early_layer_list;  /* early_layer::link      */
+  struct wl_list commited_early_list;  /* early_layer::link */
+
+  bool early_display_enable; /* whether hw display enabled in early stage */
+  void *early_display_intf;
 
   struct wl_event_source *finish_frame_timer;
 
   int retire_fence_fd;
   struct wl_event_source *retire_fence_source;
 
-  int pageflip_ev_fd;
-  struct wl_event_source *pageflip_ev_source;
   struct {
     unsigned int frame;
     unsigned int sec;

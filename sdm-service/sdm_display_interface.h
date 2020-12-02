@@ -39,6 +39,8 @@ extern "C" {
 #define MAX_PIPE_WIDTH          2560
 #define MAX_MIXER_WIDTH         2560
 
+struct drm_output;
+
 /* Buffer format enum */
 enum {
   SDM_BUFFER_FORMAT_ARGB_8888,

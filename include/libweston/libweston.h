@@ -68,6 +68,11 @@ struct weston_point2d_device_normalized {
 	double y;
 };
 
+struct surface_color {
+	bool is_pended;
+	float red, blue, green, alpha;
+};
+
 struct weston_surface;
 struct weston_buffer;
 struct shell_surface;
@@ -1483,6 +1488,7 @@ struct weston_surface {
 
 	/* An list of per seat pointer constraints. */
 	struct wl_list pointer_constraints;
+	struct surface_color surf_color;
 
 	/* zwp_surface_synchronization_v1 resource for this surface */
 	struct wl_resource *synchronization_resource;

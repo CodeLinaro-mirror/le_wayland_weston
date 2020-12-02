@@ -537,6 +537,33 @@ int UpdateDisplayPll(int display_id, int enable) {
   return display_[display_id]->UpdateDisplayPll(enable);
 }
 
+int SetPlaneInitState() {
+  return notifier_intf_->PipesStateChanged();
+}
+
+WL_EXPORT struct sdm_service_interface sdm_service_interface {
+  .CreateCore = CreateCore,
+  .DestroyCore = DestroyCore,
+  .GetDisplayCount = GetDisplayCount,
+  .GetDisplayInfos = GetDisplayInfos,
+  .CreateDisplay = CreateDisplay,
+  .DestroyDisplay = DestroyDisplay,
+  .ReconfigureDisplay = NULL,
+  .Prepare = Prepare,
+  .Commit = Commit,
+  .Flush = Flush,
+  .GetDisplayConfiguration = GetDisplayConfiguration,
+  .GetDisplayHdrInfo = GetDisplayHdrInfo,
+  .RegisterCbs = RegisterCbs,
+  .SetDisplayState = SetDisplayState,
+  .SetVSyncState = SetVSyncState,
+  .EnablePllUpdate = EnablePllUpdate,
+  .UpdateDisplayPll = UpdateDisplayPll,
+  .SetPlaneInitState = SetPlaneInitState,
+  .GetConnectorName = GetConnectorName,
+  .GetConnectorId = GetConnectorId
+};
+
 }// namespace sdm
 #ifdef __cplusplus
 }
