@@ -107,6 +107,7 @@
       <entry name="interlaced" value="2" summary="content is interlaced"/>
       <entry name="bottom_first" value="4" summary="bottom field first"/>
       <entry name="early_display" value="8" summary="used by early display"/>
+      <entry name="screen_capture" value="16" summary="used by screen capture"/>
     </enum>
 
     <request name="create">

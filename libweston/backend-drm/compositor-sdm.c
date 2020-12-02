@@ -86,6 +86,7 @@
 #include "presentation-time-server-protocol.h"
 #include "linux-dmabuf.h"
 #include "gbm-buffer-backend.h"
+#include "screen-capture.h"
 #include "../sdm-service/sdm_display_connect.h"
 #include "../sdm-service/compositor-sdm-output.h"
 
@@ -562,14 +563,48 @@ output_repaint(struct weston_output *output_base,
 	return 0;
 }
 
+static void
+do_screen_capture(struct screen_capture *screen_cap,
+		pixman_region32_t *damage)
+{
+	struct drm_backend *backend = screen_cap->compositor->backend;
+	struct screen_capture_buffer *cap_buf = screen_cap->next;
+
+	/*
+	 * Decrease the attached refcnt after increasing composition refcnt to
+	 * avoid releasing buffer in advance
+	 */
+	weston_buffer_reference(&screen_cap->buf_ref, cap_buf->buffer);
+	weston_buffer_reference(&cap_buf->buf_ref, NULL);
+
+	if (screen_cap->fallback_gpu) {
+		screen_cap->compositor->renderer->capture_screen(screen_cap->virtual_output,
+														 cap_buf->buffer, damage);
+
+		/* Release the buffer once GPU composition is completed */
+		weston_buffer_reference(&screen_cap->buf_ref, NULL);
+
+		free(cap_buf);
+		screen_cap->next = NULL;
+		screen_cap->view = NULL;
+	} else {
+		output_repaint(screen_cap->virtual_output, damage, true);
+	}
+}
+
 static int
 drm_output_repaint(struct weston_output *output_base,
 		pixman_region32_t *damage)
 {
 	struct drm_backend *backend =
 			(struct drm_backend *)output_base->compositor->backend;
+	struct screen_capture *screen_cap = backend->screen_cap;
 
 	output_repaint(output_base, damage, false);
+
+	/* Do output repaint for virtual output. */
+	if (is_capture_ready(screen_cap, output_base) && screen_cap->next)
+		do_screen_capture(screen_cap, damage);
 
 	return 0;
 }
@@ -836,6 +871,18 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
 				es->keep_buffer = false;
 		}
 
+		/* Skip the screen capture view as it's not used for display */
+		if (is_screen_capture_view(ev)) {
+			/* surface of screen capture don't need to keep its buffer, it
+			 * keeps in screencapture attached_buf_list. screen_capture_attach
+			 * increase the buffer refcount and do_screen_capture decrease the
+			 * buffer refcount.
+			 */
+			es->keep_buffer = false;
+			continue;
+		}
+
+
 		/* Skip view that doesn't belong to the output, no need to increase overhead for SDM */
 		if (!(ev->output_mask & (1u << output->base.id))) {
 			if (es->keep_buffer == false)
@@ -919,11 +966,42 @@ drm_assign_planes(struct weston_output *output_base)
 {
 	struct drm_backend *b =
 		(struct drm_backend *)output_base->compositor->backend;
+	struct screen_capture *screen_cap = b->screen_cap;
 	bool has_GPU_composition = false;
 
 	/* Do assign planes for normal output */
 	has_GPU_composition = assign_planes(output_base, false);
 	output_base->need_gpu_composition = has_GPU_composition;
+
+	/*
+	 * Do assign planes for virtual output. If GPU composition already happens,
+	 * no need to check if display WB2 composition can work again as the HW pipe
+	 * resource is already stressed.
+	 * If the last attached buffer has not been consumed yet, skip this commit
+	 * until it's consumed to guarantee each client buffer has content update.
+	 */
+	if (is_capture_ready(screen_cap, output_base) &&
+		!wl_list_empty(&screen_cap->attached_buf_list) &&
+		!screen_cap->next) {
+		/* Pick the first entry in the attached list */
+		screen_cap->next = container_of(screen_cap->attached_buf_list.next,
+									struct screen_capture_buffer, link);
+		wl_list_remove(&screen_cap->next->link);
+
+		if (!has_GPU_composition) {
+			struct screen_capture_buffer *cap_buf = NULL;
+			struct drm_output *virtual_output = (struct drm_output *)screen_cap->virtual_output;
+
+			/* Some settings of mirror output may be changed here, need to update them
+			 * to virtual output as they will be used by SDM and GPU composition. */
+			prepare_virtual_output(virtual_output, output_base);
+
+			/* TODO: Update output buffer */
+			screen_cap->fallback_gpu = assign_planes(virtual_output, true);
+		} else {
+			screen_cap->fallback_gpu = true;
+		}
+	}
 
 	return;
 }
@@ -2682,6 +2760,10 @@ drm_backend_create(struct weston_compositor *compositor,
 			weston_log("Error: initializing gbm_buffer_backend_setup "
 					"support failed.\n");
 	}
+
+	if (screen_capture_setup(compositor) < 0)
+		weston_log("Error: initializing creen_capture_setup "
+				"support failed.\n");
 
 	compositor->backend = &b->base;
 	ret = weston_plugin_api_register(compositor, WESTON_DRM_OUTPUT_API_NAME,

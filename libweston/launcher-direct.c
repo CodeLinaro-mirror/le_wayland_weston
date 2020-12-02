@@ -227,6 +227,7 @@ launcher_direct_open(struct weston_launcher *launcher_base, const char *path, in
 	int fd;
 
 	fd = open(path, flags | O_CLOEXEC);
+
 	if (fd == -1)
 		return -1;
 

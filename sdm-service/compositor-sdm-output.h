@@ -84,6 +84,7 @@ extern "C" {
 #include "backend.h"
 #include "linux-dmabuf.h"
 #include "gbm-buffer-backend.h"
+#include "screen-capture.h"
 #ifdef __cplusplus
 }
 #endif
@@ -117,6 +118,9 @@ struct drm_backend {
   //TODO(user): these are not required. Need to remove
   uint32_t min_width, max_width;
   uint32_t min_height, max_height;
+
+  /* Screen capture data */
+  struct screen_capture *screen_cap;
 };
 
 struct drm_edid {

@@ -27,6 +27,8 @@ srcs_drm = [
 	gbm_buffer_backend_server_protocol_h,
 	gbm_buffer_backend_protocol_c,
 	gbm_buffer_backend_server_protocol_h,
+	screen_capture_protocol_c,
+	screen_capture_server_protocol_h,
 	presentation_time_server_protocol_h,
 ]
 
