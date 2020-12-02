@@ -905,6 +905,10 @@ struct weston_renderer {
 				    int src_x, int src_y,
 				    int width, int height);
 
+	/** See weston_compositor_import_gbm_buffer() */
+	bool (*import_gbm_buffer)(struct weston_compositor *ec,
+			          struct gbm_buffer *buffer);
+
 	/** See weston_compositor_import_dmabuf() */
 	bool (*import_dmabuf)(struct weston_compositor *ec,
 			      struct linux_dmabuf_buffer *buffer);

@@ -81,6 +81,10 @@ weston_compositor_import_dmabuf(struct weston_compositor *compositor,
 				struct linux_dmabuf_buffer *buffer);
 
 bool
+weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
+						struct gbm_buffer *buffer);
+
+bool
 weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
 					struct linux_dmabuf_buffer *buffer);
 

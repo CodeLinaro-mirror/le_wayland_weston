@@ -58,6 +58,7 @@
 #include <libweston/libweston.h>
 #include <libweston/weston-log.h>
 #include "linux-dmabuf.h"
+#include "gbm-buffer-backend.h"
 #include "viewporter-server-protocol.h"
 #include "presentation-time-server-protocol.h"
 #include "xdg-output-unstable-v1-server-protocol.h"
@@ -7590,6 +7591,31 @@ weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
 		return false;
 
 	return backend->can_scanout_dmabuf(compositor, buffer);
+}
+
+/** Import gbmbuf buffer into current renderer
+ *
+ * \param compositor
+ * \param buffer the gbmbuf buffer to import
+ * \return true on usable buffers, false otherwise
+ *
+ * This function tests that the gbm_buffer is usable
+ * for the current renderer. Returns false on unusable buffers. Usually
+ * usability is tested by importing the gbmbuf for composition.
+ *
+ * This hook is also used for detecting if the renderer supports
+ * gbmbuf at all. If the renderer hook is NULL, dmabufs are not
+ * supported.
+ * */
+WL_EXPORT bool
+weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
+									struct gbm_buffer *buffer)
+{
+	struct weston_renderer *renderer;
+	renderer = compositor->renderer;
+	if (renderer->import_gbm_buffer == NULL)
+		return false;
+	return renderer->import_gbm_buffer(compositor, buffer);
 }
 
 WL_EXPORT void

@@ -83,6 +83,7 @@ extern "C" {
 #include "libweston-internal.h"
 #include "backend.h"
 #include "linux-dmabuf.h"
+#include "gbm-buffer-backend.h"
 #ifdef __cplusplus
 }
 #endif

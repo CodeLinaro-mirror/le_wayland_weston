@@ -85,6 +85,7 @@
 #include "vaapi-recorder.h"
 #include "presentation-time-server-protocol.h"
 #include "linux-dmabuf.h"
+#include "gbm-buffer-backend.h"
 #include "../sdm-service/sdm_display_connect.h"
 #include "../sdm-service/compositor-sdm-output.h"
 
@@ -858,6 +859,9 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
 
 		output->view_count++;
 		pixman_region32_union(&above_opaque, &above_opaque, &ev->transform.opaque);
+		/* if it's yuv buffer and alpha is 1.0, its whole boundingbox is the opaque region*/
+		if ((es->buffer_ref.buffer) && is_yuv_buffer(es->buffer_ref.buffer) && ev->alpha == 1.0)
+			pixman_region32_union(&above_opaque, &above_opaque, &ev->transform.boundingbox);
 	}
 
 	/*
@@ -2667,6 +2671,15 @@ drm_backend_create(struct weston_compositor *compositor,
 	if (compositor->renderer->import_dmabuf) {
 		if (linux_dmabuf_setup(compositor) < 0)
 			weston_log("Error: initializing dmabuf "
+					"support failed.\n");
+	}
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buf import=%p",
+						   compositor->renderer->import_gbm_buffer);
+
+	if (compositor->renderer->import_gbm_buffer) {
+		if (gbm_buffer_backend_setup(compositor) < 0)
+			weston_log("Error: initializing gbm_buffer_backend_setup "
 					"support failed.\n");
 	}
 

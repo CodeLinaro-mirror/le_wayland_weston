@@ -8,6 +8,7 @@ install_data(
 	[
 		'weston-debug.xml',
 		'weston-direct-display.xml',
+		'gbm-buffer-backend.xml',
 		'pll.xml',
 	],
 	install_dir: join_paths(dir_data, dir_protocol_libweston)
@@ -35,6 +36,7 @@ generated_protocols = [
 	[ 'weston-test', 'internal' ],
 	[ 'weston-touch-calibration', 'internal' ],
 	[ 'weston-direct-display', 'internal' ],
+	[ 'gbm-buffer-backend', 'internal' ],
 	[ 'pll', 'internal' ],
 	[ 'xdg-output', 'v1' ],
 	[ 'xdg-shell', 'v6' ],

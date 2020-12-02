@@ -612,6 +612,17 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
         .format = attributes->format
       };
       bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
+    } else if ((gbm_buf = gbm_buffer_get(es->buffer_ref.buffer->resource))) {
+      struct gbm_buf_info gbm_bufinfo = {
+        .fd           = gbm_buf->fd,
+        .metadata_fd  = gbm_buf->metadata_fd,
+        .width        = gbm_buf->width,
+        .height       = gbm_buf->height,
+        .format       = gbm_buf->format
+      };
+      bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
+                         &gbm_bufinfo,
+                         GBM_BO_USE_SCANOUT);
     } else {
       bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
                          wl_resource_get_user_data(es->buffer_ref.buffer->resource),
