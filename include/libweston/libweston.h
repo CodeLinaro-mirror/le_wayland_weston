@@ -904,6 +904,10 @@ struct weston_renderer {
 	bool (*import_dmabuf)(struct weston_compositor *ec,
 			      struct linux_dmabuf_buffer *buffer);
 
+	/** See weston_compositor_import_gbmbuf() */
+	bool (*import_gbm_buffer)(struct weston_compositor *ec,
+			      struct gbm_buffer *buffer);
+
 	/** On error sets num_formats to zero */
 	void (*query_dmabuf_formats)(struct weston_compositor *ec,
 				int **formats, int *num_formats);

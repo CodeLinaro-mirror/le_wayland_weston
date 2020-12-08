@@ -144,6 +144,7 @@ dep_libdl = cc.find_library('dl')
 dep_libdrm = dependency('libdrm', version: '>= 2.4.86')
 dep_libdrm_headers = dep_libdrm.partial_dependency(compile_args: true)
 dep_threads = dependency('threads')
+dep_gbm = dependency('gbm')
 
 subdir('include')
 subdir('protocol')

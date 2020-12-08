@@ -42,6 +42,8 @@
 #include "shared/helpers.h"
 #include "drm-internal.h"
 #include "linux-dmabuf.h"
+#include <gbm_priv.h>
+#include "../../src/gbm-buffer-backend.h"
 
 static void
 drm_fb_destroy(struct drm_fb *fb)
@@ -387,6 +389,8 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 		   bool is_opaque, enum drm_fb_type type)
 {
 	struct drm_fb *fb = gbm_bo_get_user_data(bo);
+	int j, ret;
+	generic_buf_layout_t buf_lyt;
 #ifdef HAVE_GBM_MODIFIERS
 	int i;
 #endif
@@ -419,10 +423,24 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 		fb->offsets[i] = gbm_bo_get_offset(bo, i);
 	}
 #else
-	fb->num_planes = 1;
-	fb->strides[0] = gbm_bo_get_stride(bo);
-	fb->handles[0] = gbm_bo_get_handle(bo).u32;
-	fb->modifier = DRM_FORMAT_MOD_INVALID;
+	fb->num_planes = gbm_bo_get_plane_count(bo);
+        if (fb->num_planes ==1) {
+	        fb->strides[0] = gbm_bo_get_stride(bo);
+	        fb->handles[0] = gbm_bo_get_handle(bo).u32;
+        } else {
+                if (gbm_bo_get_format(bo) == GBM_FORMAT_NV12) {
+			ret=gbm_perform(GBM_PERFORM_GET_YUV_PLANE_INFO,bo,&buf_lyt);
+                        if(ret == GBM_ERROR_NONE){
+				printf("GET YUV Info success in drm_fb_get_from_bo\n");
+				fb->num_planes = buf_lyt.num_planes;
+				for (j = 0; j < fb->num_planes; j++) {
+				    fb->strides[j] = buf_lyt.planes[j].stride;
+				    fb->handles[j] = gbm_bo_get_handle(bo).u32;;
+			        }
+                        }
+                }
+	}
+        fb->modifier = DRM_FORMAT_MOD_INVALID;
 #endif
 
 	if (!fb->format) {
@@ -532,6 +550,8 @@ drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev)
 	bool is_opaque = weston_view_is_opaque(ev, &ev->transform.boundingbox);
 	struct linux_dmabuf_buffer *dmabuf;
 	struct drm_fb *fb;
+	struct gbm_bo *bo;
+	struct gbm_buffer *gbm_buf;
 
 	if (ev->alpha != 1.0f)
 		return NULL;
@@ -553,24 +573,31 @@ drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev)
 	if (!b->gbm)
 		return NULL;
 
-	dmabuf = linux_dmabuf_buffer_get(buffer->resource);
-	if (dmabuf) {
+        if (dmabuf = linux_dmabuf_buffer_get(buffer->resource)) {
 		fb = drm_fb_get_from_dmabuf(dmabuf, b, is_opaque);
 		if (!fb)
 			return NULL;
-	} else {
-		struct gbm_bo *bo;
-
+	} else if (gbm_buf = gbm_buffer_get(buffer->resource)) {
+                struct gbm_buf_info gbm_bufinfo = {
+                        .fd = gbm_buf->fd,
+                        .metadata_fd = gbm_buf->metadata_fd,
+                        .width = gbm_buf->width,
+                        .height = gbm_buf->height,
+                        .format = gbm_buf->format
+                };
+		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
+				   &gbm_bufinfo, GBM_BO_USE_SCANOUT);
+        } else {
 		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_WL_BUFFER,
 				   buffer->resource, GBM_BO_USE_SCANOUT);
-		if (!bo)
-			return NULL;
+        }
+        if (!bo)
+		return NULL;
 
-		fb = drm_fb_get_from_bo(bo, b, is_opaque, BUFFER_CLIENT);
-		if (!fb) {
-			gbm_bo_destroy(bo);
-			return NULL;
-		}
+	fb = drm_fb_get_from_bo(bo, b, is_opaque, BUFFER_CLIENT);
+	if (!fb) {
+		gbm_bo_destroy(bo);
+		return NULL;
 	}
 
 	drm_debug(b, "\t\t\t[view] view %p format: %s\n",

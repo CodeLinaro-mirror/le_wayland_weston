@@ -5,7 +5,8 @@ deps_libweston = [
 	dep_libdl,
 	dep_libdrm_headers,
 	dep_xkbcommon,
-	dep_matrix_c
+	dep_matrix_c,
+        dep_gbm
 ]
 srcs_libweston = [
 	git_version_h,
@@ -33,6 +34,7 @@ srcs_libweston = [
 	'weston-log.c',
 	'weston-direct-display.c',
 	'zoom.c',
+	'../src/gbm-buffer-backend.c',
 	linux_dmabuf_unstable_v1_protocol_c,
 	linux_dmabuf_unstable_v1_server_protocol_h,
 	linux_explicit_synchronization_unstable_v1_protocol_c,
@@ -65,6 +67,8 @@ srcs_libweston = [
 	weston_debug_server_protocol_h,
 	weston_direct_display_protocol_c,
 	weston_direct_display_server_protocol_h,
+        gbm_buffer_backend_protocol_c,
+        gbm_buffer_backend_server_protocol_h,
 ]
 
 if get_option('renderer-gl')
