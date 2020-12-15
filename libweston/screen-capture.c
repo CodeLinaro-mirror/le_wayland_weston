@@ -34,7 +34,6 @@
 #include <sys/poll.h>
 #include <libweston/libweston.h>
 #include "gbm_priv.h"
-#include "compositor.h"
 #include "gbm-buffer-backend.h"
 #include "linux-dmabuf.h"
 #include "screen-capture.h"

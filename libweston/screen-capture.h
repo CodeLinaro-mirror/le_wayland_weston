@@ -30,7 +30,7 @@
 #ifndef WESTON_SCREEN_CAPTURE_H
 #define WESTON_SCREEN_CAPTURE_H
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 
 #define SC_LOG_FATAL    (0)
 #define SC_LOG_ERR      (1)
