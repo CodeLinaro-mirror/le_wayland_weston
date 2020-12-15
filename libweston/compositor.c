@@ -100,7 +100,7 @@
  * \defgroup compositor Compositor
  */
 
-#define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
+#define DEFAULT_REPAINT_WINDOW 15 /* milliseconds */
 
 struct gbm_buffer_backend_c_interface *gbm_buffer_backend;
 
