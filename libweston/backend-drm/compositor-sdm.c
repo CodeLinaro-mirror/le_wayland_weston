@@ -1968,7 +1968,7 @@ edid_parse(struct drm_edid *edid, const uint8_t *data, size_t length)
 	serial_number += (uint32_t) data[EDID_OFFSET_SERIAL + 2] * 0x10000;
 	serial_number += (uint32_t) data[EDID_OFFSET_SERIAL + 3] * 0x1000000;
 	if (serial_number > 0)
-		snprintf(edid->serial_number, "%lu", (unsigned long) serial_number);
+		snprintf(edid->serial_number, sizeof(edid->serial_number), "%lu", (unsigned long) serial_number);
 
 	/* parse EDID data */
 	for (i = EDID_OFFSET_DATA_BLOCKS;
