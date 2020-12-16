@@ -291,11 +291,9 @@ egl_image_create(struct gl_renderer *gr, EGLenum target,
 
 	if (img->image == EGL_NO_IMAGE_KHR) {
 		free(img);
-    weston_log("xljun 294 free egl image=0x%lx\n",img);
 		return NULL;
 	}
 
-    weston_log("xljun 298 create egl image=0x%lx\n",img);
 	return img;
 }
 
@@ -323,7 +321,6 @@ egl_image_unref(struct egl_image *image)
 
 	gr->destroy_image(gr->egl_display, image->image);
 	free(image);
-    weston_log("xljun 324 free egl image=0x%lx\n",image);
 
 	return 0;
 }
@@ -2079,7 +2076,6 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	if ((gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
 		(gbmbuf->format == GBM_FORMAT_P010) ||
 		((gbmbuf->format == GBM_FORMAT_NV12) && secure_status)) {
-    weston_log("xljun 2081 image=0x%lx\n",image);
 		return image;
 	}
 	memset(attribs,0,sizeof(EGLint));
@@ -2153,7 +2149,8 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	/* The cache owns one ref. The caller gets another. */
 	image->gbmbuf = gbmbuf;
 	wl_list_insert(&gr->gbmbuf_images, &image->link);
-	gbm_buffer_backend_set_user_data(gbmbuf, egl_image_ref(image),
+	if(!gbmbuf->user_data)
+	    gbm_buffer_backend_set_user_data(gbmbuf, egl_image_ref(image),
 									gl_renderer_destroy_gbm_buffer);
 
 	return image;
@@ -2190,7 +2187,7 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
 
 	int ret=gbm_perform(GBM_PERFORM_GET_YUV_PLANE_INFO,bo,&buf_lyt);
 	if(ret == GBM_ERROR_NONE){
-		printf("GET YUV Info success\n");
+		//printf("GET YUV Info success\n");
 		gbm_buf->num_planes = buf_lyt.num_planes;
 		for(j = 0;j < buf_lyt.num_planes; j++){
 			gbm_buf->offset[j] = buf_lyt.planes[j].offset;

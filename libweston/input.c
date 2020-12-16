@@ -122,6 +122,8 @@ weston_pointer_get_pointer_client(struct weston_pointer *pointer,
 	struct weston_pointer_client *pointer_client;
 
 	wl_list_for_each(pointer_client, &pointer->pointer_clients, link) {
+		if (!pointer_client)
+		    return NULL;
 		if (pointer_client->client == client)
 			return pointer_client;
 	}
