@@ -2065,7 +2065,9 @@ drm_head_create(struct drm_backend *backend, uint32_t connector_id,
 		goto err_alloc;
 
 	name = make_connector_name(connector);
-	if (!name)
+
+	// disable write_back as target dont support it.
+	if (!name || !strcmp(name, "Virtual-1"))
 		goto err_alloc;
 
 	weston_head_init(&head->base, name);
