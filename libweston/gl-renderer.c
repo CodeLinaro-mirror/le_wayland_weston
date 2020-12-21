@@ -2729,6 +2729,8 @@ import_simple_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 			attribs[atti++] = EGL_SAMPLE_RANGE_HINT_EXT;
 			attribs[atti++] = EGL_YUV_FULL_RANGE_EXT;
 			break;
+		case 0:
+			break;
 		default:
 			weston_log("Unsupport GBM_METADATA_COLOR_SPACE:%d\n", colorspace);
 			break;
