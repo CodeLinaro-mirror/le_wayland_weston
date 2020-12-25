@@ -27,7 +27,7 @@
 *    IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 *
-*    Copyright © 2014, 2015 Collabora, Ltd.
+*    Copyright ï¿½ 2014, 2015 Collabora, Ltd.
 *
 *    Permission to use, copy, modify, distribute, and sell this
 *    software and its documentation for any purpose is hereby granted
@@ -55,37 +55,37 @@
 #include <assert.h>
 #include <unistd.h>
 #include <sys/types.h>
-
-#include "compositor.h"
+#include <libweston/libweston.h>
 #include "gbm-buffer-backend.h"
 #include "gbm-buffer-backend-server-protocol.h"
 #include "gbm_priv.h"
+#include "libweston-internal.h"
 
 static void
 gbm_buffer_destroy_params(struct wl_resource *params_resource);
 
 static void
 gbm_buffer_backend_create_params(struct wl_client *client,
-               struct wl_resource *gbmbuf_resource,
-               uint32_t params_id);
+		struct wl_resource *gbmbuf_resource,
+		uint32_t params_id);
 
 static void
 gbm_buffer_backend_create_buffer(struct wl_client *client,
-        struct wl_resource *params_resource,
-        int32_t fd,
-        int32_t metadata_fd,
-        uint32_t width,
-        uint32_t height,
-        uint32_t format,
-        uint32_t flags);
+		struct wl_resource *params_resource,
+		int32_t fd,
+		int32_t metadata_fd,
+		uint32_t width,
+		uint32_t height,
+		uint32_t format,
+		uint32_t flags);
 
 static void
 gbm_buffer_backend_destroy(struct wl_client *client,
-    struct wl_resource *resource);
+		struct wl_resource *resource);
 
 static const struct gbm_buffer_params_interface gbm_buffer_params_implementation = {
-    gbm_buffer_backend_destroy,
-    gbm_buffer_backend_create_buffer
+	gbm_buffer_backend_destroy,
+	gbm_buffer_backend_create_buffer
 };
 
 static void
@@ -93,8 +93,8 @@ gbm_buffer_destroy(struct gbm_buffer *buffer)
 {
   // Destroy gbm bo if it is still valid
   if (buffer->bo) {
-    gbm_bo_destroy(buffer->bo);
-    buffer->bo = NULL;
+	gbm_bo_destroy(buffer->bo);
+	buffer->bo = NULL;
   }
 
   free(buffer);
@@ -103,111 +103,111 @@ gbm_buffer_destroy(struct gbm_buffer *buffer)
 
 static void
 gbm_wl_buffer_destroy(struct wl_client *client,
-    struct wl_resource *resource)
+		struct wl_resource *resource)
 {
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_wl_buffer_destroy::Invoked\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_wl_buffer_destroy::Invoked\n");
 
-    wl_resource_destroy(resource);
+	wl_resource_destroy(resource);
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_wl_buffer_destroy::Exited\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_wl_buffer_destroy::Exited\n");
 }
 
 static const struct wl_buffer_interface gbm_buffer_implementation = {
-    gbm_wl_buffer_destroy
+	gbm_wl_buffer_destroy
 };
 
 static void
 gbm_buffer_destroy_params(struct wl_resource *params_resource)
 {
-    struct gbm_buffer *buffer;
+	struct gbm_buffer *buffer;
 
-    buffer = wl_resource_get_user_data(params_resource);
+	buffer = wl_resource_get_user_data(params_resource);
 
-    if (!buffer)
-        return;
+	if (!buffer)
+		return;
 
-    gbm_buffer_destroy(buffer);
+	gbm_buffer_destroy(buffer);
 }
 
 static void
 gbm_buffer_backend_create_params(struct wl_client *client,
-               struct wl_resource *gbmbuf_resource,
-               uint32_t params_id)
+		struct wl_resource *gbmbuf_resource,
+		uint32_t params_id)
 {
-    struct weston_compositor *compositor;
-    struct gbm_buffer *buffer;
-    uint32_t version;
+	struct weston_compositor *compositor;
+	struct gbm_buffer *buffer;
+	uint32_t version;
 
-    version = wl_resource_get_version(gbmbuf_resource);
-    compositor = wl_resource_get_user_data(gbmbuf_resource);
+	version = wl_resource_get_version(gbmbuf_resource);
+	compositor = wl_resource_get_user_data(gbmbuf_resource);
 
-    buffer = zalloc(sizeof *buffer);
-    if (!buffer)
-        goto err_out;
+	buffer = zalloc(sizeof *buffer);
+	if (!buffer)
+		goto err_out;
 
-    buffer->fd = -1;
-    buffer->metadata_fd = -1;
-    buffer->compositor = compositor;
-    buffer->params_resource =
-        wl_resource_create(client,
-                   &gbm_buffer_params_interface,
-                   version, params_id);
-    if (!buffer->params_resource)
-        goto err_dealloc;
+	buffer->fd = -1;
+	buffer->metadata_fd = -1;
+	buffer->compositor = compositor;
+	buffer->params_resource =
+		wl_resource_create(client,
+				&gbm_buffer_params_interface,
+				version, params_id);
+	if (!buffer->params_resource)
+		goto err_dealloc;
 
-    wl_resource_set_implementation(buffer->params_resource,
-                       &gbm_buffer_params_implementation,
-                       buffer, gbm_buffer_destroy_params);
+	wl_resource_set_implementation(buffer->params_resource,
+			&gbm_buffer_params_implementation,
+			buffer, gbm_buffer_destroy_params);
 
-    return;
+	return;
 
 err_dealloc:
-    free(buffer);
+	free(buffer);
 
 err_out:
-    wl_resource_post_no_memory(gbmbuf_resource);
+	wl_resource_post_no_memory(gbmbuf_resource);
 }
 
 WL_EXPORT struct gbm_buffer *
 gbm_buffer_get(struct wl_resource *resource)
 {
-    struct gbm_buffer *buffer;
+	struct gbm_buffer *buffer;
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_get::Invoked\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_get::Invoked\n");
 
-    if (!resource)
-        return NULL;
+	if (!resource)
+		return NULL;
 
-    if (!wl_resource_instance_of(resource, &wl_buffer_interface,
-                     &gbm_buffer_implementation))
-        return NULL;
+	if (!wl_resource_instance_of(resource, &wl_buffer_interface,
+					 &gbm_buffer_implementation))
+		return NULL;
 
-    buffer = wl_resource_get_user_data(resource);
-    assert(buffer);
-    assert(buffer->buffer_resource == resource);
+	buffer = wl_resource_get_user_data(resource);
+	assert(buffer);
+	assert(buffer->buffer_resource == resource);
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_get::Exited\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_get::Exited\n");
 
-    return buffer;
+	return buffer;
 }
 
 WL_EXPORT bool is_yuv_format(uint32_t fmt)
 {
-    bool is_yuv = false;
+	bool is_yuv = false;
 
-    switch (fmt) {
-        case GBM_FORMAT_NV12:
-        case GBM_FORMAT_UYVY:
-        case GBM_FORMAT_YCbCr_420_TP10_UBWC:
-        case GBM_FORMAT_YCbCr_420_P010_UBWC:
-            is_yuv = true;
-            break;
-        default:
-            is_yuv = false;
-            break;
-    }
+	switch (fmt) {
+		case GBM_FORMAT_NV12:
+		case GBM_FORMAT_UYVY:
+		case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+		case GBM_FORMAT_YCbCr_420_P010_UBWC:
+			is_yuv = true;
+			break;
+		default:
+			is_yuv = false;
+			break;
+	}
 
-    return is_yuv;
+	return is_yuv;
 }
 
 WL_EXPORT bool is_yuv_buffer(struct weston_buffer *buffer)
@@ -225,137 +225,137 @@ WL_EXPORT bool is_yuv_buffer(struct weston_buffer *buffer)
 static void
 destroy_gbm_buffer(struct wl_resource *resource)
 {
-    struct gbm_buffer *buffer;
+	struct gbm_buffer *buffer;
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"destroy_gbm_buffer::Invoked\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"destroy_gbm_buffer::Invoked\n");
 
 
-    buffer = wl_resource_get_user_data(resource);
-    assert(buffer->buffer_resource == resource);
-    assert(!buffer->params_resource);
+	buffer = wl_resource_get_user_data(resource);
+	assert(buffer->buffer_resource == resource);
+	assert(!buffer->params_resource);
 
-    if (buffer->user_data_destroy_func)
-        buffer->user_data_destroy_func(buffer);
+	if (buffer->user_data_destroy_func)
+		buffer->user_data_destroy_func(buffer);
 
-    gbm_buffer_destroy(buffer);
+	gbm_buffer_destroy(buffer);
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"destroy_gbm_buffer::Exited\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"destroy_gbm_buffer::Exited\n");
 }
 
 static void
 gbm_buffer_backend_create_buffer(struct wl_client *client,
-        struct wl_resource *params_resource,
-        int32_t fd,
-        int32_t metadata_fd,
-        uint32_t width,
-        uint32_t height,
-        uint32_t format,
-        uint32_t flags)
+		struct wl_resource *params_resource,
+		int32_t fd,
+		int32_t metadata_fd,
+		uint32_t width,
+		uint32_t height,
+		uint32_t format,
+		uint32_t flags)
 {
-    struct gbm_buffer *buffer;
-    bool ret = true;
+	struct gbm_buffer *buffer;
+	bool ret = true;
 
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Invoked\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Invoked\n");
 
-    buffer = wl_resource_get_user_data(params_resource);
+	buffer = wl_resource_get_user_data(params_resource);
 
-    if (!buffer) {
-        weston_log("gbm_buffer_backend_create_buffer::buffer already used\n");
-        close(fd);
-        close(metadata_fd);
-        return;
-    }
+	if (!buffer) {
+		weston_log("gbm_buffer_backend_create_buffer::buffer already used\n");
+		close(fd);
+		close(metadata_fd);
+		return;
+	}
 
-    assert(buffer->params_resource == params_resource);
-    assert(!buffer->buffer_resource);
+	assert(buffer->params_resource == params_resource);
+	assert(!buffer->buffer_resource);
 
-    wl_resource_set_user_data(buffer->params_resource, NULL);
-    buffer->params_resource = NULL;
+	wl_resource_set_user_data(buffer->params_resource, NULL);
+	buffer->params_resource = NULL;
 
-    buffer->fd = fd;
-    buffer->metadata_fd = metadata_fd;
-    buffer->width  = width;
-    buffer->height = height;
-    buffer->format = format;
-    buffer->flags  = flags;
+	buffer->fd = fd;
+	buffer->metadata_fd = metadata_fd;
+	buffer->width  = width;
+	buffer->height = height;
+	buffer->format = format;
+	buffer->flags  = flags;
 
-    ret = weston_compositor_import_gbm_buffer(buffer->compositor, buffer);
+	ret = weston_compositor_import_gbm_buffer(buffer->compositor, buffer);
 
-    if (ret == false) {
-      goto err_failed;
-    }
+	if (ret == false) {
+	  goto err_failed;
+	}
 
-    buffer->buffer_resource = wl_resource_create(client,
-                    &wl_buffer_interface,
-                    1, 0);
-    if (!buffer->buffer_resource){
-        wl_resource_post_no_memory(params_resource);
-        goto err_buffer;
-    }
+	buffer->buffer_resource = wl_resource_create(client,
+										&wl_buffer_interface,
+										1, 0);
+	if (!buffer->buffer_resource){
+		wl_resource_post_no_memory(params_resource);
+		goto err_buffer;
+	}
 
-    wl_resource_set_implementation(buffer->buffer_resource,
-                &gbm_buffer_implementation,
-                buffer, destroy_gbm_buffer);
+	wl_resource_set_implementation(buffer->buffer_resource,
+			&gbm_buffer_implementation,
+			buffer, destroy_gbm_buffer);
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Exited- gracefully\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Exited- gracefully\n");
 
-    gbm_buffer_params_send_created(params_resource,
-                      buffer->buffer_resource);
+	gbm_buffer_params_send_created(params_resource,
+			buffer->buffer_resource);
 
-    return;
+	return;
 
 err_buffer:
-    if (buffer->user_data_destroy_func)
-        buffer->user_data_destroy_func(buffer);
+	if (buffer->user_data_destroy_func)
+		buffer->user_data_destroy_func(buffer);
 
 err_failed:
-    gbm_buffer_params_send_failed(params_resource);
-    gbm_buffer_destroy(buffer);
+	gbm_buffer_params_send_failed(params_resource);
+	gbm_buffer_destroy(buffer);
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Exited with Error\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Exited with Error\n");
 }
 
 
 static void
 gbm_buffer_backend_destroy(struct wl_client *client,
-    struct wl_resource *resource)
+	struct wl_resource *resource)
 {
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_destroy::Invoked\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_destroy::Invoked\n");
 
 
-    wl_resource_destroy(resource);
+	wl_resource_destroy(resource);
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_destroy::Invoked\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_destroy::Invoked\n");
 }
 
 static const struct gbm_buffer_backend_interface gbm_buffer_backend_implementation = {
-    gbm_buffer_backend_destroy,
-    gbm_buffer_backend_create_params
+	gbm_buffer_backend_destroy,
+	gbm_buffer_backend_create_params
 };
 
 static void
 bind_gbm_buffer_backend(struct wl_client *client,
-          void *data, uint32_t version, uint32_t id)
+		void *data, uint32_t version, uint32_t id)
 {
-    struct weston_compositor *compositor = data;
-    struct wl_resource *resource;
+	struct weston_compositor *compositor = data;
+	struct wl_resource *resource;
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"bind_gbm_buffer_backend::Invoked\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"bind_gbm_buffer_backend::Invoked\n");
 
-    resource = wl_resource_create(client, &gbm_buffer_backend_interface,
-                    version, id);
-    if (resource == NULL) {
-        wl_client_post_no_memory(client);
-        return;
-    }
+	resource = wl_resource_create(client, &gbm_buffer_backend_interface,
+						version, id);
+	if (resource == NULL) {
+		wl_client_post_no_memory(client);
+		return;
+	}
 
-    wl_resource_set_implementation(resource,
-            &gbm_buffer_backend_implementation,
-            compositor, NULL);
+	wl_resource_set_implementation(resource,
+			&gbm_buffer_backend_implementation,
+			compositor, NULL);
 
-    GBM_PROTOCOL_LOG(LOG_DBG,"bind_gbm_buffer_backend::Exited\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"bind_gbm_buffer_backend::Exited\n");
 }
 
 /** Advertise gbm_buffer_backend support
@@ -372,15 +372,15 @@ bind_gbm_buffer_backend(struct wl_client *client,
 WL_EXPORT int
 gbm_buffer_backend_setup(struct weston_compositor *compositor)
 {
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_setup::Invoked\n");
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_setup::Invoked\n");
 
-    if (!wl_global_create(compositor->wl_display,
-                &gbm_buffer_backend_interface, 1,
-                compositor, bind_gbm_buffer_backend))
-        return -1;
-    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_setup::Exited\n");
+	if (!wl_global_create(compositor->wl_display,
+				&gbm_buffer_backend_interface, 1,
+				compositor, bind_gbm_buffer_backend))
+		return -1;
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_setup::Exited\n");
 
-    return 0;
+	return 0;
 }
 
 /** Set renderer-private data
@@ -402,13 +402,13 @@ gbm_buffer_backend_setup(struct weston_compositor *compositor)
  */
 WL_EXPORT void
 gbm_buffer_backend_set_user_data(struct gbm_buffer *buffer,
-                  void *data,
-                  gbm_buffer_user_data_destroy_func func)
+		void *data,
+		gbm_buffer_user_data_destroy_func func)
 {
-    assert(data == NULL || buffer->user_data == NULL);
+	assert(data == NULL || buffer->user_data == NULL);
 
-    buffer->user_data = data;
-    buffer->user_data_destroy_func = func;
+	buffer->user_data = data;
+	buffer->user_data_destroy_func = func;
 }
 
 /** Get renderer-private data
@@ -423,7 +423,7 @@ gbm_buffer_backend_set_user_data(struct gbm_buffer *buffer,
 WL_EXPORT void *
 gbm_buffer_backend_get_user_data(struct gbm_buffer *buffer)
 {
-    return buffer->user_data;
+	return buffer->user_data;
 }
 
 /** Resolve an internal compositor error by disconnecting the client.
@@ -444,20 +444,20 @@ gbm_buffer_backend_get_user_data(struct gbm_buffer *buffer)
  */
 WL_EXPORT void
 gbm_buffer_send_server_error(struct gbm_buffer *buffer,
-                      const char *msg)
+		const char *msg)
 {
-    struct wl_client *client;
-    struct wl_resource *display_resource;
-    uint32_t id;
+	struct wl_client *client;
+	struct wl_resource *display_resource;
+	uint32_t id;
 
-    assert(buffer->buffer_resource);
-    id = wl_resource_get_id(buffer->buffer_resource);
-    client = wl_resource_get_client(buffer->buffer_resource);
-    display_resource = wl_client_get_object(client, 1);
+	assert(buffer->buffer_resource);
+	id = wl_resource_get_id(buffer->buffer_resource);
+	client = wl_resource_get_client(buffer->buffer_resource);
+	display_resource = wl_client_get_object(client, 1);
 
-    assert(display_resource);
-    wl_resource_post_error(display_resource,
-                   WL_DISPLAY_ERROR_INVALID_OBJECT,
-                   "gbmbuf server error with "
-                   "wl_buffer@%u: %s", id, msg);
+	assert(display_resource);
+	wl_resource_post_error(display_resource,
+			WL_DISPLAY_ERROR_INVALID_OBJECT,
+			"gbmbuf server error with "
+			"wl_buffer@%u: %s", id, msg);
 }

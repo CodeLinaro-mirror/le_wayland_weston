@@ -27,9 +27,9 @@
 
 #include <assert.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 #include "compositor/weston.h"
-#include "plugin-registry.h"
+#include <libweston/plugin-registry.h>
 
 static void
 dummy_func(void)
@@ -85,7 +85,7 @@ runtime_tests(void *data)
 	api = weston_plugin_api_get(compositor, MY_API_NAME, sz);
 	assert(api && api->func2 == dummy_func);
 
-	wl_display_terminate(compositor->wl_display);
+	weston_compositor_exit(compositor);
 }
 
 WL_EXPORT int

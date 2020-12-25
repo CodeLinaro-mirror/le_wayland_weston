@@ -30,7 +30,7 @@
 #ifndef WESTON_SCREEN_CAPTURE_H
 #define WESTON_SCREEN_CAPTURE_H
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 
 #define SC_LOG_FATAL    (0)
 #define SC_LOG_ERR      (1)
@@ -46,45 +46,45 @@
 #define SC_DBG_STRING    "SC_DBG::"
 
 #define SC_PROTOCOL_LOG(level, ...) do {  \
-                            if ((level) <= SC_MAX_DBG_LEVEL) { \
-                                char *prefix = NULL; \
-                                if(level==SC_LOG_FATAL) \
-                                  prefix = SC_FATAL_STRING; \
-                                if(level==SC_LOG_ERR) \
-                                  prefix = SC_ERR_STRING; \
-                                if(level==SC_LOG_WARN) \
-                                  prefix = SC_WARN_STRING; \
-                                if(level==SC_LOG_INFO) \
-                                  prefix = SC_INFO_STRING; \
-                                if(level==SC_LOG_DBG) \
-                                  prefix = SC_DBG_STRING; \
-                                weston_log("%s%s(%d)::%s", prefix, __func__, __LINE__, __VA_ARGS__); \
-                            } \
-                        } while (0)
+										if ((level) <= SC_MAX_DBG_LEVEL) { \
+											char *prefix = NULL; \
+											if(level==SC_LOG_FATAL) \
+												prefix = SC_FATAL_STRING; \
+											if(level==SC_LOG_ERR) \
+												prefix = SC_ERR_STRING; \
+											if(level==SC_LOG_WARN) \
+												prefix = SC_WARN_STRING; \
+											if(level==SC_LOG_INFO) \
+												prefix = SC_INFO_STRING; \
+											if(level==SC_LOG_DBG) \
+												prefix = SC_DBG_STRING; \
+											weston_log("%s%s(%d)::%s", prefix, __func__, __LINE__, __VA_ARGS__); \
+										} \
+									} while (0)
 
 
 struct screen_capture {
-    uint32_t width;
-    uint32_t height;
-    struct weston_compositor *compositor;
-    uint32_t mirror_output_id;
-    void *virtual_output; /* point to drm_output to avoid nested definition */
-    bool enabled;
-    bool fallback_gpu;
-    struct weston_view *view; /* record the view which owns the capture buffer */
+	uint32_t width;
+	uint32_t height;
+	struct weston_compositor *compositor;
+	uint32_t mirror_output_id;
+	void *virtual_output; /* point to drm_output to avoid nested definition */
+	bool enabled;
+	bool fallback_gpu;
+	struct weston_view *view; /* record the view which owns the capture buffer */
 
-    struct wl_list attached_buf_list;
+	struct wl_list attached_buf_list;
 
-    struct weston_buffer_reference buf_ref;
-    struct screen_capture_buffer *current;
-    struct screen_capture_buffer *next;
+	struct weston_buffer_reference buf_ref;
+	struct screen_capture_buffer *current;
+	struct screen_capture_buffer *next;
 };
 
 struct screen_capture_buffer {
-    struct weston_buffer *buffer;
-    int fence_id;
-    struct wl_list link;
-    struct weston_buffer_reference buf_ref;
+	struct weston_buffer *buffer;
+	int fence_id;
+	struct wl_list link;
+	struct weston_buffer_reference buf_ref;
 };
 
 /** Advertise screen capture support
@@ -115,7 +115,6 @@ bool is_screen_capture_buffer(struct weston_buffer *buffer);
 bool is_screen_capture_view(struct weston_view *ev);
 
 void screen_capture_attach(struct weston_compositor *compositor,
-                                    struct weston_buffer *buffer);
+																		struct weston_buffer *buffer);
 
 #endif /* WESTON_SCREEN_CAPTURE_H */
-

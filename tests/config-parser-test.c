@@ -33,7 +33,7 @@
 #include <errno.h>
 #include <unistd.h>
 
-#include "config-parser.h"
+#include <libweston/config-parser.h>
 
 #include "shared/helpers.h"
 #include "zunitc/zunitc.h"
@@ -322,54 +322,45 @@ ZUC_TEST_F(config_test_t1, test009, data)
 
 ZUC_TEST_F(config_test_t1, test010, data)
 {
-	int r, b;
+	int r;
+	bool b;
 	struct weston_config_section *section;
 	struct weston_config *config = data;
 
 	section = weston_config_get_section(config, "bar", NULL, NULL);
-	r = weston_config_section_get_bool(section, "flag", &b, 600);
+	r = weston_config_section_get_bool(section, "flag", &b, true);
 	ZUC_ASSERT_EQ(0, r);
-	ZUC_ASSERT_EQ(0, b);
+	ZUC_ASSERT_EQ(false, b);
 }
 
 ZUC_TEST_F(config_test_t1, test011, data)
 {
-	int r, b;
+	int r;
+	bool b;
 	struct weston_config_section *section;
 	struct weston_config *config = data;
 
 	section = weston_config_get_section(config, "stuff", NULL, NULL);
-	r = weston_config_section_get_bool(section, "flag", &b, -1);
+	r = weston_config_section_get_bool(section, "flag", &b, false);
 	ZUC_ASSERT_EQ(0, r);
-	ZUC_ASSERT_EQ(1, b);
+	ZUC_ASSERT_EQ(true, b);
 }
 
 ZUC_TEST_F(config_test_t1, test012, data)
 {
-	int r, b;
+	int r;
+	bool b;
 	struct weston_config_section *section;
 	struct weston_config *config = data;
 
 	section = weston_config_get_section(config, "stuff", NULL, NULL);
-	r = weston_config_section_get_bool(section, "flag", &b, -1);
-	ZUC_ASSERT_EQ(0, r);
-	ZUC_ASSERT_EQ(1, b);
+	r = weston_config_section_get_bool(section, "bonk", &b, false);
+	ZUC_ASSERT_EQ(-1, r);
+	ZUC_ASSERT_EQ(ENOENT, errno);
+	ZUC_ASSERT_EQ(false, b);
 }
 
 ZUC_TEST_F(config_test_t1, test013, data)
-{
-	int r, b;
-	struct weston_config_section *section;
-	struct weston_config *config = data;
-
-	section = weston_config_get_section(config, "stuff", NULL, NULL);
-	r = weston_config_section_get_bool(section, "bonk", &b, -1);
-	ZUC_ASSERT_EQ(-1, r);
-	ZUC_ASSERT_EQ(ENOENT, errno);
-	ZUC_ASSERT_EQ(-1, b);
-}
-
-ZUC_TEST_F(config_test_t1, test014, data)
 {
 	char *s;
 	int r;
@@ -387,7 +378,7 @@ out_free:
 	free(s);
 }
 
-ZUC_TEST_F(config_test_t1, test015, data)
+ZUC_TEST_F(config_test_t1, test014, data)
 {
 	char *s;
 	int r;
@@ -405,7 +396,7 @@ out_free:
 	free(s);
 }
 
-ZUC_TEST_F(config_test_t1, test016, data)
+ZUC_TEST_F(config_test_t1, test015, data)
 {
 	char *s;
 	int r;
@@ -425,7 +416,7 @@ out_free:
 	free(s);
 }
 
-ZUC_TEST_F(config_test_t1, test017, data)
+ZUC_TEST_F(config_test_t1, test016, data)
 {
 	const char *name;
 	int i;
@@ -440,7 +431,7 @@ ZUC_TEST_F(config_test_t1, test017, data)
 	ZUC_ASSERT_EQ(6, i);
 }
 
-ZUC_TEST_F(config_test_t1, test018, data)
+ZUC_TEST_F(config_test_t1, test017, data)
 {
 	int r;
 	int32_t n;
@@ -455,7 +446,7 @@ ZUC_TEST_F(config_test_t1, test018, data)
 	ZUC_ASSERT_EQ(0, errno);
 }
 
-ZUC_TEST_F(config_test_t1, test019, data)
+ZUC_TEST_F(config_test_t1, test018, data)
 {
 	int r;
 	uint32_t n;
@@ -470,7 +461,7 @@ ZUC_TEST_F(config_test_t1, test019, data)
 	ZUC_ASSERT_EQ(0, errno);
 }
 
-ZUC_TEST_F(config_test_t1, test020, data)
+ZUC_TEST_F(config_test_t1, test019, data)
 {
 	int r;
 	uint32_t n;
@@ -485,7 +476,7 @@ ZUC_TEST_F(config_test_t1, test020, data)
 	ZUC_ASSERT_EQ(0, errno);
 }
 
-ZUC_TEST_F(config_test_t1, test021, data)
+ZUC_TEST_F(config_test_t1, test020, data)
 {
 	int r;
 	uint32_t n;
@@ -500,7 +491,7 @@ ZUC_TEST_F(config_test_t1, test021, data)
 	ZUC_ASSERT_EQ(0, errno);
 }
 
-ZUC_TEST_F(config_test_t1, test022, data)
+ZUC_TEST_F(config_test_t1, test021, data)
 {
 	int r;
 	uint32_t n;
@@ -515,7 +506,7 @@ ZUC_TEST_F(config_test_t1, test022, data)
 	ZUC_ASSERT_EQ(0, errno);
 }
 
-ZUC_TEST_F(config_test_t1, test023, data)
+ZUC_TEST_F(config_test_t1, test022, data)
 {
 	int r;
 	uint32_t n;
@@ -531,7 +522,7 @@ ZUC_TEST_F(config_test_t1, test023, data)
 	ZUC_ASSERT_EQ(0, errno);
 }
 
-ZUC_TEST_F(config_test_t1, test024, data)
+ZUC_TEST_F(config_test_t1, test023, data)
 {
 	int r;
 	uint32_t n;
@@ -547,7 +538,7 @@ ZUC_TEST_F(config_test_t1, test024, data)
 	ZUC_ASSERT_EQ(0, errno);
 }
 
-ZUC_TEST_F(config_test_t1, test025, data)
+ZUC_TEST_F(config_test_t1, test024, data)
 {
 	int r;
 	uint32_t n;
@@ -563,7 +554,7 @@ ZUC_TEST_F(config_test_t1, test025, data)
 	ZUC_ASSERT_EQ(EINVAL, errno);
 }
 
-ZUC_TEST_F(config_test_t1, test026, data)
+ZUC_TEST_F(config_test_t1, test025, data)
 {
 	int r;
 	uint32_t n;
@@ -579,7 +570,7 @@ ZUC_TEST_F(config_test_t1, test026, data)
 	ZUC_ASSERT_EQ(EINVAL, errno);
 }
 
-ZUC_TEST_F(config_test_t1, test027, data)
+ZUC_TEST_F(config_test_t1, test026, data)
 {
 	int r;
 	int32_t n;
@@ -594,7 +585,7 @@ ZUC_TEST_F(config_test_t1, test027, data)
 	ZUC_ASSERT_EQ(0, errno);
 }
 
-ZUC_TEST_F(config_test_t1, test028, data)
+ZUC_TEST_F(config_test_t1, test027, data)
 {
 	int r;
 	uint32_t n;

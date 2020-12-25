@@ -31,11 +31,11 @@
 
 #include <wayland-server.h>
 
-#include "compositor.h"
-#include "zalloc.h"
+#include <libweston/libweston.h>
+#include <libweston/zalloc.h>
 #include "xdg-shell-unstable-v6-server-protocol.h"
 
-#include "libweston-desktop.h"
+#include <libweston-desktop/libweston-desktop.h>
 #include "internal.h"
 
 #define WD_XDG_SHELL_PROTOCOL_VERSION 1
@@ -829,6 +829,13 @@ weston_desktop_xdg_popup_update_position(struct weston_desktop_surface *dsurface
 static void
 weston_desktop_xdg_popup_committed(struct weston_desktop_xdg_popup *popup)
 {
+	struct weston_surface *wsurface =
+		weston_desktop_surface_get_surface (popup->base.desktop_surface);
+	struct weston_view *view;
+
+	wl_list_for_each(view, &wsurface->views, surface_link)
+		weston_view_update_transform(view);
+
 	if (!popup->committed)
 		weston_desktop_xdg_surface_schedule_configure(&popup->base);
 	popup->committed = true;

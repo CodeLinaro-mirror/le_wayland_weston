@@ -27,7 +27,7 @@
 *    IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 *
-*    Copyright © 2014, 2015 Collabora, Ltd.
+*    Copyright ï¿½ 2014, 2015 Collabora, Ltd.
 *
 *    Permission to use, copy, modify, distribute, and sell this
 *    software and its documentation for any purpose is hereby granted
@@ -69,44 +69,44 @@ extern int g_prtcl_debug_level;
 
 
 #define GBM_PROTOCOL_LOG(level, ...) do {  \
-                            if (level <= MAX_DBG_LEVEL) { \
-                                if(level==LOG_FATAL) \
-                                  fprintf(stderr,"%s","GBM_FATAL::"); \
-                                if(level==LOG_ERR) \
-                                  fprintf(stderr,"%s", "GBM_ERR::"); \
-                                if(level==LOG_WARN) \
-                                  fprintf(stderr,"%s", "GBM_WARN::"); \
-                                if(level==LOG_INFO) \
-                                  fprintf(stderr,"%s", "GBM_INFO::"); \
-                                if(level==LOG_DBG) \
-                                  fprintf(stderr,"%s", "GBM_DBG::"); \
-                                fprintf(stderr,"%s(%d)::",__func__,__LINE__); \
-                                fprintf(stderr, __VA_ARGS__); \
-                                fprintf(stderr, "\n"); \
-                                fflush(stderr); \
-                            } \
-                        } while (0)
+										if (level <= MAX_DBG_LEVEL) { \
+											if(level==LOG_FATAL) \
+												fprintf(stderr,"%s","GBM_FATAL::"); \
+											if(level==LOG_ERR) \
+												fprintf(stderr,"%s", "GBM_ERR::"); \
+											if(level==LOG_WARN) \
+												fprintf(stderr,"%s", "GBM_WARN::"); \
+											if(level==LOG_INFO) \
+												fprintf(stderr,"%s", "GBM_INFO::"); \
+											if(level==LOG_DBG) \
+												fprintf(stderr,"%s", "GBM_DBG::"); \
+											fprintf(stderr,"%s(%d)::",__func__,__LINE__); \
+											fprintf(stderr, __VA_ARGS__); \
+											fprintf(stderr, "\n"); \
+											fflush(stderr); \
+											} \
+										} while (0)
 
 
 struct gbm_buffer;
 typedef void (*gbm_buffer_user_data_destroy_func)(
-                             struct gbm_buffer *buffer);
+		struct gbm_buffer *buffer);
 struct gbm_buffer {
-    struct wl_resource *buffer_resource;
-    struct wl_resource *params_resource;
-    struct weston_compositor *compositor;
-    int32_t fd;
-    int32_t metadata_fd;
-    uint32_t width;
-    uint32_t height;
-    uint32_t format;
-    uint32_t flags;
-    uint32_t offset[MAX_NUM_PLANES];
-    uint32_t stride[MAX_NUM_PLANES];
-    int32_t  num_planes;
-    void *user_data;
-    struct gbm_bo *bo;
-    gbm_buffer_user_data_destroy_func user_data_destroy_func;
+	struct wl_resource *buffer_resource;
+	struct wl_resource *params_resource;
+	struct weston_compositor *compositor;
+	int32_t fd;
+	int32_t metadata_fd;
+	uint32_t width;
+	uint32_t height;
+	uint32_t format;
+	uint32_t flags;
+	uint32_t offset[MAX_NUM_PLANES];
+	uint32_t stride[MAX_NUM_PLANES];
+	int32_t  num_planes;
+	void *user_data;
+	struct gbm_bo *bo;
+	gbm_buffer_user_data_destroy_func user_data_destroy_func;
 };
 
 /** Advertise gbm_buffer_backend support
@@ -163,8 +163,8 @@ void *gbm_buffer_backend_get_user_data(struct gbm_buffer *buffer);
  */
 void
 gbm_buffer_backend_set_user_data(struct gbm_buffer *buffer,
-                  void *data,
-                  gbm_buffer_user_data_destroy_func func);
+		void *data,
+		gbm_buffer_user_data_destroy_func func);
 
 /** check whether the format is yuv
  *
@@ -184,7 +184,6 @@ bool is_yuv_buffer(struct weston_buffer *buffer);
 
 void
 gbm_buffer_send_server_error(struct gbm_buffer *buffer,
-                      const char *msg);
+											const char *msg);
 
 #endif /* WESTON_GBM_BUFFER_BACKEND_H */
-

@@ -46,7 +46,7 @@ using std::string;
 namespace sdm {
 
 ToneMapSession::ToneMapSession(SdmDisplayBufferAllocator *buffer_allocator) :
-                buffer_allocator_(buffer_allocator) {
+                               buffer_allocator_(buffer_allocator) {
   buffer_info_.resize(kNumIntermediateBuffers);
 }
 
@@ -136,31 +136,31 @@ int SdmDisplayToneMapper::HandleToneMap(LayerStack *layer_stack) {
 
     if (layer->request.flags.tone_map) {
       switch (layer->composition) {
-         case kCompositionGPUTarget:
-           if (!gpu_count) {
-             // When all layers are on FrameBuffer and if they do not update in the next draw cycle,
-             // then SDM marks them for SDE Composition because the cached FB layer gets displayed.
-             // GPU count will be 0 in this case. Try to use the existing tone-mapped frame buffer.
-             // No ToneMap/Blit is required. Just update the buffer & acquire fence fd of FB layer.
-             if (!tone_map_sessions_.empty()) {
-               ToneMapSession *fb_tone_map_session = tone_map_sessions_.at(fb_session_index_);
-               fb_tone_map_session->UpdateBuffer(-1 /* acquire_fence */, &layer->input_buffer);
-               fb_tone_map_session->layer_index_ = INT(i);
-               fb_tone_map_session->acquired_ = true;
-               return 0;
-             }
-           }
-           temp1 = layer;
+        case kCompositionGPUTarget:
+          if (!gpu_count) {
+            // When all layers are on FrameBuffer and if they do not update in the next draw cycle,
+            // then SDM marks them for SDE Composition because the cached FB layer gets displayed.
+            // GPU count will be 0 in this case. Try to use the existing tone-mapped frame buffer.
+            // No ToneMap/Blit is required. Just update the buffer & acquire fence fd of FB layer.
+            if (!tone_map_sessions_.empty()) {
+              ToneMapSession *fb_tone_map_session = tone_map_sessions_.at(fb_session_index_);
+              fb_tone_map_session->UpdateBuffer(-1 /* acquire_fence */, &layer->input_buffer);
+              fb_tone_map_session->layer_index_ = INT(i);
+              fb_tone_map_session->acquired_ = true;
+              return 0;
+            }
+          }
+          temp1 = layer;
 
-           error = AcquireToneMapSession(layer, &session_index);
+          error = AcquireToneMapSession(layer, &session_index);
 
-           layer = temp1;
-           layer = layer_stack->layers.at(i);
-           fb_session_index_ = session_index;
-           break;
-         default:
-           error = AcquireToneMapSession(layer, &session_index);
-           break;
+          layer = temp1;
+          layer = layer_stack->layers.at(i);
+          fb_session_index_ = session_index;
+          break;
+        default:
+          error = AcquireToneMapSession(layer, &session_index);
+          break;
       }
 
       if (error != kErrorNone) {
@@ -200,12 +200,13 @@ void SdmDisplayToneMapper::ToneMap(Layer* layer, ToneMapSession *session) {
   uint32_t gbm_format;
   uint64_t alloc_flags = 0;
   int error = buffer_allocator_->SetBufferInfo(buffer_info.alloc_buffer_info.format,
-                                               &gbm_format, &alloc_flags);
+                         &gbm_format, &alloc_flags);
   gbo_info.format = gbm_format;
 
   void *dst_hnd = static_cast<void *>(&gbo_info);
 
-  error = buffer_allocator_->SetBufferInfo(layer->input_buffer.format, &gbm_format, &alloc_flags);
+  error = buffer_allocator_->SetBufferInfo(layer->input_buffer.format, 
+                                           &gbm_format, &alloc_flags);
 
   struct gbm_buf_info gbuf_info;
 

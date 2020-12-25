@@ -28,8 +28,9 @@
 
 #include <stdint.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 #include "ivi-layout-export.h"
+#include <libweston-desktop/libweston-desktop.h>
 
 struct ivi_layout_view {
 	struct wl_list link;	/* ivi_layout::view_list */
@@ -52,6 +53,7 @@ struct ivi_layout_surface {
 
 	struct ivi_layout *layout;
 	struct weston_surface *surface;
+	struct weston_desktop_surface *weston_desktop_surface;
 
 	struct ivi_layout_surface_properties prop;
 
@@ -104,6 +106,7 @@ struct ivi_layout {
 		struct wl_signal created;
 		struct wl_signal removed;
 		struct wl_signal configure_changed;
+		struct wl_signal configure_desktop_changed;
 	} surface_notification;
 
 	struct weston_layer layout_layer;
@@ -177,6 +180,9 @@ ivi_layout_surface_set_opacity(struct ivi_layout_surface *ivisurf,
 int32_t
 ivi_layout_surface_set_visibility(struct ivi_layout_surface *ivisurf,
 				  bool newVisibility);
+void
+ivi_layout_surface_set_size(struct ivi_layout_surface *ivisurf,
+			    int32_t width, int32_t height);
 struct ivi_layout_surface *
 ivi_layout_get_surface_from_id(uint32_t id_surface);
 int32_t

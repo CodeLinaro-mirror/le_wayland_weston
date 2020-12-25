@@ -34,7 +34,10 @@
 #include <libinput.h>
 #include <libudev.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
+#include "backend.h"
+#include "libweston-internal.h"
+#include "weston-log-internal.h"
 #include "launcher-util.h"
 #include "libinput-seat.h"
 #include "libinput-device.h"
@@ -392,7 +395,7 @@ udev_seat_output_changed(struct udev_seat *seat, struct weston_output *output)
 	wl_list_for_each(device, &seat->devices_list, link) {
 		/* If we find any input device without an associated output
 		 * or an output name to associate with, just tie it with the
-		 * output we got here - the default assingment.
+		 * output we got here - the default assignment.
 		 */
 		if (!device->output_name) {
 			if (!device->output)

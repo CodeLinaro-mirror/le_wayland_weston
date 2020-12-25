@@ -31,16 +31,13 @@
 #include <signal.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
+#include "backend.h"
+#include "libweston-internal.h"
 #include "compositor/weston.h"
 #include "weston-test-server-protocol.h"
-
-#ifdef ENABLE_EGL
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-#include "weston-egl-ext.h"
-#endif /* ENABLE_EGL */
 
 #include "shared/helpers.h"
 #include "shared/timespec-util.h"
@@ -49,6 +46,9 @@
 
 struct weston_test {
 	struct weston_compositor *compositor;
+	/* XXX: missing compositor destroy listener
+	 * https://gitlab.freedesktop.org/wayland/weston/issues/300
+	 */
 	struct weston_layer layer;
 	struct weston_process process;
 	struct weston_seat seat;
@@ -70,7 +70,7 @@ test_client_sigchld(struct weston_process *process, int status)
 	struct weston_test *test =
 		container_of(process, struct weston_test, process);
 
-	/* Chain up from weston-test-runner's exit code so that automake
+	/* Chain up from weston-test-runner's exit code so that ninja
 	 * knows the exit status and can report e.g. skipped tests. */
 	if (WIFEXITED(status) && WEXITSTATUS(status) != 0)
 		exit(WEXITSTATUS(status));
@@ -78,7 +78,7 @@ test_client_sigchld(struct weston_process *process, int status)
 	/* In case the child aborted or segfaulted... */
 	assert(status == 0);
 
-	wl_display_terminate(test->compositor->wl_display);
+	weston_compositor_exit(test->compositor);
 }
 
 static void
@@ -367,6 +367,7 @@ struct test_screenshot {
 struct test_screenshot_frame_listener {
 	struct wl_listener listener;
 	struct weston_buffer *buffer;
+	struct weston_output *output;
 	weston_test_screenshot_done_func_t done;
 	void *data;
 };
@@ -441,12 +442,12 @@ test_screenshot_frame_notify(struct wl_listener *listener, void *data)
 	struct test_screenshot_frame_listener *l =
 		container_of(listener,
 			     struct test_screenshot_frame_listener, listener);
-	struct weston_output *output = data;
+	struct weston_output *output = l->output;
 	struct weston_compositor *compositor = output->compositor;
 	int32_t stride;
 	uint8_t *pixels, *d, *s;
 
-	output->disable_planes--;
+	weston_output_disable_planes_decr(output);
 	wl_list_remove(&listener->link);
 	stride = l->buffer->width * (PIXMAN_FORMAT_BPP(compositor->read_format) / 8);
 	pixels = malloc(stride * l->buffer->height);
@@ -536,13 +537,14 @@ weston_test_screenshot_shoot(struct weston_output *output,
 
 	/* Set up the listener */
 	l->buffer = buffer;
+	l->output = output;
 	l->done = done;
 	l->data = data;
 	l->listener.notify = test_screenshot_frame_notify;
 	wl_signal_add(&output->frame_signal, &l->listener);
 
 	/* Fire off a repaint */
-	output->disable_planes++;
+	weston_output_disable_planes_incr(output);
 	weston_output_schedule_repaint(output);
 
 	return true;
@@ -655,7 +657,8 @@ idle_launch_client(void *data)
 		sigfillset(&allsigs);
 		sigprocmask(SIG_UNBLOCK, &allsigs, NULL);
 		execl(path, path, NULL);
-		weston_log("compositor: executing '%s' failed: %m\n", path);
+		weston_log("compositor: executing '%s' failed: %s\n", path,
+			   strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 

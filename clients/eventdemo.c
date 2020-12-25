@@ -37,6 +37,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
+#include <errno.h>
 
 #include <cairo.h>
 
@@ -53,7 +55,7 @@ static int width = 500;
 static int height = 400;
 
 /** set if window has no borders */
-static int noborder = 0;
+static bool noborder = false;
 
 /** if non-zero, maximum window width */
 static int width_max = 0;
@@ -62,25 +64,25 @@ static int width_max = 0;
 static int height_max = 0;
 
 /** set to log redrawing */
-static int log_redraw = 0;
+static bool log_redraw = false;
 
 /** set to log resizing */
-static int log_resize = 0;
+static bool log_resize = false;
 
 /** set to log keyboard focus */
-static int log_focus = 0;
+static bool log_focus = false;
 
 /** set to log key events */
-static int log_key = 0;
+static bool log_key = false;
 
 /** set to log button events */
-static int log_button = 0;
+static bool log_button = false;
 
 /** set to log axis events */
-static int log_axis = 0;
+static bool log_axis = false;
 
 /** set to log motion events */
-static int log_motion = 0;
+static bool log_motion = false;
 
 /**
  * \struct eventdemo
@@ -191,10 +193,11 @@ keyboard_focus_handler(struct window *window,
 /**
  * \brief CALLBACK function, Wayland informs about key event
  * \param window window
+ * \param input input
+ * \param time time
  * \param key keycode
  * \param unicode associated character
  * \param state pressed or released
- * \param modifiers modifiers: ctrl, alt, meta etc.
  * \param data user data associated to the window
  */
 static void
@@ -349,8 +352,8 @@ axis_discrete_handler(struct widget *widget, struct input *input,
  * \param time time the event happened
  * \param x absolute x position
  * \param y absolute y position
- * \param sx x position relative to the window
- * \param sy y position relative to the window
+ * \param x x position relative to the window
+ * \param y y position relative to the window
  * \param data user data associated to the window
  *
  * Demonstrates the use of different cursors
@@ -510,19 +513,21 @@ main(int argc, char *argv[])
 	if (!log_redraw && !log_resize && !log_focus && !log_key &&
 	    !log_button && !log_axis && !log_motion)
 	  log_redraw = log_resize = log_focus = log_key =
-	    log_button = log_axis = log_motion = 1;
+	    log_button = log_axis = log_motion = true;
 
 	/* Connect to the display and have the arguments parsed */
 	d = display_create(&argc, argv);
 	if (d == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 
 	/* Create new eventdemo window */
 	e = eventdemo_create(d);
 	if (e == NULL) {
-		fprintf(stderr, "failed to create eventdemo: %m\n");
+		fprintf(stderr, "failed to create eventdemo: %s\n",
+			strerror(errno));
 		return -1;
 	}
 

@@ -23,15 +23,16 @@
  * SOFTWARE.
  */
 
+#include <stdio.h>
 #include <wayland-server.h>
 #include <xcb/xcb.h>
 #include <xcb/xfixes.h>
 #include <xcb/composite.h>
 #include <cairo/cairo-xcb.h>
 
-#include "compositor.h"
-#include "compositor/weston.h"
-#include "xwayland-api.h"
+#include <libweston/libweston.h>
+#include <libweston/xwayland-api.h>
+#include <libweston/weston-log.h>
 
 #define SEND_EVENT_MASK (0x80)
 #define EVENT_TYPE(event) ((event)->response_type & ~SEND_EVENT_MASK)
@@ -51,6 +52,8 @@ struct weston_xserver {
 	struct wl_listener destroy_listener;
 	weston_xwayland_spawn_xserver_func_t spawn_func;
 	void *user_data;
+
+	struct weston_log_scope *wm_debug;
 };
 
 struct weston_wm {
@@ -159,7 +162,7 @@ struct weston_wm {
 };
 
 void
-dump_property(struct weston_wm *wm, xcb_atom_t property,
+dump_property(FILE *fp, struct weston_wm *wm, xcb_atom_t property,
 	      xcb_get_property_reply_t *reply);
 
 const char *

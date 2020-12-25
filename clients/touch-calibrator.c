@@ -40,7 +40,7 @@
 
 #include "clients/window.h"
 #include "shared/helpers.h"
-#include "shared/matrix.h"
+#include <libweston/matrix.h>
 
 #include "weston-touch-calibration-client-protocol.h"
 
@@ -108,8 +108,8 @@ struct poly {
  * cancel, multiple touch-downs) needs to undo the current sample and
  * possibly show user feedback "wrong".
  *
- * <STATE>
- * - <triggers>: <actions>
+ * \<STATE\>
+ * - \<triggers\>: \<actions\>
  *
  * IDLE
  * - touch down: sample, -> DOWN

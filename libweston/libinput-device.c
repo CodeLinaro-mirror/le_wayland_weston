@@ -38,7 +38,9 @@
 #include <assert.h>
 #include <libinput.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
+#include "backend.h"
+#include "libweston-internal.h"
 #include "libinput-device.h"
 #include "shared/helpers.h"
 #include "shared/timespec-util.h"

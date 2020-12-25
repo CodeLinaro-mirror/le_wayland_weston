@@ -1,5 +1,6 @@
 /*
- * Copyright © 2016 Collabora, Ltd.
+ * Copyright © 2016, 2019 Collabora, Ltd.
+ * Copyright (c) 2018 DisplayLink (UK) Ltd.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -36,6 +37,9 @@
 struct pixel_format_info {
 	/** DRM/wl_shm format code */
 	uint32_t format;
+
+	/** The DRM format name without the DRM_FORMAT_ prefix. */
+	const char *drm_format_name;
 
 	/** If non-zero, number of planes in base (non-modified) format. */
 	int num_planes;
@@ -96,6 +100,20 @@ struct pixel_format_info {
 		ORDER_LUMA_CHROMA = 0,
 		ORDER_CHROMA_LUMA,
 	} luma_chroma_order;
+
+	/** How many significant bits each channel has, or zero if N/A. */
+	struct {
+		int r;
+		int g;
+		int b;
+		int a;
+	} bits;
+
+	/** How channel bits are interpreted, fixed (uint) or floating-point */
+	enum {
+		PIXEL_COMPONENT_TYPE_FIXED = 0,
+		PIXEL_COMPONENT_TYPE_FLOAT,
+	} component_type;
 };
 
 /**
@@ -108,7 +126,39 @@ struct pixel_format_info {
  * @returns A pixel format structure (must not be freed), or NULL if the
  *          format could not be found
  */
-const struct pixel_format_info *pixel_format_get_info(uint32_t format);
+const struct pixel_format_info *
+pixel_format_get_info(uint32_t format);
+
+/**
+ * Get pixel format information for a SHM format code
+ *
+ * Given a SHM format code, return a DRM pixel format info structure describing
+ * the properties of that format.
+ *
+ * @param format SHM format code to get info for.
+ * @returns A pixel format structure (must not be freed), or NULL if the
+ *          format could not be found.
+ */
+const struct pixel_format_info *
+pixel_format_get_info_shm(uint32_t format);
+
+/**
+ * Get pixel format information for a named DRM format
+ *
+ * Given a DRM format name, return a pixel format info structure describing
+ * the properties of that format.
+ *
+ * The DRM format name is the preprocessor token name from drm_fourcc.h
+ * without the DRM_FORMAT_ prefix. The search is also case-insensitive.
+ * Both "xrgb8888" and "XRGB8888" searches will find DRM_FORMAT_XRGB8888
+ * for example.
+ *
+ * @param drm_format_name DRM format name to get info for (not NULL)
+ * @returns A pixel format structure (must not be freed), or NULL if the
+ *          name could not be found
+ */
+const struct pixel_format_info *
+pixel_format_get_info_by_drm_name(const char *drm_format_name);
 
 /**
  * Get number of planes used by a pixel format
@@ -136,7 +186,8 @@ pixel_format_get_plane_count(const struct pixel_format_info *format);
  * @param format Pixel format info structure
  * @returns True if the format is opaque, or false if it has significant alpha
  */
-bool pixel_format_is_opaque(const struct pixel_format_info *format);
+bool
+pixel_format_is_opaque(const struct pixel_format_info *format);
 
 /**
  * Get compatible opaque equivalent for a format
@@ -153,6 +204,23 @@ bool pixel_format_is_opaque(const struct pixel_format_info *format);
  */
 const struct pixel_format_info *
 pixel_format_get_opaque_substitute(const struct pixel_format_info *format);
+
+/**
+ * For an opaque format, get the equivalent format with alpha instead of an
+ * ignored channel
+ *
+ * This is the opposite lookup from pixel_format_get_opaque_substitute().
+ * Finds the format whose opaque substitute is the given format.
+ *
+ * If the input format is not opaque or does not have ignored (X) bits, then
+ * the search cannot find a match.
+ *
+ * @param format DRM format code to search for
+ * @returns A pixel format info structure for the pixel format whose opaque
+ * substitute is the argument, or NULL if no match.
+ */
+const struct pixel_format_info *
+pixel_format_get_info_by_opaque_substitute(uint32_t format);
 
 /**
  * Return the effective sampling width for a given plane

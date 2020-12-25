@@ -118,4 +118,3 @@ uint32_t early_get_connector_id(uint32_t display_id);
 #ifdef __cplusplus
 }
 #endif
-

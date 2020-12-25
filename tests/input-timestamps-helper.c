@@ -31,9 +31,9 @@
 #include <time.h>
 
 #include "input-timestamps-helper.h"
-#include "protocol/input-timestamps-unstable-v1-client-protocol.h"
+#include "input-timestamps-unstable-v1-client-protocol.h"
 #include "shared/timespec-util.h"
-#include "shared/zalloc.h"
+#include <libweston/zalloc.h>
 #include "weston-test-client-helper.h"
 
 struct input_timestamps {
@@ -79,7 +79,7 @@ input_timestamp(void *data,
 	timespec_from_proto(timestamp, tv_sec_hi, tv_sec_lo,
 			    tv_nsec);
 
-	fprintf(stderr, "test-client: got input timestamp %ld.%ld\n",
+	testlog("test-client: got input timestamp %ld.%ld\n",
 		timestamp->tv_sec, timestamp->tv_nsec);
 }
 

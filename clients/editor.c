@@ -38,7 +38,7 @@
 
 #include <pango/pangocairo.h>
 
-#include "shared/config-parser.h"
+#include <libweston/config-parser.h>
 #include "shared/helpers.h"
 #include "shared/xalloc.h"
 #include "window.h"
@@ -77,7 +77,7 @@ struct text_entry {
 	uint32_t serial;
 	uint32_t reset_serial;
 	uint32_t content_purpose;
-	uint32_t click_to_show;
+	bool click_to_show;
 	char *preferred_language;
 	bool button_pressed;
 };
@@ -580,7 +580,7 @@ data_source_send(void *data,
 	struct editor *editor = data;
 
 	if (write(fd, editor->selected_text, strlen(editor->selected_text) + 1) < 0)
-		fprintf(stderr, "write failed: %m\n");
+		fprintf(stderr, "write failed: %s\n", strerror(errno));
 
 	close(fd);
 }
@@ -1504,10 +1504,10 @@ global_handler(struct display *display, uint32_t name,
 }
 
 /** Display help for command line options, and exit */
-static uint32_t opt_help = 0;
+static bool opt_help = false;
 
 /** Require a distinct click to show the input panel (virtual keyboard) */
-static uint32_t opt_click_to_show = 0;
+static bool opt_click_to_show = false;
 
 /** Set a specific (RFC-3066) language.  Used for the virtual keyboard, etc. */
 static const char *opt_preferred_language = NULL;
@@ -1609,7 +1609,8 @@ main(int argc, char *argv[])
 
 		text_buffer = read_file(argv[1]);
 		if (text_buffer == NULL) {
-			fprintf(stderr, "could not read file '%s': %m\n", argv[1]);
+			fprintf(stderr, "could not read file '%s': %s\n",
+				argv[1], strerror(errno));
 			return -1;
 		}
 	}
@@ -1618,7 +1619,8 @@ main(int argc, char *argv[])
 
 	editor.display = display_create(&argc, argv);
 	if (editor.display == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		free(text_buffer);
 		return -1;
 	}

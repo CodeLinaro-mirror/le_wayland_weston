@@ -34,7 +34,7 @@
 namespace sdm {
 
 class SdmDisplayBufferSyncHandler : public BufferSyncHandler {
- public:
+public:
   SdmDisplayBufferSyncHandler();
 
   DisplayError SyncWait(int fd);
@@ -44,5 +44,3 @@ class SdmDisplayBufferSyncHandler : public BufferSyncHandler {
 
 }  // namespace sdm
 #endif  // __SDM_DISPLAY_BUFFER_SYNC_HANDLER_H__
-
-

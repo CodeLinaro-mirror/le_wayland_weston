@@ -26,12 +26,13 @@
 
 #include "config.h"
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <linux/vt.h>
@@ -39,6 +40,7 @@
 #include <linux/major.h>
 
 #include "launcher-impl.h"
+#include "../drm-service/drm_display.h"
 
 #define DRM_MAJOR 226
 
@@ -57,7 +59,6 @@
 #ifdef BUILD_DRM_COMPOSITOR
 
 #include <xf86drm.h>
-#include "drm_display.h"
 
 static inline int
 is_drm_master(int drm_fd)
@@ -104,14 +105,14 @@ vt_handler(int signal_number, void *data)
 	struct weston_compositor *compositor = launcher->compositor;
 
 	if (compositor->session_active) {
-		compositor->session_active = 0;
+		compositor->session_active = false;
 		wl_signal_emit(&compositor->session_signal, compositor);
 		drmDropMaster(launcher->drm_fd);
 		ioctl(launcher->tty, VT_RELDISP, 1);
 	} else {
 		ioctl(launcher->tty, VT_RELDISP, VT_ACKACQ);
 		drmSetMaster(launcher->drm_fd);
-		compositor->session_active = 1;
+		compositor->session_active = true;
 		wl_signal_emit(&compositor->session_signal, compositor);
 	}
 
@@ -130,14 +131,16 @@ setup_tty(struct launcher_direct *launcher, int tty)
 	if (tty == 0) {
 		launcher->tty = dup(tty);
 		if (launcher->tty == -1) {
-			weston_log("couldn't dup stdin: %m\n");
+			weston_log("couldn't dup stdin: %s\n",
+				   strerror(errno));
 			return -1;
 		}
 	} else {
 		snprintf(tty_device, sizeof tty_device, "/dev/tty%d", tty);
 		launcher->tty = open(tty_device, O_RDWR | O_CLOEXEC);
 		if (launcher->tty == -1) {
-			weston_log("couldn't open tty %s: %m\n", tty_device);
+			weston_log("couldn't open tty %s: %s\n", tty_device,
+				   strerror(errno));
 			return -1;
 		}
 	}
@@ -152,7 +155,7 @@ setup_tty(struct launcher_direct *launcher, int tty)
 
 	ret = ioctl(launcher->tty, KDGETMODE, &kd_mode);
 	if (ret) {
-		weston_log("failed to get VT mode: %m\n");
+		weston_log("failed to get VT mode: %s\n", strerror(errno));
 		return -1;
 	}
 	if (kd_mode != KD_TEXT) {
@@ -165,19 +168,22 @@ setup_tty(struct launcher_direct *launcher, int tty)
 	ioctl(launcher->tty, VT_WAITACTIVE, minor(buf.st_rdev));
 
 	if (ioctl(launcher->tty, KDGKBMODE, &launcher->kb_mode)) {
-		weston_log("failed to read keyboard mode: %m\n");
+		weston_log("failed to read keyboard mode: %s\n",
+			   strerror(errno));
 		goto err_close;
 	}
 
 	if (ioctl(launcher->tty, KDSKBMUTE, 1) &&
 	    ioctl(launcher->tty, KDSKBMODE, K_OFF)) {
-		weston_log("failed to set K_OFF keyboard mode: %m\n");
+		weston_log("failed to set K_OFF keyboard mode: %s\n",
+			   strerror(errno));
 		goto err_close;
 	}
 
 	ret = ioctl(launcher->tty, KDSETMODE, KD_GRAPHICS);
 	if (ret) {
-		weston_log("failed to set KD_GRAPHICS mode on tty: %m\n");
+		weston_log("failed to set KD_GRAPHICS mode on tty: %s\n",
+			   strerror(errno));
 		goto err_close;
 	}
 
@@ -260,10 +266,12 @@ launcher_direct_restore(struct weston_launcher *launcher_base)
 
 	if (ioctl(launcher->tty, KDSKBMUTE, 0) &&
 	    ioctl(launcher->tty, KDSKBMODE, launcher->kb_mode))
-		weston_log("failed to restore kb mode: %m\n");
+		weston_log("failed to restore kb mode: %s\n",
+			   strerror(errno));
 
 	if (ioctl(launcher->tty, KDSETMODE, KD_TEXT))
-		weston_log("failed to set KD_TEXT mode on tty: %m\n");
+		weston_log("failed to set KD_TEXT mode on tty: %s\n",
+			   strerror(errno));
 
 	/* We have to drop master before we switch the VT back in
 	 * VT_AUTO, so we don't risk switching to a VT with another

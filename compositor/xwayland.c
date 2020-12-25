@@ -27,11 +27,13 @@
 #include "config.h"
 
 #include <signal.h>
+#include <string.h>
+#include <errno.h>
 #include <sys/socket.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 #include "compositor/weston.h"
-#include "xwayland/xwayland-api.h"
+#include <libweston/xwayland-api.h>
 #include "shared/helpers.h"
 
 struct wet_xwayland {
@@ -63,7 +65,7 @@ spawn_xserver(void *user_data, const char *display, int abstract_fd, int unix_fd
 {
 	struct wet_xwayland *wxw = user_data;
 	pid_t pid;
-	char s[8], abstract_fd_str[8], unix_fd_str[8], wm_fd_str[8];
+	char s[12], abstract_fd_str[12], unix_fd_str[12], wm_fd_str[12];
 	int sv[2], wm[2], fd;
 	char *xserver = NULL;
 	struct weston_config *config = wet_get_config(wxw->compositor);
@@ -128,9 +130,10 @@ spawn_xserver(void *user_data, const char *display, int abstract_fd, int unix_fd
 			  NULL) < 0)
 			weston_log("exec of '%s %s -rootless "
 				   "-listen %s -listen %s -wm %s "
-				   "-terminate' failed: %m\n",
+				   "-terminate' failed: %s\n",
 				   xserver, display,
-				   abstract_fd_str, unix_fd_str, wm_fd_str);
+				   abstract_fd_str, unix_fd_str, wm_fd_str,
+				   strerror(errno));
 	fail:
 		_exit(EXIT_FAILURE);
 

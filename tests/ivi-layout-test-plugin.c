@@ -33,8 +33,9 @@
 #include <string.h>
 #include <assert.h>
 #include <limits.h>
+#include <errno.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 #include "compositor/weston.h"
 #include "weston-test-server-protocol.h"
 #include "ivi-test.h"
@@ -52,35 +53,29 @@ struct runner_test {
 	static void runner_func_##name(struct test_context *);	\
 								\
 	const struct runner_test runner_test_##name		\
-		__attribute__ ((section ("test_section"))) =	\
+		__attribute__ ((section ("plugin_test_section"))) =	\
 	{							\
 		#name, runner_func_##name			\
 	};							\
 								\
 	static void runner_func_##name(struct test_context *ctx)
 
-extern const struct runner_test __start_test_section;
-extern const struct runner_test __stop_test_section;
+extern const struct runner_test __start_plugin_test_section;
+extern const struct runner_test __stop_plugin_test_section;
 
 static const struct runner_test *
 find_runner_test(const char *name)
 {
 	const struct runner_test *t;
 
-	for (t = &__start_test_section; t < &__stop_test_section; t++) {
+	for (t = &__start_plugin_test_section;
+	     t < &__stop_plugin_test_section; t++) {
 		if (strcmp(t->name, name) == 0)
 			return t;
 	}
 
 	return NULL;
 }
-
-struct test_launcher {
-	struct weston_compositor *compositor;
-	char exe[2048];
-	struct weston_process process;
-	const struct ivi_layout_interface *layout_interface;
-};
 
 struct test_context {
 	const struct ivi_layout_interface *layout_interface;
@@ -93,16 +88,25 @@ struct test_context {
 	struct wl_listener surface_configured;
 };
 
-static struct test_context static_context;
+struct test_launcher {
+	struct weston_compositor *compositor;
+	struct test_context context;
+	char exe[2048];
+	struct weston_process process;
+	const struct ivi_layout_interface *layout_interface;
+};
 
 static void
 destroy_runner(struct wl_resource *resource)
 {
-	assert(static_context.runner_resource == NULL ||
-	       static_context.runner_resource == resource);
+	struct test_launcher *launcher = wl_resource_get_user_data(resource);
+	struct test_context *ctx = &launcher->context;
 
-	static_context.layout_interface = NULL;
-	static_context.runner_resource = NULL;
+	assert(ctx->runner_resource == NULL ||
+	       ctx->runner_resource == resource);
+
+	ctx->layout_interface = NULL;
+	ctx->runner_resource = NULL;
 }
 
 static void
@@ -117,13 +121,16 @@ runner_run_handler(struct wl_client *client, struct wl_resource *resource,
 {
 	struct test_launcher *launcher;
 	const struct runner_test *t;
-
-	assert(static_context.runner_resource == NULL ||
-	       static_context.runner_resource == resource);
+	struct test_context *ctx;
 
 	launcher = wl_resource_get_user_data(resource);
-	static_context.layout_interface = launcher->layout_interface;
-	static_context.runner_resource = resource;
+	ctx = &launcher->context;
+
+	assert(ctx->runner_resource == NULL ||
+	       ctx->runner_resource == resource);
+
+	ctx->layout_interface = launcher->layout_interface;
+	ctx->runner_resource = resource;
 
 	t = find_runner_test(test_name);
 	if (!t) {
@@ -138,7 +145,7 @@ runner_run_handler(struct wl_client *client, struct wl_resource *resource,
 
 	weston_log("weston_test_runner.run(\"%s\")\n", test_name);
 
-	t->run(&static_context);
+	t->run(ctx);
 
 	weston_test_runner_send_finished(resource);
 }
@@ -165,7 +172,7 @@ bind_runner(struct wl_client *client, void *data,
 	wl_resource_set_implementation(resource, &runner_implementation,
 				       launcher, destroy_runner);
 
-	if (static_context.runner_resource != NULL) {
+	if (launcher->context.runner_resource != NULL) {
 		weston_log("test FATAL: "
 			   "attempting to run several tests in parallel.\n");
 		wl_resource_post_error(resource,
@@ -181,7 +188,7 @@ test_client_sigchld(struct weston_process *process, int status)
 		container_of(process, struct test_launcher, process);
 	struct weston_compositor *c = launcher->compositor;
 
-	/* Chain up from weston-test-runner's exit code so that automake
+	/* Chain up from weston-test-runner's exit code so that ninja
 	 * knows the exit status and can report e.g. skipped tests. */
 	if (WIFEXITED(status))
 		weston_compositor_exit_with_code(c, WEXITSTATUS(status));
@@ -198,7 +205,8 @@ idle_launch_client(void *data)
 
 	pid = fork();
 	if (pid == -1) {
-		weston_log("fatal: failed to fork '%s': %m\n", launcher->exe);
+		weston_log("fatal: failed to fork '%s': %s\n", launcher->exe,
+			   strerror(errno));
 		weston_compositor_exit_with_code(launcher->compositor,
 						 EXIT_FAILURE);
 		return;
@@ -208,8 +216,8 @@ idle_launch_client(void *data)
 		sigfillset(&allsigs);
 		sigprocmask(SIG_UNBLOCK, &allsigs, NULL);
 		execl(launcher->exe, launcher->exe, NULL);
-		weston_log("compositor: executing '%s' failed: %m\n",
-			   launcher->exe);
+		weston_log("compositor: executing '%s' failed: %s\n",
+			   launcher->exe, strerror(errno));
 		_exit(EXIT_FAILURE);
 	}
 
@@ -297,7 +305,7 @@ runner_assert_fail(const char *cond, const char *file, int line,
  * This module is specially written to execute tests that target the
  * ivi_layout API.
  *
- * This module is listed in TESTS in Makefile.am. weston-tests-env handles
+ * This module is listed in meson.build which handles
  * this module specially by loading it in ivi-shell.
  *
  * Once Weston init completes, this module launches one test program:

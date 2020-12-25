@@ -35,14 +35,14 @@
 #include <sys/mman.h>
 #include <signal.h>
 #include <time.h>
-#include <sys/poll.h>
+#include <poll.h>
 #include <float.h>
 #include <math.h>
 
 #include <wayland-client.h>
 #include "shared/os-compatibility.h"
 #include "shared/xalloc.h"
-#include "shared/zalloc.h"
+#include <libweston/zalloc.h>
 
 struct device {
 	enum { KEYBOARD, POINTER } type;
@@ -97,8 +97,8 @@ attach_buffer(struct window *window, int width, int height)
 
 	fd = os_create_anonymous_file(size);
 	if (fd < 0) {
-		fprintf(stderr, "creating a buffer file for %d B failed: %m\n",
-			size);
+		fprintf(stderr, "creating a buffer file for %d B failed: %s\n",
+			size, strerror(errno));
 		return -1;
 	}
 
@@ -296,6 +296,8 @@ static void
 keyboard_handle_keymap(void *data, struct wl_keyboard *keyboard,
 		       uint32_t format, int fd, uint32_t size)
 {
+	/* Just so we don’t leak the keymap fd */
+	close(fd);
 }
 
 static void

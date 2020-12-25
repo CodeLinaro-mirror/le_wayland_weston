@@ -72,20 +72,16 @@
 #include <gbm.h>
 #include <gbm_priv.h>
 #include <libudev.h>
-
 #include "shared/helpers.h"
 #include "shared/timespec-util.h"
-#include "libbacklight.h"
-#include "compositor.h"
-#include "gl-renderer.h"
-#include "pixman-renderer.h"
 #include "libinput-seat.h"
 #include "launcher-util.h"
-#include "vaapi-recorder.h"
-#include "presentation-time-server-protocol.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include <libweston/libweston.h>
+#include "libweston-internal.h"
+#include "backend.h"
 #include "linux-dmabuf.h"
 #include "gbm-buffer-backend.h"
 #include "screen-capture.h"
@@ -94,164 +90,164 @@ extern "C" {
 #endif
 
 struct drm_backend {
-       struct weston_backend base;
-       struct weston_compositor *compositor;
+  struct weston_backend base;
+  struct weston_compositor *compositor;
 
-       struct udev *udev;
-       struct wl_event_source *drm_source;
+  struct udev *udev;
+  struct wl_event_source *drm_source;
 
-       struct udev_monitor *udev_monitor;
-       struct wl_event_source *udev_drm_source;
+  struct udev_monitor *udev_monitor;
+  struct wl_event_source *udev_drm_source;
 
-       struct {
-                int id;
-                int fd;
-                char *filename;
-       } drm;
-       int render_fd; /* DRM render node file description */
-       struct gbm_device *gbm;
-       struct wl_listener session_listener;
-       uint32_t format;
-       int no_addfb3;
-       int use_pixman;
-       uint32_t prev_state;
-       struct udev_input input;
-       int32_t cursor_width;
-       int32_t cursor_height;
+  struct {
+    int id;
+    int fd;
+    char *filename;
+  } drm;
+  int render_fd; /* DRM render node file description */
+  struct gbm_device *gbm;
+  struct wl_listener session_listener;
+  uint32_t format;
+  int no_addfb3;
+  int use_pixman;
+  uint32_t prev_state;
+  struct udev_input input;
+  int32_t cursor_width;
+  int32_t cursor_height;
 
-       //TODO(user): these are not required. Need to remove
-       uint32_t min_width, max_width;
-       uint32_t min_height, max_height;
+  //TODO(user): these are not required. Need to remove
+  uint32_t min_width, max_width;
+  uint32_t min_height, max_height;
 
-       /* Flag to indicate whether sdm service is ready */
-       bool sdm_repaint;
-       /* Timer to finish full initialization of backend */
-       struct wl_event_source *finish_full_init;
-       struct wl_event_source *input_init;
-       /* Whether skip full initialization when backend is created */
-       bool early_boot;
-       /* Whether is the first repaint for weston */
-       bool first_repaint;
+  /* Flag to indicate whether sdm service is ready */
+  bool sdm_repaint;
+  /* Timer to finish full initialization of backend */
+  struct wl_event_source *finish_full_init;
+  struct wl_event_source *input_init;
+  /* Whether skip full initialization when backend is created */
+  bool early_boot;
+  /* Whether is the first repaint for weston */
+  bool first_repaint;
 
-       /* Screen capture data */
-       struct screen_capture *screen_cap;
+  /* Screen capture data */
+  struct screen_capture *screen_cap;
 };
 
 struct drm_edid {
-       char eisa_id[13];
-       char monitor_name[13];
-       char pnp_id[5];
-       char serial_number[13];
+  char eisa_id[13];
+  char monitor_name[13];
+  char pnp_id[5];
+  char serial_number[13];
 };
 
 struct sdm_layer {
-       struct wl_list link; /* drm_output::sdm_layer_list */
-       struct weston_view *view;
-       struct weston_buffer_reference buffer_ref;
-       bool is_cursor;
-       bool is_skip;
-       struct gbm_bo *bo;
-       uint32_t composition_type; /* type: enum SDM_COMPOSITION_XXXXX */
-       pixman_region32_t overlap;
+  struct wl_list link; /* drm_output::sdm_layer_list */
+  struct weston_view *view;
+  struct weston_buffer_reference buffer_ref;
+  bool is_cursor;
+  bool is_skip;
+  struct gbm_bo *bo;
+  uint32_t composition_type; /* type: enum SDM_COMPOSITION_XXXXX */
+  pixman_region32_t overlap;
 };
 
 /*
  * for early stage
  */
 struct early_layer {
-       struct wl_list link; /* drm_output::early_layer_list */
-       struct weston_view *view;
-       struct gbm_bo *bo;
-       struct weston_buffer_reference buffer_ref;
-       uint32_t fb_id;
-       uint32_t pipe_id;
-       bool yuv_required; /* whether need a yuv pipe*/
-       uint32_t z_order;
-       int32_t hw_block_id; /* store hw_block_id for early pipes handoff*/
-       bool secure; /* whether need secure pipe*/
-       int32_t sync_handle;
+  struct wl_list link; /* drm_output::early_layer_list */
+  struct weston_view *view;
+  struct gbm_bo *bo;
+  struct weston_buffer_reference buffer_ref;
+  uint32_t fb_id;
+  uint32_t pipe_id;
+  bool yuv_required; /* whether need a yuv pipe*/
+  uint32_t z_order;
+  int32_t hw_block_id; /* store hw_block_id for early pipes handoff*/
+  bool secure; /* whether need secure pipe*/
+  int32_t sync_handle;
 };
 
 struct drm_output;
 
 struct drm_fb {
-       struct drm_output *output;
-       uint32_t fb_id, stride, handle, size, ion_fd;
-       int fd;
-       int is_client_buffer;
-       struct weston_buffer_reference buffer_ref;
+  struct drm_output *output;
+  uint32_t fb_id, stride, handle, size, ion_fd;
+  int fd;
+  int is_client_buffer;
+  struct weston_buffer_reference buffer_ref;
 
-       /* Used by gbm fbs */
-       struct gbm_bo *bo;
+  /* Used by gbm fbs */
+  struct gbm_bo *bo;
 
-       /* Used by dumb fbs */
-       void *map;
+  /* Used by dumb fbs */
+  void *map;
 };
 
 struct drm_output {
-       struct weston_output   base;
-       int display_id;
+  struct weston_output   base;
+  int display_id;
 
-       uint32_t view_count;
-       uint32_t crtc_id;
-       int pipe;
-       uint32_t connector_id;
-       drmModeCrtcPtr original_crtc;
-       struct drm_edid edid;
-       drmModePropertyPtr dpms_prop;
-       uint32_t format;
+  uint32_t view_count;
+  uint32_t crtc_id;
+  int pipe;
+  uint32_t connector_id;
+  drmModeCrtcPtr original_crtc;
+  struct drm_edid edid;
+  drmModePropertyPtr dpms_prop;
+  uint32_t format;
 
-       enum dpms_enum dpms;
+  enum dpms_enum dpms;
 
-       int frame_pending;
-       int page_flip_pending;
-       int disable_pending;
-       int destroy_pending;
+  int frame_pending;
+  int page_flip_pending;
+  int disable_pending;
+  int destroy_pending;
 
-       struct gbm_surface *surface;
-       struct gbm_bo *cursor_bo[2];
-        /* TODO(user):   Decide whether to use drm_plane or weston_plane */
-        /* TODO(user):   struct drm_plane *primary_plane;                */
-        /* TODO(user):   or struct weston_plane *primary_plane;          */
+  struct gbm_surface *surface;
+  struct gbm_bo *cursor_bo[2];
+   /* TODO(user):   Decide whether to use drm_plane or weston_plane */
+   /* TODO(user):   struct drm_plane *primary_plane;                */
+   /* TODO(user):   or struct weston_plane *primary_plane;          */
 
-       struct weston_view *cursor_view;
-       int current_cursor;
-       struct drm_fb *current, *next;
-       struct backlight *backlight;
+  struct weston_view *cursor_view;
+  int current_cursor;
+  struct drm_fb *current, *next;
+  struct backlight *backlight;
 
-       struct drm_fb *dumb[2];
-       pixman_image_t *image[2];
-       int current_image;
-       pixman_region32_t previous_damage;
+  struct drm_fb *dumb[2];
+  pixman_image_t *image[2];
+  int current_image;
+  pixman_region32_t previous_damage;
 
-       struct vaapi_recorder *recorder;
-       struct wl_listener recorder_frame_listener;
+  struct vaapi_recorder *recorder;
+  struct wl_listener recorder_frame_listener;
 
-       struct wl_list plane_flip_list; /* drm_plane::flip_link */
-       struct wl_list sdm_layer_list;  /* sdm_layer::link      */
-       struct wl_list commited_layer_list;  /* sdm_layer::link */
-       struct wl_list early_layer_list;  /* early_layer::link      */
-       struct wl_list commited_early_list;  /* early_layer::link */
+  struct wl_list plane_flip_list; /* drm_plane::flip_link */
+  struct wl_list sdm_layer_list;  /* sdm_layer::link      */
+  struct wl_list commited_layer_list;  /* sdm_layer::link */
+  struct wl_list early_layer_list;  /* early_layer::link      */
+  struct wl_list commited_early_list;  /* early_layer::link */
 
-       bool early_display_enable; /* whether hw display enabled in early stage */
-       void *early_display_intf;
+  bool early_display_enable; /* whether hw display enabled in early stage */
+  void *early_display_intf;
 
-       struct wl_event_source *finish_frame_timer;
+  struct wl_event_source *finish_frame_timer;
 
-       int retire_fence_fd;
-       struct wl_event_source *retire_fence_source;
+  int retire_fence_fd;
+  struct wl_event_source *retire_fence_source;
 
-       struct {
-           unsigned int frame;
-           unsigned int sec;
-           unsigned int usec;
-       } last_vblank;
-       // Indicate whether allocation of framebuffer is UBWC or not
-       int framebuffer_ubwc;
-       // Indicate whether output is secure
-       bool is_secure;
-       // Indicate whether commit layers or not
-       bool layer_none_commit;
-       // Indicate previous frame whether commit layers or not, record previous layer_none_commit
-       bool prev_layer_none_commit;
+  struct {
+    unsigned int frame;
+    unsigned int sec;
+    unsigned int usec;
+  } last_vblank;
+  // Indicate whether allocation of framebuffer is UBWC or not
+  int framebuffer_ubwc;
+  // Indicate whether output is secure
+  bool is_secure;
+  // Indicate whether commit layers or not
+  bool layer_none_commit;
+  // Indicate previous frame whether commit layers or not, record previous layer_none_commit
+  bool prev_layer_none_commit;
 };

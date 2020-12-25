@@ -35,14 +35,15 @@
 #include <signal.h>
 #include <sys/mman.h>
 #include <getopt.h>
+#include <errno.h>
 #include <wayland-cursor.h>
 #include <wayland-client-protocol.h>
 #include "shared/cairo-util.h"
-#include "shared/config-parser.h"
+#include <libweston/config-parser.h>
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
 #include "shared/xalloc.h"
-#include "shared/zalloc.h"
+#include <libweston/zalloc.h>
 #include "shared/file-util.h"
 #include "ivi-application-client-protocol.h"
 #include "ivi-hmi-controller-client-protocol.h"
@@ -806,8 +807,8 @@ createShmBuffer(struct wlContextStruct *p_wlCtx)
 
 	fd = os_create_anonymous_file(size);
 	if (fd < 0) {
-		fprintf(stderr, "creating a buffer file for %d B failed: %m\n",
-			size);
+		fprintf(stderr, "creating a buffer file for %d B failed: %s\n",
+			size, strerror(errno));
 		return ;
 	}
 
@@ -815,7 +816,7 @@ createShmBuffer(struct wlContextStruct *p_wlCtx)
 		mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
 	if (MAP_FAILED == p_wlCtx->data) {
-		fprintf(stderr, "mmap failed: %m\n");
+		fprintf(stderr, "mmap failed: %s\n", strerror(errno));
 		close(fd);
 		return;
 	}
@@ -828,7 +829,8 @@ createShmBuffer(struct wlContextStruct *p_wlCtx)
 						      WL_SHM_FORMAT_ARGB8888);
 
 	if (NULL == p_wlCtx->wlBuffer) {
-		fprintf(stderr, "wl_shm_create_buffer failed: %m\n");
+		fprintf(stderr, "wl_shm_create_buffer failed: %s\n",
+			strerror(errno));
 		close(fd);
 		return;
 	}
