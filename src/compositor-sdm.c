@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2018, 2020, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -61,6 +61,7 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 #include <drm_fourcc.h>
+#include <drm/msm_drm.h>
 
 #include <gbm.h>
 #include <libudev.h>
@@ -136,8 +137,13 @@ drm_fb_destroy_callback(struct gbm_bo *bo, void *data)
     struct drm_fb *fb = data;
     struct gbm_device *gbm = gbm_bo_get_device(bo);
 
-    if (fb->fb_id)
+    if (fb->fb_id) {
+#ifdef DRM_IOCTL_MSM_RMFB2
+        drmIoctl(gbm_device_get_fd(gbm), DRM_IOCTL_MSM_RMFB2, &fb->fb_id);
+#else
         drmModeRmFB(gbm_device_get_fd(gbm), fb->fb_id);
+#endif
+    }
 
     weston_buffer_reference(&fb->buffer_ref, NULL);
 
