@@ -68,204 +68,203 @@ enum SdmDisplayIntfType {null_disp, sdm_disp};
 typedef std::map<uint32_t, HWDisplayInfo> SdmDisplaysInfo;
 
 class SdmDisplayInterface {
-  public:
-    virtual ~SdmDisplayInterface() {}
+public:
+  virtual ~SdmDisplayInterface() {}
 
-    virtual DisplayError CreateDisplay() = 0;
-    virtual DisplayError DestroyDisplay() = 0;
-    virtual DisplayError Prepare(struct drm_output *output) = 0;
-    virtual DisplayError Commit(struct drm_output *output) = 0;
-    virtual DisplayError Flush() = 0;
-    virtual DisplayError SetDisplayState(DisplayState state) = 0;
-    virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
-    virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
-    virtual DisplayError EnablePllUpdate(int32_t enable) = 0;
-    virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
-    virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
-    virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
+  virtual DisplayError CreateDisplay() = 0;
+  virtual DisplayError DestroyDisplay() = 0;
+  virtual DisplayError Prepare(struct drm_output *output) = 0;
+  virtual DisplayError Commit(struct drm_output *output) = 0;
+  virtual DisplayError Flush() = 0;
+  virtual DisplayError SetDisplayState(DisplayState state) = 0;
+  virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
+  virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
+  virtual DisplayError EnablePllUpdate(int32_t enable) = 0;
+  virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
+  virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
+  virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
 
-    virtual struct drm_output * GetOutput() = 0;
+  virtual struct drm_output * GetOutput() = 0;
 
-    static int GetDrmMasterFd();
+  static int GetDrmMasterFd();
 };
 
 class SdmNullDisplay : public SdmDisplayInterface {
-  public:
-    SdmNullDisplay(int32_t display_id, DisplayType type, CoreInterface *core_intf);
-    ~SdmNullDisplay();
+public:
+  SdmNullDisplay(int32_t display_id, DisplayType type, CoreInterface *core_intf);
+  ~SdmNullDisplay();
 
-    SdmDisplayIntfType GetDisplayIntfType() {
-      return null_disp;
-    }
-    DisplayError CreateDisplay();
-    DisplayError DestroyDisplay();
-    DisplayError Prepare(struct drm_output *output);
-    DisplayError Commit(struct drm_output *output);
-    DisplayError Flush();
-    DisplayError SetDisplayState(DisplayState state);
-    DisplayError SetVSyncState(bool enable, struct drm_output *output);
-    DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
-    DisplayError EnablePllUpdate(int32_t enable);
-    DisplayError UpdateDisplayPll(int32_t ppm);
-    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
+  SdmDisplayIntfType GetDisplayIntfType() {
+    return null_disp;
+  }
+  DisplayError CreateDisplay();
+  DisplayError DestroyDisplay();
+  DisplayError Prepare(struct drm_output *output);
+  DisplayError Commit(struct drm_output *output);
+  DisplayError Flush();
+  DisplayError SetDisplayState(DisplayState state);
+  DisplayError SetVSyncState(bool enable, struct drm_output *output);
+  DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
+  DisplayError EnablePllUpdate(int32_t enable);
+  DisplayError UpdateDisplayPll(int32_t ppm);
+  DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
 
-    struct drm_output * GetOutput() { return NULL; };
+  struct drm_output * GetOutput() { return NULL; };
 };
 
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
+public:
+  SdmDisplay(int32_t display_id, DisplayType type, CoreInterface *core_intf);
+  ~SdmDisplay();
 
- public:
-    SdmDisplay(int32_t display_id, DisplayType type, CoreInterface *core_intf);
-    ~SdmDisplay();
+  SdmDisplayIntfType GetDisplayIntfType() {
+    return sdm_disp;
+  }
 
-    SdmDisplayIntfType GetDisplayIntfType() {
-      return sdm_disp;
-    }
+  DisplayError CreateDisplay();
+  DisplayError DestroyDisplay();
+  DisplayError Prepare(struct drm_output *output);
+  DisplayError Commit(struct drm_output *output);
+  DisplayError Flush();
+  DisplayError SetDisplayState(DisplayState state);
+  DisplayError SetVSyncState(bool enable, struct drm_output *output);
+  DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
+  DisplayError EnablePllUpdate(int32_t enable);
+  DisplayError UpdateDisplayPll(int32_t ppm);
 
-    DisplayError CreateDisplay();
-    DisplayError DestroyDisplay();
-    DisplayError Prepare(struct drm_output *output);
-    DisplayError Commit(struct drm_output *output);
-    DisplayError Flush();
-    DisplayError SetDisplayState(DisplayState state);
-    DisplayError SetVSyncState(bool enable, struct drm_output *output);
-    DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
-    DisplayError EnablePllUpdate(int32_t enable);
-    DisplayError UpdateDisplayPll(int32_t ppm);
+  DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
 
-    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
+  struct drm_output * GetOutput() { return drm_output_; };
 
-    struct drm_output * GetOutput() { return drm_output_; };
+protected:
+  virtual DisplayError VSync(const DisplayEventVSync &vsync);
+  virtual DisplayError CECMessage(char *message);
+  virtual DisplayError HandleEvent(DisplayEvent event);
+  virtual DisplayError Refresh();
 
- protected:
-    virtual DisplayError VSync(const DisplayEventVSync &vsync);
-    virtual DisplayError CECMessage(char *message);
-    virtual DisplayError HandleEvent(DisplayEvent event);
-    virtual DisplayError Refresh();
-
- private:
-    static const int kBufferDepth = 2;
-    DisplayError FreeLayerStack();
-    DisplayError FreeLayerGeometry(struct LayerGeometry *glayer);
-    DisplayError AllocateMemoryForLayerGeometry(struct drm_output *output,
-                                                uint32_t index,
-                                                struct LayerGeometry *glayer);
-    DisplayError AddGeometryLayerToLayerStack(struct drm_output *output,
+private:
+  static const int kBufferDepth = 2;
+  DisplayError FreeLayerStack();
+  DisplayError FreeLayerGeometry(struct LayerGeometry *glayer);
+  DisplayError AllocateMemoryForLayerGeometry(struct drm_output *output,
                                               uint32_t index,
-                                              struct LayerGeometry *glayer, bool is_skip);
-    DisplayError AllocLayerStackMemory(struct drm_output *output);
-    DisplayError PopulateLayerGeometryOnToLayerStack(struct drm_output *output,
-                                                     uint32_t index,
-                                                     struct LayerGeometry *glayer, bool is_skip);
-    int PrepareNormalLayerGeometry(struct drm_output *output,
-                                   struct LayerGeometry **glayer,
-                                   struct sdm_layer *sdm_layer);
-    int PrepareFbLayerGeometry(struct drm_output *output,
-                               struct LayerGeometry **fb_glayer);
-    DisplayError PrePrepareLayerStack(struct drm_output *output);
-    DisplayError PrePrepare(struct drm_output *output);
-    DisplayError PostPrepare(struct drm_output *output);
-    DisplayError PreCommit();
-    DisplayError PostCommit(int *retire_fence_id);
-    LayerBufferFormat GetSDMFormat(uint32_t src_fmt,
-                                   struct LayerGeometryFlags flags);
-    LayerBlending GetSDMBlending(uint32_t source);
-    void DumpInputBuffers(void *compositor_output);
-    void DumpOutputBuffer(const BufferInfo& buffer_info,
-                          void *base, int fence);
-    const char*  GetDisplayString();
-    /* support functions */
-    const char * FourccToString(uint32_t fourcc);
-    uint32_t GetMappedFormatFromGbm(uint32_t fmt);
-    bool GetVideoPresenceByFormatFromGbm(uint32_t fmt);
-    uint32_t GetMappedFormatFromShm(uint32_t fmt);
-    bool NeedConvertGbmFormat(struct weston_view *ev, uint32_t format);
-    uint32_t ConvertToOpaqueGbmFormat(uint32_t format);
-    void ComputeSrcDstRect(struct drm_output *output, struct weston_view *ev,
-                                  struct Rect *src_ret, struct Rect *dst_ret);
-    int  ComputeDirtyRegion(struct weston_view *ev, struct RectArray *dirty);
-    uint8_t GetGlobalAlpha(struct weston_view *ev);
-    int GetVisibleRegion(struct drm_output *output, struct weston_view *ev,
-                         pixman_region32_t *aboved_opaque, struct RectArray *visible);
-    bool IsTransparentGbmFormat(uint32_t format);
-    CoreInterface *core_intf_ = NULL;
-    SdmDisplayBufferAllocator buffer_allocator_;
-    SdmDisplayBufferSyncHandler buffer_sync_handler_;
-    SdmDisplaySocketHandler socket_handler_;
-    DisplayEventHandler *client_event_handler_ = NULL;
-    DisplayInterface *display_intf_ = NULL;
-    DisplayType display_type_ = kDisplayMax;
-    DisplayConfigVariableInfo variable_info_;
-    HWDisplayInterfaceInfo hw_disp_info_;
-    bool shutdown_pending_ = false;
-    LayerStack layer_stack_;
-    int32_t display_id_ = -1;
-    uint32_t fps_ = 0;
-    float max_luminance_ = 0.0;
-    float max_average_luminance_ = 0.0;
-    float min_luminance_ = 0.0;
-    int disable_hdr_handling_ = 0;
-    bool hdr_supported_ = false;
+                                              struct LayerGeometry *glayer);
+  DisplayError AddGeometryLayerToLayerStack(struct drm_output *output,
+                                            uint32_t index,
+                                            struct LayerGeometry *glayer, bool is_skip);
+  DisplayError AllocLayerStackMemory(struct drm_output *output);
+  DisplayError PopulateLayerGeometryOnToLayerStack(struct drm_output *output,
+                                                   uint32_t index,
+                                                   struct LayerGeometry *glayer, bool is_skip);
+  int PrepareNormalLayerGeometry(struct drm_output *output,
+                                 struct LayerGeometry **glayer,
+                                 struct sdm_layer *sdm_layer);
+  int PrepareFbLayerGeometry(struct drm_output *output,
+                             struct LayerGeometry **fb_glayer);
+  DisplayError PrePrepareLayerStack(struct drm_output *output);
+  DisplayError PrePrepare(struct drm_output *output);
+  DisplayError PostPrepare(struct drm_output *output);
+  DisplayError PreCommit();
+  DisplayError PostCommit(int *retire_fence_id);
+  LayerBufferFormat GetSDMFormat(uint32_t src_fmt,
+                                 struct LayerGeometryFlags flags);
+  LayerBlending GetSDMBlending(uint32_t source);
+  void DumpInputBuffers(void *compositor_output);
+  void DumpOutputBuffer(const BufferInfo& buffer_info,
+                        void *base, int fence);
+  const char*  GetDisplayString();
+  /* support functions */
+  const char * FourccToString(uint32_t fourcc);
+  uint32_t GetMappedFormatFromGbm(uint32_t fmt);
+  bool GetVideoPresenceByFormatFromGbm(uint32_t fmt);
+  uint32_t GetMappedFormatFromShm(uint32_t fmt);
+  bool NeedConvertGbmFormat(struct weston_view *ev, uint32_t format);
+  uint32_t ConvertToOpaqueGbmFormat(uint32_t format);
+  void ComputeSrcDstRect(struct drm_output *output, struct weston_view *ev,
+                         struct Rect *src_ret, struct Rect *dst_ret);
+  int ComputeDirtyRegion(struct weston_view *ev, struct RectArray *dirty);
+  uint8_t GetGlobalAlpha(struct weston_view *ev);
+  int GetVisibleRegion(struct drm_output *output, struct weston_view *ev,
+                       pixman_region32_t *aboved_opaque, struct RectArray *visible);
+  bool IsTransparentGbmFormat(uint32_t format);
+  CoreInterface *core_intf_ = NULL;
+  SdmDisplayBufferAllocator buffer_allocator_;
+  SdmDisplayBufferSyncHandler buffer_sync_handler_;
+  SdmDisplaySocketHandler socket_handler_;
+  DisplayEventHandler *client_event_handler_ = NULL;
+  DisplayInterface *display_intf_ = NULL;
+  DisplayType display_type_ = kDisplayMax;
+  DisplayConfigVariableInfo variable_info_;
+  HWDisplayInterfaceInfo hw_disp_info_;
+  bool shutdown_pending_ = false;
+  LayerStack layer_stack_;
+  int32_t display_id_ = -1;
+  uint32_t fps_ = 0;
+  float max_luminance_ = 0.0;
+  float max_average_luminance_ = 0.0;
+  float min_luminance_ = 0.0;
+  int disable_hdr_handling_ = 0;
+  bool hdr_supported_ = false;
 
-    struct drm_output *drm_output_ = NULL;
+  struct drm_output *drm_output_ = NULL;
 };
 
 class SdmDisplayProxy {
-  public:
-    SdmDisplayProxy(int32_t display_id, DisplayType type, CoreInterface *core_intf);
-    ~SdmDisplayProxy();
+public:
+  SdmDisplayProxy(int32_t display_id, DisplayType type, CoreInterface *core_intf);
+  ~SdmDisplayProxy();
 
-    DisplayError CreateDisplay() { return display_intf_->CreateDisplay(); }
-    DisplayError DestroyDisplay() { return display_intf_->DestroyDisplay(); }
-    DisplayError Prepare(struct drm_output *output) {
-      return display_intf_->Prepare(output);
-    }
-    DisplayError Commit(struct drm_output *output) {
-      return display_intf_->Commit(output);
-    }
-    DisplayError Flush() {
-      return display_intf_->Flush();
-    }
-    DisplayError SetDisplayState(DisplayState state) {
-      return display_intf_->SetDisplayState(state);
-    }
-    DisplayError SetVSyncState(bool enable, struct drm_output *output) {
-      return display_intf_->SetVSyncState(enable, output);
-    }
-    DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
-      return display_intf_->GetDisplayConfiguration(display_config);
-    }
-    DisplayError RegisterCbs(int display_id, sdm_cbs_t *cbs) {
-      hotplug_cb_ = cbs->hotplug_cb;
-      return kErrorNone;
-    }
-    DisplayError EnablePllUpdate(int32_t enable) {
-      return display_intf_->EnablePllUpdate(enable);
-    }
-    DisplayError UpdateDisplayPll(int32_t ppm) {
-      return display_intf_->UpdateDisplayPll(ppm);
-    }
-    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
-      return display_intf_->GetHdrInfo(display_hdr_info);
-    }
+  DisplayError CreateDisplay() { return display_intf_->CreateDisplay(); }
+  DisplayError DestroyDisplay() { return display_intf_->DestroyDisplay(); }
+  DisplayError Prepare(struct drm_output *output) {
+    return display_intf_->Prepare(output);
+  }
+  DisplayError Commit(struct drm_output *output) {
+    return display_intf_->Commit(output);
+  }
+  DisplayError Flush() {
+    return display_intf_->Flush();
+  }
+  DisplayError SetDisplayState(DisplayState state) {
+    return display_intf_->SetDisplayState(state);
+  }
+  DisplayError SetVSyncState(bool enable, struct drm_output *output) {
+    return display_intf_->SetVSyncState(enable, output);
+  }
+  DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
+    return display_intf_->GetDisplayConfiguration(display_config);
+  }
+  DisplayError RegisterCbs(int display_id, sdm_cbs_t *cbs) {
+    hotplug_cb_ = cbs->hotplug_cb;
+    return kErrorNone;
+  }
+  DisplayError EnablePllUpdate(int32_t enable) {
+    return display_intf_->EnablePllUpdate(enable);
+  }
+  DisplayError UpdateDisplayPll(int32_t ppm) {
+    return display_intf_->UpdateDisplayPll(ppm);
+  }
+  DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
+    return display_intf_->GetHdrInfo(display_hdr_info);
+  }
 
-    int HandleHotplug(bool connected);
+  int HandleHotplug(bool connected);
 
-  private:
-    // Uevent thread
-    static void *UeventThread(void *context);
-    void *UeventThreadHandler();
+private:
+  // Uevent thread
+  static void *UeventThread(void *context);
+  void *UeventThreadHandler();
 
-    SdmDisplayInterface *display_intf_;
-    int32_t display_id_ = -1;
-    DisplayType disp_type_;
-    CoreInterface *core_intf_;
-    SdmNullDisplay null_disp_;
-    SdmDisplay sdm_disp_;
-    std::thread uevent_thread_;
-    bool uevent_thread_exit_ = false;
-    const char *uevent_thread_name_ = "SDM_UeventThread";
-    hotplug_cb_t hotplug_cb_;
+  SdmDisplayInterface *display_intf_;
+  int32_t display_id_ = -1;
+  DisplayType disp_type_;
+  CoreInterface *core_intf_;
+  SdmNullDisplay null_disp_;
+  SdmDisplay sdm_disp_;
+  std::thread uevent_thread_;
+  bool uevent_thread_exit_ = false;
+  const char *uevent_thread_name_ = "SDM_UeventThread";
+  hotplug_cb_t hotplug_cb_;
 };
 
 }  // namespace sdm

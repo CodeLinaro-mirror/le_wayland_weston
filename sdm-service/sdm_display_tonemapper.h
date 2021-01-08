@@ -30,8 +30,6 @@
 #ifndef __SDM_DISPLAY_TONEMAPPER_H__
 #define __SDM_DISPLAY_TONEMAPPER_H__
 
-
-
 #include <fcntl.h>
 #include <sys/mman.h>
 
@@ -57,7 +55,7 @@ struct ToneMapConfig {
 };
 
 class ToneMapSession {
- public:
+public:
   explicit ToneMapSession(SdmDisplayBufferAllocator *buffer_allocator);
   ~ToneMapSession();
   DisplayError AllocateIntermediateBuffers(const Layer *layer);
@@ -79,7 +77,7 @@ class ToneMapSession {
 };
 
 class SdmDisplayToneMapper {
- public:
+public:
   explicit SdmDisplayToneMapper(SdmDisplayBufferAllocator *allocator) : buffer_allocator_(allocator) {}
   ~SdmDisplayToneMapper() {}
 
@@ -89,7 +87,7 @@ class SdmDisplayToneMapper {
   void SetFrameDumpConfig(uint32_t count);
   void Terminate();
 
- private:
+private:
   void ToneMap(Layer *layer, ToneMapSession *session);
   DisplayError AcquireToneMapSession(Layer *layer, uint32_t *session_index);
   void DumpToneMapOutput(ToneMapSession *session, int *acquire_fence);

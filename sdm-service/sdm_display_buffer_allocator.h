@@ -43,7 +43,7 @@ inline Type ALIGN(Type x, Type align) {
   return (x + align - 1) & ~(align - 1);
 }
 class SdmDisplayBufferAllocator : public BufferAllocator {
- public:
+public:
   SdmDisplayBufferAllocator();
   ~SdmDisplayBufferAllocator() {
     gbm_device_destroy(gbm_);
@@ -60,11 +60,10 @@ class SdmDisplayBufferAllocator : public BufferAllocator {
   DisplayError GetBufferLayout(const AllocatedBufferInfo &buf_info,
                                uint32_t stride[4], uint32_t offset[4],
                                uint32_t *num_planes);
- private:
+private:
   bool IsFormatVideo(uint32_t fmt);
   struct gbm_device *gbm_ = NULL;
 };
 
 }  // namespace sdm
 #endif  // __SDM_DISPLAY_BUFFER_ALLOCATOR_H__
-

@@ -59,5 +59,3 @@ bool SdmDisplayBufferSyncHandler::IsSyncSignaled(int fd) {
 }
 
 }  // namespace sdm
-
-

@@ -35,7 +35,7 @@
 namespace sdm {
 
 class SdmDisplaySocketHandler : public SocketHandler {
- public:
+public:
   SdmDisplaySocketHandler();
 
   int GetSocketFd(SocketType socket_type);

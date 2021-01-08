@@ -38,7 +38,7 @@ path=/usr/bin/google-chrome
 
 [launcher]
 icon=/usr/share/icons/gnome/24x24/apps/arts.png
-path=@abs_top_builddir@/weston-flower
+path=@bindir@/weston-flower
 
 [input-method]
 path=@libexecdir@/weston-keyboard
@@ -60,7 +60,20 @@ path=@libexecdir@/weston-keyboard
 #transform=flipped-90
 
 #[libinput]
-#enable_tap=true
+#enable-tap=true
+#tap-and-drag=true
+#tap-and-drag-lock=true
+#disable-while-typing=false
+#middle-button-emulation=true
+#left-handed=true
+#rotation=90
+#accel-profile=flat
+#accel-speed=.9
+#natural-scroll=true
+#scroll-method=edge
+# For button-triggered scrolling:
+#scroll-method=button
+#scroll-button=BTN_RIGHT
 
 #[touchpad]
 #constant_accel_factor = 50

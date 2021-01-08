@@ -40,44 +40,45 @@ extern "C" {
 #define MAX_MIXER_WIDTH         2560
 
 struct drm_output;
+
 /* Buffer format enum */
 enum {
-       SDM_BUFFER_FORMAT_ARGB_8888,
-       SDM_BUFFER_FORMAT_ABGR_8888,
-       SDM_BUFFER_FORMAT_RGBA_8888,
-       SDM_BUFFER_FORMAT_BGRA_8888,
-       SDM_BUFFER_FORMAT_XRGB_8888,
-       SDM_BUFFER_FORMAT_XBGR_8888,
-       SDM_BUFFER_FORMAT_RGBX_8888,
-       SDM_BUFFER_FORMAT_BGRX_8888,
-       SDM_BUFFER_FORMAT_RGBA_5551,
-       SDM_BUFFER_FORMAT_RGBA_4444,
-       SDM_BUFFER_FORMAT_RGB_888,
-       SDM_BUFFER_FORMAT_BGR_888,
-       SDM_BUFFER_FORMAT_RGB_565,
-       SDM_BUFFER_FORMAT_BGR_565,
-       SDM_BUFFER_FORMAT_ABGR_2101010,
-       SDM_BUFFER_FORMAT_RGBA_2101010,
-       SDM_BUFFER_FORMAT_RGBA_8888_Ubwc,
-       SDM_BUFFER_FORMAT_RGBX_8888_Ubwc,
-       SDM_BUFFER_FORMAT_BGR565_Ubwc,
-       SDM_BUFFER_FORMAT_YCbCr_420_P,
-       SDM_BUFFER_FORMAT_YCrCb_420_P,
-       SDM_BUFFER_FORMAT_YV12,
-       SDM_BUFFER_FORMAT_YCbCr_420_SP,
-       SDM_BUFFER_FORMAT_YCrCb_420_SP,
-       SDM_BUFFER_FORMAT_NV12_ENCODEABLE,
-       SDM_BUFFER_FORMAT_YCbCr_420_TP10_UBWC,
-       SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC,
-       SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS,
-       SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS_UBWC,
-       SDM_BUFFER_FORMAT_YCbCr_422_SP,
-       SDM_BUFFER_FORMAT_YCbCr_422_I,
-       SDM_BUFFER_FORMAT_CbYCrY_422_I,
-       SDM_BUFFER_FORMAT_CrYCbY_422_I,
-       SDM_BUFFER_FORMAT_YCbYCr_422_I,
-       SDM_BUFFER_FORMAT_YCrYCb_422_I,
-       SDM_BUFFER_FORMAT_INVALID = 0xFFFFFFFF,
+  SDM_BUFFER_FORMAT_ARGB_8888,
+  SDM_BUFFER_FORMAT_ABGR_8888,
+  SDM_BUFFER_FORMAT_RGBA_8888,
+  SDM_BUFFER_FORMAT_BGRA_8888,
+  SDM_BUFFER_FORMAT_XRGB_8888,
+  SDM_BUFFER_FORMAT_XBGR_8888,
+  SDM_BUFFER_FORMAT_RGBX_8888,
+  SDM_BUFFER_FORMAT_BGRX_8888,
+  SDM_BUFFER_FORMAT_RGBA_5551,
+  SDM_BUFFER_FORMAT_RGBA_4444,
+  SDM_BUFFER_FORMAT_RGB_888,
+  SDM_BUFFER_FORMAT_BGR_888,
+  SDM_BUFFER_FORMAT_RGB_565,
+  SDM_BUFFER_FORMAT_BGR_565,
+  SDM_BUFFER_FORMAT_ABGR_2101010,
+  SDM_BUFFER_FORMAT_RGBA_2101010,
+  SDM_BUFFER_FORMAT_RGBA_8888_Ubwc,
+  SDM_BUFFER_FORMAT_RGBX_8888_Ubwc,
+  SDM_BUFFER_FORMAT_BGR565_Ubwc,
+  SDM_BUFFER_FORMAT_YCbCr_420_P,
+  SDM_BUFFER_FORMAT_YCrCb_420_P,
+  SDM_BUFFER_FORMAT_YV12,
+  SDM_BUFFER_FORMAT_YCbCr_420_SP,
+  SDM_BUFFER_FORMAT_YCrCb_420_SP,
+  SDM_BUFFER_FORMAT_NV12_ENCODEABLE,
+  SDM_BUFFER_FORMAT_YCbCr_420_TP10_UBWC,
+  SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC,
+  SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS,
+  SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS_UBWC,
+  SDM_BUFFER_FORMAT_YCbCr_422_SP,
+  SDM_BUFFER_FORMAT_YCbCr_422_I,
+  SDM_BUFFER_FORMAT_CbYCrY_422_I,
+  SDM_BUFFER_FORMAT_CrYCbY_422_I,
+  SDM_BUFFER_FORMAT_YCbYCr_422_I,
+  SDM_BUFFER_FORMAT_YCrYCb_422_I,
+  SDM_BUFFER_FORMAT_INVALID = 0xFFFFFFFF,
 };
 
 
@@ -85,39 +86,39 @@ enum {
 /*****************Prepare*****************/
 /* Composition type for each layer*/
 enum {
-       SDM_COMPOSITION_GPU = 0,
-       SDM_COMPOSITION_OVERLAY,
-       SDM_COMPOSITION_HW_CURSOR,
-       SDM_COMPOSITION_FB_TARGET
+  SDM_COMPOSITION_GPU = 0,
+  SDM_COMPOSITION_OVERLAY,
+  SDM_COMPOSITION_HW_CURSOR,
+  SDM_COMPOSITION_FB_TARGET
 
 };
 
 /* Blending type for each layer, now only support premultiplied blending */
 enum {
-       SDM_BLENDING_NONE = 0,
-       SDM_BLENDING_PREMULTIPLIED,
+  SDM_BLENDING_NONE = 0,
+  SDM_BLENDING_PREMULTIPLIED,
 };
 
 /* Rotation type*/
 enum {
-       SDM_TRANSFORM_NORMAL = 0x00,
-       SDM_TRANSFORM_FLIP_H = 0x01,
-       SDM_TRANSFORM_FLIP_V = 0x02,
-       SDM_TRANSFORM_90 = 0x04,
-       SDM_TRANSFORM_180 = 0x03,
-       SDM_TRANSFORM_270 = 0x07,
+  SDM_TRANSFORM_NORMAL = 0x00,
+  SDM_TRANSFORM_FLIP_H = 0x01,
+  SDM_TRANSFORM_FLIP_V = 0x02,
+  SDM_TRANSFORM_90 = 0x04,
+  SDM_TRANSFORM_180 = 0x03,
+  SDM_TRANSFORM_270 = 0x07,
 };
 
 struct Rect {
-       float left;
-       float top;
-       float right;
-       float bottom;
+  float left;
+  float top;
+  float right;
+  float bottom;
 };
 
 struct  RectArray {
-       struct Rect *rects;
-       uint32_t count;
+  struct Rect *rects;
+  uint32_t count;
 };
 
 /*
@@ -125,54 +126,54 @@ struct  RectArray {
  * strategy result.
  */
 struct LayerGeometryFlags {
-       uint32_t skip : 1;
-       uint32_t is_cursor : 1;
-       uint32_t has_ubwc_buf : 1;
-       uint32_t video_present: 1;
-       uint32_t secure_present: 1;
-       uint32_t hdr_present: 1;
-       uint32_t metadata_present: 1;
+  uint32_t skip : 1;
+  uint32_t is_cursor : 1;
+  uint32_t has_ubwc_buf : 1;
+  uint32_t video_present: 1;
+  uint32_t secure_present: 1;
+  uint32_t hdr_present: 1;
+  uint32_t metadata_present: 1;
 };
 
 
 /* Layer geometry information filled by compositor */
 /* TODO: Check if LayerGeometry from sdm layer could be re-used  */
 struct LayerGeometry {
-       /* Buffer information */
-       uint32_t               width;
-       uint32_t               height;
-       uint32_t               unaligned_width;
-       uint32_t               unaligned_height;
-       uint32_t               format;
-       uint32_t               fb_id;
-       uint32_t               ion_fd;
-       /* Layer information */
-       uint32_t               composition; /*GPU, Overlay, HWCursor*/
-       struct Rect            src_rect; /* srouce rectangle */
-       struct Rect            dst_rect; /* destination rectangle */
-       struct RectArray       visible_regions;
-       struct RectArray       dirty_regions;
-       uint32_t               blending;
-       uint32_t               transform;
-       uint8_t                plane_alpha; /* global alpha */
-       struct LayerGeometryFlags        flags;
-       ColorMetaData color_metadata;
+  /* Buffer information */
+  uint32_t               width;
+  uint32_t               height;
+  uint32_t               unaligned_width;
+  uint32_t               unaligned_height;
+  uint32_t               format;
+  uint32_t               fb_id;
+  uint32_t               ion_fd;
+  /* Layer information */
+  uint32_t               composition; /*GPU, Overlay, HWCursor*/
+  struct Rect            src_rect; /* srouce rectangle */
+  struct Rect            dst_rect; /* destination rectangle */
+  struct RectArray       visible_regions;
+  struct RectArray       dirty_regions;
+  uint32_t               blending;
+  uint32_t               transform;
+  uint8_t                plane_alpha; /* global alpha */
+  struct LayerGeometryFlags        flags;
+  ColorMetaData color_metadata;
 
-       /*Hook for storing information relative to compositor. DO NOT MODIFY IT!!!*/
-       const void *usr_data;
+  /*Hook for storing information relative to compositor. DO NOT MODIFY IT!!!*/
+  const void *usr_data;
 };
 
 /* Scaling property */
 struct ScalingInfo {
-       struct Rect src;
-       struct Rect dst;
-       bool rotate_90;
+  struct Rect src;
+  struct Rect dst;
+  bool rotate_90;
 };
 
 /* Cursor position property */
 struct CursorPosition {
-       int x;
-       int y;
+  int x;
+  int y;
 };
 
 
@@ -182,17 +183,17 @@ struct CursorPosition {
  * List of properties attached to SDM CRTCs
  */
 enum wsdm_crtc_property {
-     WSDM_CRTC_MODE_ID = 0,
-     WSDM_CRTC_ACTIVE,
-     WSDM_CRTC__COUNT
+    WSDM_CRTC_MODE_ID = 0,
+    WSDM_CRTC_ACTIVE,
+    WSDM_CRTC__COUNT
 };
 
 /**
  * List of properties attached to SDM connectors
  */
 enum wsdm_connector_property {
-     WSDM_CONNECTOR_CRTC_ID = 0,
-     WSDM_CONNECTOR__COUNT
+    WSDM_CONNECTOR_CRTC_ID = 0,
+  WSDM_CONNECTOR__COUNT
 };
 
 /**

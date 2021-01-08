@@ -32,13 +32,14 @@
 #include <math.h>
 #include <assert.h>
 #include <getopt.h>
+#include <errno.h>
 
 #include <linux/input.h>
 #include <wayland-client.h>
 
 #include "window.h"
 #include "shared/helpers.h"
-#include "shared/matrix.h"
+#include <libweston/matrix.h>
 
 /* Our points for the calibration must be not be on a line */
 static const struct {
@@ -286,11 +287,12 @@ main(int argc, char *argv[])
 			break;
 		}
 	}
-	
+
 	display = display_create(&argc, argv);
 
 	if (display == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 

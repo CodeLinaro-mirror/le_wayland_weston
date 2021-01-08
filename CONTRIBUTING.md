@@ -1,6 +1,30 @@
 Contributing to Weston
 =======================
 
+Finding something to work on
+----------------------------
+
+Weston's development is [tracked on GitLab](https://gitlab.freedesktop.org/wayland/weston).
+In addition to reviewing code submissions (see below), we use the issue tracker
+to discuss both bugfixes and development of new features.
+
+The '[good for new contributors](https://gitlab.freedesktop.org/wayland/weston/issues?label_name%5B%5D=Good+for+new+contributors)'
+label is used for issues the development team thinks are a good place to begin
+working on Weston. These issues cover features or bugfixes which are small,
+self-contained, don't require much specific background knowledge, and aren't
+blocked by more complex work.
+
+If you have picked an issue you would like to work on, you may want to mention
+in the issue tracker that you would like to pick it up. You can also discuss
+it with the developers in the issue tracker, or on the
+[mailing list](https://lists.freedesktop.org/mailman/listinfo/wayland-devel).
+Many developers also use IRC through [Freenode](https://freenode.net)'s
+`#wayland` channel; however you may need to wait some time for a response on
+IRC, which requires keeping your client connected. If you cannot stay for a
+long time (potentially some hours due to timezone differences), then you
+may want to send your question to the list or issue tracker instead.
+
+
 Sending patches
 ---------------
 
@@ -13,7 +37,7 @@ fork the core Weston repository, push your changes to a branch in your new
 repository, and then submit these patches for review through a merge request.
 
 Weston formerly accepted patches via `git-send-email`, sent to
-**wayland-devel@lists.freedesktop.org**; these were
+**wayland-devel\@lists.freedesktop.org**; these were
 [tracked using Patchwork](https://patchwork.freedesktop.org/projects/wayland/).
 Some old patches continue to be sent this way, and we may accept small new
 patches sent to the list, but please send all new patches through GitLab merge
@@ -74,7 +98,9 @@ See [notes on commit messages] for a recommended reading on writing commit
 messages.
 
 Your patches should also include a Signed-off-by line with your name and
-email address.  If you're not the patch's original author, you should
+email address which indicates that you agree to the
+[Developer's Certificate of Origin 1.1](DCO-1.1.txt).
+If you're not the patch's original author, you should
 also gather S-o-b's by them (and/or whomever gave the patch to you.) The
 significance of this is that it certifies that you created the patch,
 that it was created under an appropriate open source license, or
@@ -234,7 +260,7 @@ During review, the following matters should be checked:
 
 - Stable ABI or API additions must be justified by actual use cases, not only
 by speculation. They must also be documented, and it is strongly recommended to
-include tests excercising the additions in the test suite.
+include tests exercising the additions in the test suite.
 
 - The code fits the existing software architecture, e.g. no layering
 violations.

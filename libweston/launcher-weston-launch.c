@@ -44,7 +44,7 @@
 #include <linux/kd.h>
 #include <linux/major.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 #include "weston-launch.h"
 #include "launcher-impl.h"
 
@@ -169,10 +169,12 @@ launcher_weston_launch_restore(struct weston_launcher *launcher_base)
 
 	if (ioctl(launcher->tty, KDSKBMUTE, 0) &&
 	    ioctl(launcher->tty, KDSKBMODE, launcher->kb_mode))
-		weston_log("failed to restore kb mode: %m\n");
+		weston_log("failed to restore kb mode: %s\n",
+			   strerror(errno));
 
 	if (ioctl(launcher->tty, KDSETMODE, KD_TEXT))
-		weston_log("failed to set KD_TEXT mode on tty: %m\n");
+		weston_log("failed to set KD_TEXT mode on tty: %s\n",
+			   strerror(errno));
 
 	/* We have to drop master before we switch the VT back in
 	 * VT_AUTO, so we don't risk switching to a VT with another
@@ -205,12 +207,12 @@ launcher_weston_launch_data(int fd, uint32_t mask, void *data)
 
 	switch (ret) {
 	case WESTON_LAUNCHER_ACTIVATE:
-		launcher->compositor->session_active = 1;
+		launcher->compositor->session_active = true;
 		wl_signal_emit(&launcher->compositor->session_signal,
 			       launcher->compositor);
 		break;
 	case WESTON_LAUNCHER_DEACTIVATE:
-		launcher->compositor->session_active = 0;
+		launcher->compositor->session_active = false;
 		wl_signal_emit(&launcher->compositor->session_signal,
 			       launcher->compositor);
 		break;

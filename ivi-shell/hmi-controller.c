@@ -49,6 +49,8 @@
  * TODO: support fade-in when UI is ready
  */
 
+#include "config.h"
+
 #include <sys/wait.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -129,9 +131,9 @@ struct hmi_controller {
 	struct weston_compositor           *compositor;
 	struct wl_listener                  destroy_listener;
 
-	struct wl_listener                  surface_created;
 	struct wl_listener                  surface_removed;
 	struct wl_listener                  surface_configured;
+	struct wl_listener                  desktop_surface_configured;
 
 	struct wl_client                   *user_interface;
 	struct ui_setting                   ui_setting;
@@ -577,28 +579,6 @@ create_layer(struct weston_output *output,
  * Internal set notification
  */
 static void
-set_notification_create_surface(struct wl_listener *listener, void *data)
-{
-	struct hmi_controller *hmi_ctrl =
-			wl_container_of(listener, hmi_ctrl,
-					surface_created);
-	struct ivi_layout_surface *ivisurf = data;
-	struct hmi_controller_layer *layer_link =
-					wl_container_of(hmi_ctrl->application_layer_list.prev,
-							layer_link,
-							link);
-	struct ivi_layout_layer *application_layer = layer_link->ivilayer;
-	int32_t ret = 0;
-
-	/* skip ui widgets */
-	if (is_surf_in_ui_widget(hmi_ctrl, ivisurf))
-		return;
-
-	ret = hmi_ctrl->interface->layer_add_surface(application_layer, ivisurf);
-	assert(!ret);
-}
-
-static void
 set_notification_remove_surface(struct wl_listener *listener, void *data)
 {
 	struct hmi_controller *hmi_ctrl =
@@ -665,6 +645,42 @@ set_notification_configure_surface(struct wl_listener *listener, void *data)
 	switch_mode(hmi_ctrl, hmi_ctrl->layout_mode);
 }
 
+static void
+set_notification_configure_desktop_surface(struct wl_listener *listener, void *data)
+{
+	struct hmi_controller *hmi_ctrl =
+			wl_container_of(listener, hmi_ctrl,
+					desktop_surface_configured);
+	struct ivi_layout_surface *ivisurf = data;
+	struct hmi_controller_layer *layer_link =
+					wl_container_of(hmi_ctrl->application_layer_list.prev,
+							layer_link,
+							link);
+	struct ivi_layout_layer *application_layer = layer_link->ivilayer;
+	struct weston_surface *surface;
+	int32_t ret = 0;
+
+	/* skip ui widgets */
+	if (is_surf_in_ui_widget(hmi_ctrl, ivisurf))
+		return;
+
+	ret = hmi_ctrl->interface->layer_add_surface(application_layer, ivisurf);
+	assert(!ret);
+
+	/*
+	 * if application changes size of wl_buffer. The source rectangle shall be
+	 * fit to the size.
+	 */
+	surface = hmi_ctrl->interface->surface_get_weston_surface(ivisurf);
+	if (surface) {
+		hmi_ctrl->interface->surface_set_source_rectangle(ivisurf, 0,
+				0, surface->width, surface->height);
+	}
+
+	hmi_ctrl->interface->commit_changes();
+	switch_mode(hmi_ctrl, hmi_ctrl->layout_mode);
+}
+
 /**
  * A hmi_controller used 4 ivi_layers to manage ivi_surfaces. The IDs of
  * corresponding ivi_layer are defined in weston.ini. Default scene graph
@@ -707,7 +723,7 @@ hmi_server_setting_create(struct weston_compositor *ec)
 					 "ivi-shell-user-interface",
 					 &ivi_ui_config, NULL);
 	if (ivi_ui_config && ivi_ui_config[0] != '/') {
-		setting->ivi_homescreen = wet_get_binary_path(ivi_ui_config);
+		setting->ivi_homescreen = wet_get_libexec_path(ivi_ui_config);
 		if (setting->ivi_homescreen)
 			free(ivi_ui_config);
 		else
@@ -867,6 +883,9 @@ hmi_controller_create(struct weston_compositor *ec)
 
 	hmi_ctrl->surface_configured.notify = set_notification_configure_surface;
 	hmi_ctrl->interface->add_listener_configure_surface(&hmi_ctrl->surface_configured);
+
+	hmi_ctrl->desktop_surface_configured.notify = set_notification_configure_desktop_surface;
+	hmi_ctrl->interface->add_listener_configure_desktop_surface(&hmi_ctrl->desktop_surface_configured);
 
 	hmi_ctrl->destroy_listener.notify = hmi_controller_destroy;
 	wl_signal_add(&hmi_ctrl->compositor->destroy_signal,
@@ -1288,13 +1307,6 @@ ivi_hmi_controller_UI_ready(struct wl_client *client,
 	hmi_ctrl->interface->commit_changes();
 
 	ivi_hmi_controller_add_launchers(hmi_ctrl, 256);
-
-	/* Add surface_created listener after the initialization of launchers.
-	 * Otherwise, surfaces of the launchers will be added to application
-	 * layer too.*/
-	hmi_ctrl->surface_created.notify = set_notification_create_surface;
-	hmi_ctrl->interface->add_listener_create_surface(&hmi_ctrl->surface_created);
-
 	hmi_ctrl->is_initialized = 1;
 }
 
@@ -1968,6 +1980,10 @@ wet_module_init(struct weston_compositor *ec,
 {
 	struct hmi_controller *hmi_ctrl = NULL;
 	struct wl_event_loop *loop = NULL;
+
+	/* ad hoc weston_compositor_add_destroy_listener_once() */
+	if (wl_signal_get(&ec->destroy_signal, hmi_controller_destroy))
+		return 0;
 
 	hmi_ctrl = hmi_controller_create(ec);
 	if (hmi_ctrl == NULL)

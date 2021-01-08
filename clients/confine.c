@@ -34,6 +34,7 @@
 #include <math.h>
 #include <assert.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include <linux/input.h>
 #include <wayland-client.h>
@@ -44,8 +45,8 @@
 
 #define NUM_COMPLEX_REGION_RECTS 9
 
-static int32_t option_complex_confine_region;
-static int32_t option_help;
+static bool option_complex_confine_region;
+static bool option_help;
 
 struct confine {
 	struct display *display;
@@ -490,7 +491,8 @@ main(int argc, char *argv[])
 
 	display = display_create(&argc, argv);
 	if (display == NULL) {
-		fprintf(stderr, "failed to create display: %m\n");
+		fprintf(stderr, "failed to create display: %s\n",
+			strerror(errno));
 		return -1;
 	}
 

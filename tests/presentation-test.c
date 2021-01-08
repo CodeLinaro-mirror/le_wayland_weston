@@ -43,10 +43,7 @@ get_presentation(struct client *client)
 {
 	struct global *g;
 	struct global *global_pres = NULL;
-	static struct wp_presentation *pres;
-
-	if (pres)
-		return pres;
+	struct wp_presentation *pres;
 
 	wl_list_for_each(g, &client->global_list, link) {
 		if (strcmp(g->interface, wp_presentation_interface.name))
@@ -137,13 +134,15 @@ static const struct wp_presentation_feedback_listener feedback_listener = {
 };
 
 static struct feedback *
-feedback_create(struct client *client, struct wl_surface *surface)
+feedback_create(struct client *client,
+		struct wl_surface *surface,
+		struct wp_presentation *pres)
 {
 	struct feedback *fb;
 
 	fb = xzalloc(sizeof *fb);
 	fb->client = client;
-	fb->obj = wp_presentation_feedback(get_presentation(client), surface);
+	fb->obj = wp_presentation_feedback(pres, surface);
 	wp_presentation_feedback_add_listener(fb->obj, &feedback_listener, fb);
 
 	return fb;
@@ -189,17 +188,17 @@ feedback_print(struct feedback *fb)
 
 	switch (fb->result) {
 	case FB_PENDING:
-		printf("pending");
+		testlog("pending");
 		return;
 	case FB_DISCARDED:
-		printf("discarded");
+		testlog("discarded");
 		return;
 	case FB_PRESENTED:
 		break;
 	}
 
 	pflags_to_str(fb->flags, str, sizeof str);
-	printf("presented %lld.%09lld, refresh %u us, [%s] seq %" PRIu64,
+	testlog("presented %lld.%09lld, refresh %u us, [%s] seq %" PRIu64,
 		(long long)fb->time.tv_sec, (long long)fb->time.tv_nsec,
 		fb->refresh_nsec / 1000, str, fb->seq);
 }
@@ -215,13 +214,15 @@ TEST(test_presentation_feedback_simple)
 {
 	struct client *client;
 	struct feedback *fb;
+	struct wp_presentation *pres;
 
 	client = create_client_and_test_surface(100, 50, 123, 77);
 	assert(client);
+	pres = get_presentation(client);
 
 	wl_surface_attach(client->surface->wl_surface,
 			  client->surface->buffer->proxy, 0, 0);
-	fb = feedback_create(client, client->surface->wl_surface);
+	fb = feedback_create(client, client->surface->wl_surface, pres);
 	wl_surface_damage(client->surface->wl_surface, 0, 0, 100, 100);
 	wl_surface_commit(client->surface->wl_surface);
 
@@ -229,9 +230,9 @@ TEST(test_presentation_feedback_simple)
 
 	feedback_wait(fb);
 
-	printf("%s feedback:", __func__);
+	testlog("%s feedback:", __func__);
 	feedback_print(fb);
-	printf("\n");
+	testlog("\n");
 
 	feedback_destroy(fb);
 }

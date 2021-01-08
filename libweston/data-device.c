@@ -32,7 +32,7 @@
 #include <stdio.h>
 #include <assert.h>
 
-#include "compositor.h"
+#include <libweston/libweston.h>
 #include "shared/helpers.h"
 #include "shared/timespec-util.h"
 
@@ -219,6 +219,13 @@ data_offer_finish(struct wl_client *client, struct wl_resource *resource)
 
 	if (!offer->source || offer->source->offer != offer)
 		return;
+
+	if (offer->source->set_selection) {
+		wl_resource_post_error(offer->resource,
+				       WL_DATA_OFFER_ERROR_INVALID_FINISH,
+				       "finish only valid for drag n drop");
+		return;
+	}
 
 	/* Disallow finish while we have a grab driving drag-and-drop, or
 	 * if the negotiation is not at the right stage
@@ -1146,6 +1153,9 @@ weston_seat_set_selection(struct weston_seat *seat,
 	seat->selection_data_source = source;
 	seat->selection_serial = serial;
 
+	if (source)
+		source->set_selection = true;
+
 	if (keyboard)
 		focus = keyboard->focus;
 	if (focus && focus->resource) {
@@ -1267,6 +1277,7 @@ create_data_source(struct wl_client *client,
 	source->dnd_actions = 0;
 	source->current_dnd_action = WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE;
 	source->compositor_action = WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE;
+	source->set_selection = false;
 
 	wl_array_init(&source->mime_types);
 

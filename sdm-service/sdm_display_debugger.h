@@ -40,16 +40,16 @@
 #include <stdint.h>
 
 enum {
-       NONE,
-       ERROR,
-       WARNING,
-       INFO,
-       DEBUG,
-       VERBOSE
+  NONE,
+  ERROR,
+  WARNING,
+  INFO,
+  DEBUG,
+  VERBOSE
 };
 
 #define WLOG(method, format, ...) SdmDisplayDebugger::Get()->method(__CLASS__ "::%s: " format, \
-                                                            __FUNCTION__, ##__VA_ARGS__)
+                                  __FUNCTION__, ##__VA_ARGS__)
 
 #define WLOGE_IF(format, ...) WLOG(Error, format, ##__VA_ARGS__)
 #define WLOGW_IF(format, ...) WLOG(Warning, format, ##__VA_ARGS__)
@@ -68,7 +68,7 @@ namespace sdm {
 using display::DebugHandler;
 
 class SdmDisplayDebugger : public DebugHandler {
- public:
+public:
   SdmDisplayDebugger();
   static inline SdmDisplayDebugger* Get() { return &debug_handler_; }
 
@@ -86,7 +86,7 @@ class SdmDisplayDebugger : public DebugHandler {
 
   int debug_level_ = INFO;
 
- private:
+private:
   static SdmDisplayDebugger debug_handler_;
 };
 

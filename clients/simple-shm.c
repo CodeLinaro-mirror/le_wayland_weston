@@ -33,26 +33,22 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <signal.h>
+#include <errno.h>
 
 #include <wayland-client.h>
 #include "shared/os-compatibility.h"
-#include "shared/zalloc.h"
-#include "xdg-shell-unstable-v6-client-protocol.h"
+#include <libweston/zalloc.h>
+#include "xdg-shell-client-protocol.h"
 #include "fullscreen-shell-unstable-v1-client-protocol.h"
-
-#include <sys/types.h>
-#include "ivi-application-client-protocol.h"
-#define IVI_SURFACE_ID 9000
 
 struct display {
 	struct wl_display *display;
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
-	struct zxdg_shell_v6 *shell;
+	struct xdg_wm_base *wm_base;
 	struct zwp_fullscreen_shell_v1 *fshell;
 	struct wl_shm *shm;
 	bool has_xrgb;
-	struct ivi_application *ivi_application;
 };
 
 struct buffer {
@@ -65,9 +61,8 @@ struct window {
 	struct display *display;
 	int width, height;
 	struct wl_surface *surface;
-	struct zxdg_surface_v6 *xdg_surface;
-	struct zxdg_toplevel_v6 *xdg_toplevel;
-	struct ivi_surface *ivi_surface;
+	struct xdg_surface *xdg_surface;
+	struct xdg_toplevel *xdg_toplevel;
 	struct buffer buffers[2];
 	struct buffer *prev_buffer;
 	struct wl_callback *callback;
@@ -104,14 +99,14 @@ create_shm_buffer(struct display *display, struct buffer *buffer,
 
 	fd = os_create_anonymous_file(size);
 	if (fd < 0) {
-		fprintf(stderr, "creating a buffer file for %d B failed: %m\n",
-			size);
+		fprintf(stderr, "creating a buffer file for %d B failed: %s\n",
+			size, strerror(errno));
 		return -1;
 	}
 
 	data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (data == MAP_FAILED) {
-		fprintf(stderr, "mmap failed: %m\n");
+		fprintf(stderr, "mmap failed: %s\n", strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -130,12 +125,12 @@ create_shm_buffer(struct display *display, struct buffer *buffer,
 }
 
 static void
-handle_xdg_surface_configure(void *data, struct zxdg_surface_v6 *surface,
+handle_xdg_surface_configure(void *data, struct xdg_surface *surface,
 			     uint32_t serial)
 {
 	struct window *window = data;
 
-	zxdg_surface_v6_ack_configure(surface, serial);
+	xdg_surface_ack_configure(surface, serial);
 
 	if (window->wait_for_configure) {
 		redraw(window, NULL, 0);
@@ -143,37 +138,26 @@ handle_xdg_surface_configure(void *data, struct zxdg_surface_v6 *surface,
 	}
 }
 
-static const struct zxdg_surface_v6_listener xdg_surface_listener = {
+static const struct xdg_surface_listener xdg_surface_listener = {
 	handle_xdg_surface_configure,
 };
 
 static void
-handle_xdg_toplevel_configure(void *data, struct zxdg_toplevel_v6 *xdg_toplevel,
+handle_xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
 			      int32_t width, int32_t height,
 			      struct wl_array *state)
 {
 }
 
 static void
-handle_xdg_toplevel_close(void *data, struct zxdg_toplevel_v6 *xdg_toplevel)
+handle_xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel)
 {
 	running = 0;
 }
 
-static const struct zxdg_toplevel_v6_listener xdg_toplevel_listener = {
+static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 	handle_xdg_toplevel_configure,
 	handle_xdg_toplevel_close,
-};
-
-static void
-handle_ivi_surface_configure(void *data, struct ivi_surface *ivi_surface,
-			     int32_t width, int32_t height)
-{
-	/* Simple-shm is resizable */
-}
-
-static const struct ivi_surface_listener ivi_surface_listener = {
-	handle_ivi_surface_configure,
 };
 
 static struct window *
@@ -191,21 +175,21 @@ create_window(struct display *display, int width, int height)
 	window->height = height;
 	window->surface = wl_compositor_create_surface(display->compositor);
 
-	if (display->shell) {
+	if (display->wm_base) {
 		window->xdg_surface =
-			zxdg_shell_v6_get_xdg_surface(display->shell,
-						  window->surface);
+			xdg_wm_base_get_xdg_surface(display->wm_base,
+						    window->surface);
 		assert(window->xdg_surface);
-		zxdg_surface_v6_add_listener(window->xdg_surface,
-					     &xdg_surface_listener, window);
+		xdg_surface_add_listener(window->xdg_surface,
+					 &xdg_surface_listener, window);
 
 		window->xdg_toplevel =
-			zxdg_surface_v6_get_toplevel(window->xdg_surface);
+			xdg_surface_get_toplevel(window->xdg_surface);
 		assert(window->xdg_toplevel);
-		zxdg_toplevel_v6_add_listener(window->xdg_toplevel,
-					      &xdg_toplevel_listener, window);
+		xdg_toplevel_add_listener(window->xdg_toplevel,
+					  &xdg_toplevel_listener, window);
 
-		zxdg_toplevel_v6_set_title(window->xdg_toplevel, "simple-shm");
+		xdg_toplevel_set_title(window->xdg_toplevel, "simple-shm");
 		wl_surface_commit(window->surface);
 		window->wait_for_configure = true;
 	} else if (display->fshell) {
@@ -213,19 +197,6 @@ create_window(struct display *display, int width, int height)
 							window->surface,
 							ZWP_FULLSCREEN_SHELL_V1_PRESENT_METHOD_DEFAULT,
 							NULL);
-	} else if (display->ivi_application ) {
-		uint32_t id_ivisurf = IVI_SURFACE_ID + (uint32_t)getpid();
-		window->ivi_surface =
-			ivi_application_surface_create(display->ivi_application,
-						       id_ivisurf, window->surface);
-		if (window->ivi_surface == NULL) {
-			fprintf(stderr, "Failed to create ivi_client_surface\n");
-			abort();
-		}
-
-		ivi_surface_add_listener(window->ivi_surface,
-					 &ivi_surface_listener, window);
-
 	} else {
 		assert(0);
 	}
@@ -245,9 +216,9 @@ destroy_window(struct window *window)
 		wl_buffer_destroy(window->buffers[1].buffer);
 
 	if (window->xdg_toplevel)
-		zxdg_toplevel_v6_destroy(window->xdg_toplevel);
+		xdg_toplevel_destroy(window->xdg_toplevel);
 	if (window->xdg_surface)
-		zxdg_surface_v6_destroy(window->xdg_surface);
+		xdg_surface_destroy(window->xdg_surface);
 	wl_surface_destroy(window->surface);
 	free(window);
 }
@@ -376,13 +347,13 @@ struct wl_shm_listener shm_listener = {
 };
 
 static void
-xdg_shell_ping(void *data, struct zxdg_shell_v6 *shell, uint32_t serial)
+xdg_wm_base_ping(void *data, struct xdg_wm_base *shell, uint32_t serial)
 {
-	zxdg_shell_v6_pong(shell, serial);
+	xdg_wm_base_pong(shell, serial);
 }
 
-static const struct zxdg_shell_v6_listener xdg_shell_listener = {
-	xdg_shell_ping,
+static const struct xdg_wm_base_listener xdg_wm_base_listener = {
+	xdg_wm_base_ping,
 };
 
 static void
@@ -395,10 +366,10 @@ registry_handle_global(void *data, struct wl_registry *registry,
 		d->compositor =
 			wl_registry_bind(registry,
 					 id, &wl_compositor_interface, 1);
-	} else if (strcmp(interface, "zxdg_shell_v6") == 0) {
-		d->shell = wl_registry_bind(registry,
-					    id, &zxdg_shell_v6_interface, 1);
-		zxdg_shell_v6_add_listener(d->shell, &xdg_shell_listener, d);
+	} else if (strcmp(interface, "xdg_wm_base") == 0) {
+		d->wm_base = wl_registry_bind(registry,
+					      id, &xdg_wm_base_interface, 1);
+		xdg_wm_base_add_listener(d->wm_base, &xdg_wm_base_listener, d);
 	} else if (strcmp(interface, "zwp_fullscreen_shell_v1") == 0) {
 		d->fshell = wl_registry_bind(registry,
 					     id, &zwp_fullscreen_shell_v1_interface, 1);
@@ -406,11 +377,6 @@ registry_handle_global(void *data, struct wl_registry *registry,
 		d->shm = wl_registry_bind(registry,
 					  id, &wl_shm_interface, 1);
 		wl_shm_add_listener(d->shm, &shm_listener, d);
-	}
-	else if (strcmp(interface, "ivi_application") == 0) {
-		d->ivi_application =
-			wl_registry_bind(registry, id,
-					 &ivi_application_interface, 1);
 	}
 }
 
@@ -504,8 +470,8 @@ destroy_display(struct display *display)
 	if (display->shm)
 		wl_shm_destroy(display->shm);
 
-	if (display->shell)
-		zxdg_shell_v6_destroy(display->shell);
+	if (display->wm_base)
+		xdg_wm_base_destroy(display->wm_base);
 
 	if (display->fshell)
 		zwp_fullscreen_shell_v1_release(display->fshell);
@@ -554,11 +520,6 @@ main(int argc, char **argv)
 		ret = wl_display_dispatch(display->display);
 
 	fprintf(stderr, "simple-shm exiting\n");
-
-	if (window->display->ivi_application) {
-		ivi_surface_destroy(window->ivi_surface);
-		ivi_application_destroy(window->display->ivi_application);
-	}
 
 	destroy_window(window);
 	destroy_display(display);

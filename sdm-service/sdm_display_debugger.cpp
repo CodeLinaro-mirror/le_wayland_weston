@@ -47,46 +47,46 @@ static void Log(const char *prefix, const char *format, va_list list) {
 
 void SdmDisplayDebugger::Error(const char *format, ...) {
   if (debug_level_ > NONE) {
-      va_list list;
-      va_start(list, format);
-      Log("SDM_E: ", format, list);
-      va_end(list);
+    va_list list;
+    va_start(list, format);
+    Log("SDM_E: ", format, list);
+    va_end(list);
   }
 }
 
 void SdmDisplayDebugger::Warning(const char *format, ...) {
   if (debug_level_ > ERROR) {
-      va_list list;
-      va_start(list, format);
-      Log("SDM_W: ", format, list);
-      va_end(list);
+    va_list list;
+    va_start(list, format);
+    Log("SDM_W: ", format, list);
+    va_end(list);
   }
 }
 
 void SdmDisplayDebugger::Info(const char *format, ...) {
   if (debug_level_ > WARNING) {
-      va_list list;
-      va_start(list, format);
-      Log("SDM_I: ", format, list);
-      va_end(list);
+    va_list list;
+    va_start(list, format);
+    Log("SDM_I: ", format, list);
+    va_end(list);
   }
 }
 
 void SdmDisplayDebugger::Debug(const char *format, ...) {
   if (debug_level_ > INFO) {
-      va_list list;
-      va_start(list, format);
-      Log("SDM_D: ", format, list);
-      va_end(list);
+    va_list list;
+    va_start(list, format);
+    Log("SDM_D: ", format, list);
+    va_end(list);
   }
 }
 
 void SdmDisplayDebugger::Verbose(const char *format, ...) {
   if (debug_level_ > DEBUG) {
-      va_list list;
-      va_start(list, format);
-      Log("SDM_V: ", format, list);
-      va_end(list);
+    va_list list;
+    va_start(list, format);
+    Log("SDM_V: ", format, list);
+    va_end(list);
   }
 }
 
@@ -94,7 +94,7 @@ void SdmDisplayDebugger::EndTrace() {
 }
 
 void SdmDisplayDebugger::BeginTrace(const char *class_name, const char *function_name,
-                          const char *custom_string) {
+                                    const char *custom_string) {
 }
 
 int SdmDisplayDebugger::GetProperty(const char *property_name, int *value) {
