@@ -196,6 +196,8 @@ WL_EXPORT bool is_yuv_format(uint32_t fmt)
 	bool is_yuv = false;
 
 	switch (fmt) {
+		case GBM_FORMAT_YUV420:
+		case GBM_FORMAT_YVU420:
 		case GBM_FORMAT_NV12:
 		case GBM_FORMAT_UYVY:
 		case GBM_FORMAT_YCbCr_420_TP10_UBWC:

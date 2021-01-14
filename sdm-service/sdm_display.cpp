@@ -1043,6 +1043,12 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
     case SDM_BUFFER_FORMAT_YV12:
       format = sdm::kFormatYCrCb420PlanarStride16;
       break;
+    case SDM_BUFFER_FORMAT_YCbCr_420_P:
+      format = sdm::kFormatYCbCr420Planar;
+      break;
+    case SDM_BUFFER_FORMAT_YCrCb_420_P:
+      format = sdm::kFormatYCrCb420Planar;
+      break;
     case SDM_BUFFER_FORMAT_YCrCb_420_SP:
       format = sdm::kFormatYCrCb420SemiPlanar;
       break;
@@ -1153,6 +1159,12 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt) {
       break;
     case GBM_FORMAT_BGR888:
       ret = SDM_BUFFER_FORMAT_RGB_888;
+      break;
+    case GBM_FORMAT_YUV420:
+      ret = SDM_BUFFER_FORMAT_YCbCr_420_P;
+      break;
+    case GBM_FORMAT_YVU420:
+      ret = SDM_BUFFER_FORMAT_YCrCb_420_P;
       break;
     case GBM_FORMAT_NV12:
       ret = SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS;

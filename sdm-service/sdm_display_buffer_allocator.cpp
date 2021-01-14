@@ -75,6 +75,12 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format) {
     case GBM_FORMAT_XRGB8888:
       layer_buffer_format = kFormatBGRX8888;
       break;
+    case GBM_FORMAT_YUV420:
+      layer_buffer_format = kFormatYCbCr420Planar;
+      break;
+    case GBM_FORMAT_YVU420:
+      layer_buffer_format = kFormatYCrCb420Planar;
+      break;
     case GBM_FORMAT_NV12:
       layer_buffer_format = kFormatYCbCr420SemiPlanarVenus;
       break;
