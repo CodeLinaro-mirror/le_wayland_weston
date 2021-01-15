@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017,2020-2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -21,6 +21,9 @@
 * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
+
+#include <display_properties.h>
+#include <cutils/properties.h>
 
 #include "sdm-service/sdm_display.h"
 #include "sdm-service/sdm_display_connect.h"
@@ -46,6 +49,15 @@ SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
 SdmDisplayProxy *display_[kDisplayMax] = {0};
+
+static DisplayError
+SetProperty(const char *property_name, const char *value)
+{
+  if (property_set(property_name, value) == 0) {
+    return kErrorNone;
+  }
+  return kErrorNotSupported;
+}
 
 int CreateCore()
 {
@@ -152,6 +164,8 @@ int CreateDisplay(int display_id)
         DLOGE("Core is not created yet.");
         return kErrorNotSupported;
     }
+
+    SetProperty(DISABLE_SINGLE_LM_SPLIT_PROP, "1");
 
     enum DisplayType display_type;
     switch(display_id) {
