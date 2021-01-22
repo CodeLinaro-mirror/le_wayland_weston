@@ -47,35 +47,37 @@ extern int display_id;
 void
 destroy_sdm_layer(struct sdm_layer *layer)
 {
-    pixman_region32_fini(&layer->overlap);
-    weston_buffer_reference(&layer->buffer_ref, NULL);
-    wl_list_remove(&layer->link);
-    if (layer->bo) {
-        gbm_bo_destroy(layer->bo);
-    }
-    free(layer);
+	pixman_region32_fini(&layer->overlap);
+	weston_buffer_reference(&layer->buffer_ref, NULL);
+	wl_list_remove(&layer->link);
+	if (layer->fb) {
+		drm_fb_unref(layer->fb);
+	}
+	free(layer);
 }
 
 static struct sdm_layer *
 create_sdm_layer(struct drm_output *output, struct weston_view *ev,
 		 pixman_region32_t *overlap, bool is_cursor, bool is_skip)
 {
-    struct sdm_layer *layer;
+	struct sdm_layer *layer;
 
-    layer = zalloc(sizeof(*layer));
-    if (layer == NULL) {
-        return NULL;
-    }
+	layer = zalloc(sizeof(*layer));
+	if (layer == NULL) {
+	    return NULL;
+	}
 
-    layer->view = ev;
-    layer->is_cursor = is_cursor;
-    layer->is_skip = is_skip;
+	layer->view = ev;
+	layer->is_cursor = is_cursor;
+	layer->is_skip = is_skip;
+	if (!is_skip)
+		layer->fb = drm_fb_get_from_view(output, ev);
 
-    pixman_region32_init(&layer->overlap);
-    pixman_region32_copy(&layer->overlap, overlap);
-    weston_buffer_reference(&layer->buffer_ref, ev->surface->buffer_ref.buffer);
+	pixman_region32_init(&layer->overlap);
+	pixman_region32_copy(&layer->overlap, overlap);
+	weston_buffer_reference(&layer->buffer_ref, ev->surface->buffer_ref.buffer);
 
-    return layer;
+	return layer;
 }
 
 void
@@ -86,6 +88,8 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 	struct weston_view *ev;
 	struct weston_plane *primary = &output_base->compositor->primary_plane, *next_plane;
 	struct sdm_layer *sdm_layer, *next_sdm_layer;
+	bool is_skip = false;
+	struct weston_surface *es;
 
 	pixman_region32_t overlap, surface_overlap;
 
@@ -121,10 +125,7 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 		pixman_region32_intersect(&surface_overlap, &overlap,
 						&ev->transform.boundingbox);
 
-		bool is_skip = false;
-		struct weston_surface *es = ev->surface;
-		struct sdm_layer *sdm_layer;
-
+		es = ev->surface;
 		if (!es->buffer_ref.buffer) {
 		    is_skip = true;
 		} else if (linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource)) {
@@ -133,10 +134,9 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 		    is_skip = true;
 		}
 
-		/* For Now all the sdm layer are GPU composed */
-		is_skip = true;
 		sdm_layer = create_sdm_layer(output, ev, &surface_overlap, false, is_skip);
-		sdm_layer->fb = drm_fb_get_from_view(output, ev);
+		if (!sdm_layer)
+			return;
 
 		wl_list_insert(output->sdm_layer_list.prev, &sdm_layer->link);
 		output->view_count++;

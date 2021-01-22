@@ -339,9 +339,9 @@ struct drm_output {
 
 	submit_frame_cb virtual_submit_frame;
 
-	int view_count;
+	int view_count; //counts number of sdm layers created
 	struct wl_list sdm_layer_list;  /* sdm_layer::link      */
-    struct wl_list sdm_commited_layer_list;  /* sdm_layer::link */
+	enum dpms_enum dpms; //tracks dpms level of output
 };
 
 static inline struct drm_head *

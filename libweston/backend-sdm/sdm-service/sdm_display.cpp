@@ -142,7 +142,10 @@ DisplayError SdmDisplay::DestroyDisplay() {
 
 DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
 
-    vblank_cb_(display_id_, vsync.timestamp, drm_output_);
+    if (vblank_cb_)
+      vblank_cb_(display_id_, vsync.timestamp, drm_output_);
+    else
+      DLOGE("vsync not registered");
 
     return kErrorNone;
 }
@@ -837,12 +840,12 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
 
     DLOGI("commiting ion fd = %d", output->next_fb->ion_fd);
 
-
     PreCommit();
 
     ret = display_intf_->Commit(&layer_stack_);
     PostCommit();
 
+    DLOGV("success");
     return ret;
 }
 

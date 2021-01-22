@@ -85,8 +85,8 @@ vblank_handler(int display_id, int64_t timestamp, void *data)
 	if (!output->atomic_complete_pending)
 	    return;
 
-	output->last_vblank.sec = timestamp/1000000;
 	output->last_vblank.usec = timestamp/1000;
+	output->last_vblank.sec = output->last_vblank.usec/1000;
 
 	write(output->vblank_ev_fd, &v, sizeof v);
 }
@@ -117,15 +117,18 @@ on_vblank(int fd, uint32_t mask, void *data)
 	if (!output || !output->base.enabled)
 		return;
 
-	drm_output_update_msc(output, output->last_vblank.frame);
+	if (output->atomic_complete_pending) {
+		drm_output_update_msc(output, output->last_vblank.frame);
+		output->atomic_complete_pending = false;
 
-	assert(b->atomic_modeset);
-	assert(output->atomic_complete_pending);
-	output->atomic_complete_pending = false;
+		assert(b->atomic_modeset);
 
-	usec = output->last_vblank.usec;
-	sec = output->last_vblank.sec;
-	drm_output_update_complete(output, flags, sec, usec);
+		usec = output->last_vblank.usec;
+		sec = output->last_vblank.sec;
+		drm_output_update_complete(output, flags, sec, usec);
+	} else {
+		weston_log("%s: Atomic complete pending is not set yet\n");
+	}
 }
 
 void
@@ -176,15 +179,17 @@ drm_output_enable_vblank(struct drm_output *output)
 static void
 drm_output_disable_vblank(struct drm_output *output)
 {
-       if (output->vblank_ev_source != NULL) {
-               wl_event_source_remove(output->vblank_ev_source);
-               output->vblank_ev_source = NULL;
-       }
+	if (output->vblank_ev_source != NULL) {
+	        wl_event_source_remove(output->vblank_ev_source);
+	        output->vblank_ev_source = NULL;
+	}
 
-       if (output->vblank_ev_fd != -1) {
-               close(output->vblank_ev_fd);
-               output->vblank_ev_fd = -1;
-       }
+	if (output->vblank_ev_fd != -1) {
+		close(output->vblank_ev_fd);
+		output->vblank_ev_fd = -1;
+	}
+
+	SetVSyncState(display_id, false, output);
 }
 
 static int
@@ -240,48 +245,41 @@ drm_output_update_complete(struct drm_output *output, uint32_t flags,
 			   unsigned int sec, unsigned int usec)
 {
 	struct timespec ts;
-	struct sdm_layer *sdm_layer;
+	struct sdm_layer *sdm_layer, *tmp_layer;
 
 	/* Stop the pageflip timer instead of rearming it here */
 	if (output->pageflip_timer)
 		wl_event_source_timer_update(output->pageflip_timer, 0);
 
-	drm_fb_unref(output->current_fb);
-	output->current_fb = output->next_fb;
+	drm_fb_unref(output->next_fb);
 	output->next_fb = NULL;
 
-	wl_list_for_each(sdm_layer, &output->sdm_commited_layer_list, link) {
-		drm_fb_unref(sdm_layer->fb);
+	wl_list_for_each_safe(sdm_layer, tmp_layer, &output->sdm_layer_list, link) {
 		destroy_sdm_layer(sdm_layer);
 	}
 
-	assert(wl_list_empty(&output->sdm_commited_layer_list));
-	wl_list_insert_list(&output->sdm_commited_layer_list, &output->sdm_layer_list);
 	wl_list_init(&output->sdm_layer_list);
 
-	if (output->destroy_pending) {
-		output->destroy_pending = false;
-		output->disable_pending = false;
-		output->dpms_off_pending = false;
-		drm_output_destroy(&output->base);
-		return;
-	} else if (output->disable_pending) {
-		output->disable_pending = false;
-		output->dpms_off_pending = false;
-		weston_output_disable(&output->base);
-		return;
-	} else if (output->dpms_off_pending) {
-		output->dpms_off_pending = false;
+	if (output->dpms != WESTON_DPMS_ON) {
+		if (output->destroy_pending) {
+			output->destroy_pending = false;
+			output->disable_pending = false;
+			output->dpms_off_pending = false;
+			drm_output_destroy(&output->base);
+			return;
+		} else if (output->disable_pending) {
+			output->disable_pending = false;
+			output->dpms_off_pending = false;
+			weston_output_disable(&output->base);
+			return;
+		} else if (output->dpms_off_pending) {
+			output->dpms_off_pending = false;
+		}
 	}
 
 	ts.tv_sec = sec;
 	ts.tv_nsec = usec * 1000;
 	weston_output_finish_frame(&output->base, &ts, flags);
-
-	/* We can't call this from frame_notify, because the output's
-	 * repaint needed flag is cleared just after that */
-	if (output->recorder)
-		weston_output_schedule_repaint(&output->base);
 }
 
 static struct drm_fb *
@@ -337,10 +335,17 @@ drm_output_repaint(struct weston_output *output_base,
 	struct drm_output *output = to_drm_output(output_base);
 	int ret;
 
-	assert(!output->virtual_output);
-
 	if (output->disable_pending || output->destroy_pending)
 		return -1;
+
+	if (output->next_fb)
+		return 0;
+
+	drm_output_render(output, damage);
+	if (!output->next_fb) {
+		weston_log("error: framebuffer not created\n");
+		return -1;
+	}
 
 	ret = SetDisplayState(display_id, WESTON_DPMS_ON);
 	if (ret) {
@@ -348,15 +353,7 @@ drm_output_repaint(struct weston_output *output_base,
 		return ret;
 	}
 
-	if (!output->next_fb)
-		drm_output_render(output, damage);
-
-	if (!output->next_fb) {
-		weston_log("error: framebuffer not created\n");
-		return -1;
-	}
-
-
+	output->dpms = WESTON_DPMS_ON;
 	return 0;
 }
 
@@ -385,7 +382,7 @@ static void *
 drm_repaint_begin(struct weston_compositor *compositor)
 {
 	struct drm_backend *b = to_drm_backend(compositor);
-	struct drm_pending_state *ret;
+	struct drm_pending_state *ret = NULL;
 
 	b->repaint_data = NULL;
 
@@ -413,7 +410,7 @@ static int
 drm_repaint_flush(struct weston_compositor *compositor, void *repaint_data)
 {
 	struct drm_backend *b = to_drm_backend(compositor);
-	struct weston_output *output;
+	struct weston_output *output = NULL;
 	int ret = 0;
 
 	wl_list_for_each(output, &compositor->output_list, link) {
@@ -422,21 +419,24 @@ drm_repaint_flush(struct weston_compositor *compositor, void *repaint_data)
 		if (!drm_output->next_fb)
 			continue;
 
-		SetVSyncState(display_id, true, drm_output);
-		ret = Commit(display_id, drm_output);
+		ret = SetVSyncState(display_id, true, drm_output);
 		if (ret != 0) {
-			weston_log("commit failed \n");
-			free(b->repaint_data);
-			b->repaint_data = NULL;
+			weston_log("Vsync failed\n");
 			return -1;
 		}
+
+		ret = Commit(display_id, drm_output);
+		if (ret != 0) {
+			weston_log("%s : commit failed err = %d\n", __func__, ret);
+			return -2;
+		}
+
 		drm_output->atomic_complete_pending = true;
 	}
 
-	free(b->repaint_data);
 	b->repaint_data = NULL;
 
-	return (ret == -EACCES) ? -1 : 0;
+	return 0;
 }
 
 /**
@@ -535,8 +535,7 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 {
 	struct drm_output *output = to_drm_output(output_base);
 
-	assert(!output->virtual_output);
-
+	output->dpms = level;
 	/* As we throw everything away when disabling, just send us back through
 	 * a repaint cycle. */
 	if (level == WESTON_DPMS_ON) {
@@ -747,8 +746,6 @@ drm_output_enable(struct weston_output *base)
 	struct drm_output *output = to_drm_output(base);
 	struct drm_backend *b = to_drm_backend(base->compositor);
 
-	assert(!output->virtual_output);
-
 	if (b->pageflip_timeout)
 		drm_output_pageflip_timer_create(output);
 
@@ -803,8 +800,6 @@ drm_output_destroy(struct weston_output *base)
 	struct drm_output *output = to_drm_output(base);
 	struct drm_backend *b = to_drm_backend(base->compositor);
 
-	assert(!output->virtual_output);
-
 	if (output->page_flip_pending || output->atomic_complete_pending) {
 		output->destroy_pending = true;
 		weston_log("destroy output while page flip pending\n");
@@ -822,9 +817,6 @@ drm_output_destroy(struct weston_output *base)
 	drm_output_disable_vblank(output);
     	weston_output_release(&output->base);
 
-	//assert(!output->state_last);
-	//drm_output_state_free(output->state_cur);
-
 	free(output);
 }
 
@@ -832,8 +824,6 @@ static int
 drm_output_disable(struct weston_output *base)
 {
 	struct drm_output *output = to_drm_output(base);
-
-	assert(!output->virtual_output);
 
 	if (output->page_flip_pending || output->atomic_complete_pending) {
 		output->disable_pending = true;
@@ -964,7 +954,6 @@ drm_output_create(struct weston_compositor *compositor, const char *name)
 	weston_output_init(&output->base, compositor, name);
 
 	wl_list_init(&output->sdm_layer_list);
-	wl_list_init(&output->sdm_commited_layer_list);
 
 	output->base.enable = drm_output_enable;
 	output->base.destroy = drm_output_destroy;
@@ -1542,6 +1531,12 @@ drm_backend_create(struct weston_compositor *compositor,
 				   "support failed.\n");
 	}
 
+	if (compositor->renderer->import_gbm_buffer) {
+		if (gbm_buffer_backend_setup(compositor) < 0)
+			weston_log("Error: gbm buffer backend setup failed\n");
+
+	}
+
 	if (compositor->capabilities & WESTON_CAP_EXPLICIT_SYNC) {
 		if (linux_explicit_synchronization_setup(compositor) < 0)
 			weston_log("Error: initializing explicit "
@@ -1558,12 +1553,6 @@ drm_backend_create(struct weston_compositor *compositor,
 
 	if (ret < 0) {
 		weston_log("Failed to register output API.\n");
-		goto err_udev_monitor;
-	}
-
-	ret = drm_backend_init_virtual_output_api(compositor);
-	if (ret < 0) {
-		weston_log("Failed to register virtual output API.\n");
 		goto err_udev_monitor;
 	}
 

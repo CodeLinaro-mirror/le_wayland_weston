@@ -24,6 +24,8 @@ srcs_drm = [
 	'sdm-service/uevent.h',
 	linux_dmabuf_unstable_v1_protocol_c,
 	linux_dmabuf_unstable_v1_server_protocol_h,
+	gbm_buffer_backend_protocol_c,
+	gbm_buffer_backend_server_protocol_h,
 	presentation_time_server_protocol_h,
 ]
 

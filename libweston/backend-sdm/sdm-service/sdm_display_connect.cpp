@@ -212,6 +212,7 @@ int Commit(int display_id, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
 
+    DLOGV("function successful.");
     if (display_id >= kDisplayMax || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
@@ -229,9 +230,7 @@ int Commit(int display_id, struct drm_output *output)
         return error;
     }
 
-    #if SDM_DISPLAY_DEBUG
-    DLOGD("function successful.");
-    #endif
+    DLOGV("function successful.");
 
     return kErrorNone;
 }

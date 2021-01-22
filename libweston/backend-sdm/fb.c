@@ -43,6 +43,7 @@
 #include "shared/helpers.h"
 #include "sdm-internal.h"
 #include "linux-dmabuf.h"
+#include "gbm-buffer-backend.h"
 
 #include <gbm.h>
 #include <gbm_priv.h>
@@ -102,18 +103,9 @@ drm_fb_addfb(struct drm_backend *b, struct drm_fb *fb)
 	if (ret == 0)
 		return 0;
 
-	/* Legacy AddFB can't always infer the format from depth/bpp alone, so
-	 * check if our format is one of the lucky ones. */
-	if (!fb->format->depth || !fb->format->bpp)
-		return ret;
+	ret = drmModeAddFB(b->drm.fd, fb->width, fb->height,
+			   24, 32, fb->strides[0], fb->handles[0], &fb->fb_id);
 
-	/* Cannot fall back to AddFB for multi-planar formats either. */
-	if (fb->handles[1] || fb->handles[2] || fb->handles[3])
-		return ret;
-
-	ret = drmModeAddFB(fb->fd, fb->width, fb->height,
-			   fb->format->depth, fb->format->bpp,
-			   fb->strides[0], fb->handles[0], &fb->fb_id);
 	return ret;
 }
 
@@ -367,7 +359,6 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	}
 #endif /* NOT HAVE_GBM_MODIFIERS */
 
-
 	if (drm_fb_addfb(backend, fb) != 0)
 		goto err_free;
 
@@ -404,7 +395,6 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 	fb->width = gbm_bo_get_width(bo);
 	fb->height = gbm_bo_get_height(bo);
 	fb->format = pixel_format_get_info(gbm_bo_get_format(bo));
-	fb->size = 0;
 	fb->ion_fd = gbm_bo_get_fd(bo);
 
 #ifdef HAVE_GBM_MODIFIERS
@@ -422,20 +412,18 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 	fb->modifier = DRM_FORMAT_MOD_INVALID;
 #endif
 
+	fb->size = fb->strides[0] * fb->height;
 	if (!fb->format) {
 		weston_log("couldn't look up format 0x%lx\n",
 			   (unsigned long) gbm_bo_get_format(bo));
 		goto err_free;
 	}
 
-	/* We can scanout an ARGB buffer if the surface's opaque region covers
-	 * the whole output, but we have to use XRGB as the KMS format code. */
 	if (is_opaque)
 		fb->format = pixel_format_get_opaque_substitute(fb->format);
 
 	if (drm_fb_addfb(backend, fb) != 0) {
-		if (type == BUFFER_GBM_SURFACE)
-			weston_log("failed to create kms fb: %s\n",
+		weston_log("failed to create kms fb: %s\n",
 				   strerror(errno));
 		goto err_free;
 	}
@@ -454,7 +442,6 @@ drm_fb_set_buffer(struct drm_fb *fb, struct weston_buffer *buffer,
 		  struct weston_buffer_release *buffer_release)
 {
 	assert(fb->buffer_ref.buffer == NULL);
-	assert(fb->type == BUFFER_CLIENT || fb->type == BUFFER_DMABUF);
 	weston_buffer_reference(&fb->buffer_ref, buffer);
 	weston_buffer_release_reference(&fb->buffer_release_ref,
 					buffer_release);
@@ -520,6 +507,8 @@ drm_fb_get_from_view(struct drm_output *output, struct weston_view *ev)
 	bool is_opaque = weston_view_is_opaque(ev, &ev->transform.boundingbox);
 	struct linux_dmabuf_buffer *dmabuf;
 	struct drm_fb *fb;
+	struct gbm_bo *bo;
+	struct gbm_buffer *gbmbuf;
 
 	if (ev->alpha != 1.0f)
 		return NULL;
@@ -543,26 +532,37 @@ drm_fb_get_from_view(struct drm_output *output, struct weston_view *ev)
 
 	dmabuf = linux_dmabuf_buffer_get(buffer->resource);
 	if (dmabuf) {
+		//simple-dmabuf-egl will use this
 		fb = drm_fb_get_from_dmabuf(dmabuf, b, is_opaque);
 		if (!fb)
 			return NULL;
-	} else {
-		struct gbm_bo *bo;
+	} else if (gbmbuf = gbm_buffer_get(buffer->resource)) {
+		//gstreamer will use this for buffer sharing
+		struct gbm_buf_info gbmbuf_info = {
+			.fd = gbmbuf->fd,
+			.metadata_fd = gbmbuf->metadata_fd,
+			.width = gbmbuf->width,
+			.height = gbmbuf->height,
+			.format = gbmbuf->format
+		};
 		struct weston_surface *es = ev->surface;
 
 		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
-				 wl_resource_get_user_data(es->buffer_ref.buffer->resource),
-				 GBM_BO_USE_SCANOUT);
-		if (!bo) {
-			return NULL;
-		}
+					&gbmbuf_info, GBM_BO_USE_SCANOUT);
+	} else {
+		//simple-egl will use WL_BUFFER
+		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_WL_BUFFER,
+				   buffer->resource, GBM_BO_USE_SCANOUT);
+	}
 
-		fb = drm_fb_get_from_bo(bo, b, is_opaque, BUFFER_CLIENT);
-		if (!fb) {
-			gbm_bo_destroy(bo);
-			return NULL;
-		}
+	if (!bo) {
+		return NULL;
+	}
 
+	fb = drm_fb_get_from_bo(bo, b, is_opaque, BUFFER_CLIENT);
+	if (!fb) {
+		gbm_bo_destroy(bo);
+		return NULL;
 	}
 
 	drm_debug(b, "\t\t\t[view] view %p format: %s\n",
