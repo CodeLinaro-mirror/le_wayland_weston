@@ -51,14 +51,15 @@
 *    THIS SOFTWARE.
 */
 
-
 #include <assert.h>
 #include <unistd.h>
 #include <sys/types.h>
 
+#include <libweston/libweston.h>
+
 #include "gbm-buffer-backend.h"
 #include "gbm-buffer-backend-server-protocol.h"
-#include <libweston/libweston.h>
+#include "libweston-internal.h"
 
 static void
 gbm_buffer_destroy_params(struct wl_resource *params_resource);

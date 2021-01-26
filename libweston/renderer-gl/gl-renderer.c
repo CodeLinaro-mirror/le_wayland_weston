@@ -57,7 +57,7 @@
 #include "shared/platform.h"
 #include "shared/timespec-util.h"
 #include "shared/weston-egl-ext.h"
-#include "../../src/gbm-buffer-backend.h"
+#include "gbm-buffer-backend.h"
 #include "gbm_priv.h"
 
 

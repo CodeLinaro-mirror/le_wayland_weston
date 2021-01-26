@@ -1,9 +1,11 @@
 project('weston',
 	'c',
+	'cpp',
 	version: '8.0.0',
 	default_options: [
 		'warning_level=3',
 		'c_std=gnu99',
+		'cpp_std=c++11',
 		'b_lundef=true',
 	],
 	meson_version: '>= 0.47',
@@ -54,7 +56,7 @@ git_version_h = vcs_tag(
 
 config_h = configuration_data()
 
-cc = meson.get_compiler('c')
+cc = meson.get_compiler('cpp')
 
 global_args = []
 global_args_maybe = [
@@ -70,6 +72,7 @@ foreach a : global_args_maybe
 	endif
 endforeach
 add_global_arguments(global_args, language: 'c')
+add_global_arguments(global_args, language: 'cpp')
 
 if cc.has_header_symbol('sys/sysmacros.h', 'major')
 	config_h.set('MAJOR_IN_SYSMACROS', 1)
@@ -116,7 +119,7 @@ config_h.set_quoted('LIBWESTON_MODULEDIR', dir_module_libweston)
 
 backend_default = get_option('backend-default')
 if backend_default == 'auto'
-	foreach b : [ 'headless', 'fbdev', 'x11', 'wayland', 'drm' ]
+	foreach b : [ 'headless', 'fbdev', 'x11', 'wayland', 'drm', 'sdm' ]
 		if get_option('backend-' + b)
 			backend_default = b
 		endif
@@ -145,6 +148,12 @@ dep_libdrm = dependency('libdrm', version: '>= 2.4.86')
 dep_libdrm_headers = dep_libdrm.partial_dependency(compile_args: true)
 dep_threads = dependency('threads')
 dep_gbm = dependency('gbm')
+
+
+dep_gbm = cc.find_library('gbm')
+dep_libsdmcore = cc.find_library('sdmcore')
+dep_libsdmutils = cc.find_library('sdmutils')
+dep_libdrmutils = cc.find_library('drmutils')
 
 subdir('include')
 subdir('protocol')

@@ -26,13 +26,17 @@
 #define __SDM_DISPLAY_DEBUGGER_H__
 
 #include <core/sdm_types.h>
-#include <core/debug_interface.h>
+#include <debug_handler.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <cutils/trace.h>
 
+#include <bitset>
 #include <cstdlib>
 #include <cassert>
 #include <stdint.h>
+
+#define ATRACE_TAG (ATRACE_TAG_GRAPHICS | ATRACE_TAG_HAL)
 
 enum {
        NONE,
@@ -44,49 +48,47 @@ enum {
        SET_GET_PROP
 };
 
-#define WLOG(tag, method, format, ...) SdmDisplayDebugger::Get()->method(tag, \
-                                                            __CLASS__ "::%s: " format, \
-                                                            __FUNCTION__, ##__VA_ARGS__)
-
-#define WLOGE_IF(tag, format, ...) WLOG(tag, Error, format, ##__VA_ARGS__)
-#define WLOGW_IF(tag, format, ...) WLOG(tag, Warning, format, ##__VA_ARGS__)
-#define WLOGI_IF(tag, format, ...) WLOG(tag, Info, format, ##__VA_ARGS__)
-#define WLOGD_IF(tag, format, ...) WLOG(tag, Debug, format, ##__VA_ARGS__)
-#define WLOGV_IF(tag, format, ...) WLOG(tag, Verbose, format, ##__VA_ARGS__)
-
-#define DLOGE(format, ...) WLOGE_IF(kTagNone, format, ##__VA_ARGS__)
-#define DLOGD(format, ...) WLOGD_IF(kTagNone, format, ##__VA_ARGS__)
-#define DLOGW(format, ...) WLOGW_IF(kTagNone, format, ##__VA_ARGS__)
-#define DLOGI(format, ...) WLOGI_IF(kTagNone, format, ##__VA_ARGS__)
-#define DLOGV(format, ...) WLOGV_IF(kTagNone, format, ##__VA_ARGS__)
-
 namespace sdm {
+
+using display::DebugHandler;
 
 class SdmDisplayDebugger : public DebugHandler {
  public:
-  static inline SdmDisplayDebugger* Get() { return &debug_handler_; }
+  SdmDisplayDebugger();
+  static inline DebugHandler* Get() { return &debug_handler_; }
+  static const char *DumpDir() { return "/data/misc/display"; }
   void config_debug_level(void);
 
+  static void DebugAll(bool enable, int verbose_level);
+  static void DebugResources(bool enable, int verbose_level);
+  static void DebugStrategy(bool enable, int verbose_level);
+  static void DebugCompManager(bool enable, int verbose_level);
+  static void DebugDriverConfig(bool enable, int verbose_level);
+  static void DebugRotator(bool enable, int verbose_level);
+  static void DebugScalar(bool enable, int verbose_level);
+  static void DebugQdcm(bool enable, int verbose_level);
+  static void DebugClient(bool enable, int verbose_level);
+  static void DebugQos(bool enable, int verbose_level);
+  static void DebugDisplay(bool enable, int verbose_level);
+  static void DebugAllocator(bool enable, int verbose_level);
+  static int  GetIdleTimeoutMs();
+
   // DebugHandler methods
-  virtual void Error(DebugTag tag, const char *format, ...);
-  virtual void Warning(DebugTag tag, const char *format, ...);
-  virtual void Info(DebugTag tag, const char *format, ...);
-  virtual void Debug(DebugTag tag, const char *format, ...);
-  virtual void Verbose(DebugTag tag, const char *format, ...);
+  virtual void Error(const char *format, ...);
+  virtual void Warning(const char *format, ...);
+  virtual void Info(const char *format, ...);
+  virtual void Debug(const char *format, ...);
+  virtual void Verbose(const char *format, ...);
   virtual void BeginTrace(const char *class_name, const char *function_name,
-                          const char *custom_string) { }
-  virtual void EndTrace() { }
-  virtual DisplayError GetProperty(const char *property_name, int *value);
-  virtual DisplayError GetProperty(const char *property_name, char *value);
-  virtual DisplayError SetProperty(const char *property_name, const char *value);
+                          const char *custom_string);
+  virtual void EndTrace();
+  virtual int GetProperty(const char *property_name, int *value);
+  virtual int GetProperty(const char *property_name, char *value);
 
-  int debug_level_ = INFO;
-
-  SdmDisplayDebugger() {
-    config_debug_level();
-  }
  private:
   static SdmDisplayDebugger debug_handler_;
+  std::bitset<32> log_mask_;
+  int verbose_level_ = ERROR;
 };
 
 }  // namespace sdm

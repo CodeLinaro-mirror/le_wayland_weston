@@ -24,7 +24,8 @@
 
 #ifndef SDM_DISPLAY_CONNECT_H
 #define SDM_DISPLAY_CONNECT_H
-#include "sdm_display_interface.h"
+
+#include "sdm-service/sdm_display_interface.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -165,32 +166,6 @@ int Commit(int display_id, struct drm_output *output);
 */
 bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_config);
 
-/*! @brief Method to obtain display's HDR information parameters for requested display_id.
-    @details Client shall use this method to obtain display's HDR capability parameters
-    for requested display_id.
-
-    @param[in] display_id \link int \endlink
-    @param[in] display_config \link struct DisplayHdrInfo \endlink
-
-    @return \link DisplayError \endlink
-
-    @sa
-*/
-bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info);
-
-/*! @brief Method to obtain display's HDCP information parameters for requested display_id.
-    @details Client shall use this method to obtain display's HDCP capability parameters
-    for requested display_id.
-
-    @param[in] display_id \link int \endlink
-    @param[in] display_config \link struct DisplayHdcpProtocol \endlink
-
-    @return \link bool \endlink
-
-    @sa
-*/
-bool GetDisplayHdcpProtocol(int display_id, struct DisplayHdcpProtocol *display_hdcp_protocol);
-
 /*! @brief Method to register callbacks: VBlank Handler function to be called on
     enabling VBlank (VSync), and hotplug handler function to be called on hotplug
     uevent. SDM shall trigger a call back through this interface function.
@@ -227,7 +202,7 @@ bool SetDisplayState(int display_id, int power_mode);
 
     @param[in] display_id \link int \endlink
     @param[in] enable \link bool \endlink
-    @param[in] output \link (struct drm_output *) \endlink
+    @param[in] b \link (struct drm_backend *) \endlink
 
     @return \link int \endlink
 
@@ -243,35 +218,7 @@ int SetVSyncState(int display_id, bool enable, struct drm_output *output);
 
     @sa
 */
-int get_drm_master_fd();
-
-/*! @brief Method for enable PLL update function.
-
-    @details enable or disable PLL update function.
-
-    @param[in] display_id \link int \endlink
-
-    @param[in] enable \link int \endlink
-
-    @return \link int \endlink
-
-    @sa
-*/
-int EnablePllUpdate(int display_id, int enable);
-
-/*! @brief Method for update display PLL.
-
-    @details update display PLL by ppm.
-
-    @param[in] display_id \link int \endlink
-
-    @param[in] ppm \link int \endlink
-
-    @return \link int \endlink
-
-    @sa
-*/
-int UpdateDisplayPll(int display_id, int ppm);
+int get_drm_master_fd(void);
 
 #ifdef __cplusplus
 }

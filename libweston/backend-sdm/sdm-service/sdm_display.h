@@ -27,8 +27,7 @@
 
 #include <core/core_interface.h>
 #include <core/display_interface.h>
-#include <core/debug_interface.h>
-#include <core/dump_interface.h>
+#include <debug_handler.h>
 #include <utils/debug.h>
 #include <utils/constants.h>
 #include <utils/formats.h>
@@ -40,13 +39,12 @@
 #include <iostream>
 #include <thread>
 
-#include "sdm_display_debugger.h"
-#include "sdm_display_interface.h"
-#include "sdm_display_buffer_allocator.h"
-#include "sdm_display_buffer_sync_handler.h"
-#include "sdm_display_socket_handler.h"
-#include "sdm_display_tonemapper.h"
-#include "compositor-sdm-output.h"
+#include "sdm-service/sdm_display_debugger.h"
+#include "sdm-service/sdm_display_interface.h"
+#include "sdm-service/sdm_display_buffer_allocator.h"
+#include "sdm-service/sdm_display_buffer_sync_handler.h"
+#include "sdm-service/sdm_display_socket_handler.h"
+#include "sdm-internal.h"
 #include "drm_master.h"
 
 namespace sdm {
@@ -70,14 +68,11 @@ class SdmDisplayInterface {
     virtual DisplayError DestroyDisplay() = 0;
     virtual DisplayError Prepare(struct drm_output *output) = 0;
     virtual DisplayError Commit(struct drm_output *output) = 0;
-    virtual DisplayError SetDisplayState(DisplayState state) = 0;
+    virtual DisplayError SetDisplayState(DisplayState state,
+					 bool teardown, int *release_fence) = 0;
     virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
     virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
     virtual DisplayError RegisterCb(int display_id, vblank_cb_t vbcb) = 0;
-    virtual DisplayError EnablePllUpdate(int32_t enable) = 0;
-    virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
-    virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
-    virtual DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) = 0;
     virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
 
     static int GetDrmMasterFd();
@@ -95,14 +90,11 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError DestroyDisplay();
     DisplayError Prepare(struct drm_output *output);
     DisplayError Commit(struct drm_output *output);
-    DisplayError SetDisplayState(DisplayState state);
+    DisplayError SetDisplayState(DisplayState state,
+				 bool teardown, int *release_fence);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
-    DisplayError EnablePllUpdate(int32_t enable);
-    DisplayError UpdateDisplayPll(int32_t ppm);
-    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
-    DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol);
 };
 
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
@@ -120,15 +112,13 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError DestroyDisplay();
     DisplayError Prepare(struct drm_output *output);
     DisplayError Commit(struct drm_output *output);
-    DisplayError SetDisplayState(DisplayState state);
+    DisplayError SetDisplayState(DisplayState state,
+				 bool teardown, int *release_fence);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
-    DisplayError EnablePllUpdate(int32_t enable);
-    DisplayError UpdateDisplayPll(int32_t ppm);
 
-    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
-    DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol);
+    int OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level);
 
  protected:
     virtual DisplayError VSync(const DisplayEventVSync &vsync);
@@ -139,6 +129,10 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
                                unsigned int tv_sec, unsigned int tv_usec,
                                void *data);
     virtual DisplayError CECMessage(char *message);
+    virtual DisplayError HistogramEvent(int source_fd, uint32_t blob_id);
+
+    /*! @brief Event handler for events received by Display HAL. */
+    virtual DisplayError HandleEvent(DisplayEvent event);
     virtual DisplayError Refresh();
 
  private:
@@ -202,10 +196,6 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     float max_luminance_ = 0.0;
     float max_average_luminance_ = 0.0;
     float min_luminance_ = 0.0;
-    SdmDisplayToneMapper *tone_mapper_ = NULL;
-    int disable_hdr_handling_ = 0;
-    bool hdr_supported_ = false;
-    uint32_t hdcp_version_ = 0;
 };
 
 class SdmDisplayProxy {
@@ -227,8 +217,8 @@ class SdmDisplayProxy {
     DisplayError Commit(struct drm_output *output) {
       return display_intf_->Commit(output);
     }
-    DisplayError SetDisplayState(DisplayState state) {
-      return display_intf_->SetDisplayState(state);
+    DisplayError SetDisplayState(DisplayState state, bool teardown, int *release_fence) {
+      return display_intf_->SetDisplayState(state, teardown, release_fence);
     }
     DisplayError SetVSyncState(bool enable, struct drm_output *output) {
       return display_intf_->SetVSyncState(enable, output);
@@ -241,20 +231,10 @@ class SdmDisplayProxy {
       hotplug_cb_ = cbs->hotplug_cb;
       return display_intf_->RegisterCb(display_id, cbs->vblank_cb);
     }
-    DisplayError EnablePllUpdate(int32_t enable) {
-      return display_intf_->EnablePllUpdate(enable);
-    }
-    DisplayError UpdateDisplayPll(int32_t ppm) {
-      return display_intf_->UpdateDisplayPll(ppm);
-    }
-    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
-      return display_intf_->GetHdrInfo(display_hdr_info);
-    }
-    DisplayError GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) {
-      return display_intf_->GetHdcpProtocol(display_hdcp_protocol);
-    }
 
     int HandleHotplug(bool connected);
+
+    DisplayError OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level);
 
   private:
     // Uevent thread

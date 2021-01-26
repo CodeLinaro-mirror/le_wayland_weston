@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017, 2020-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -22,8 +22,8 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "sdm_display_debugger.h"
-#include "sdm_display_buffer_allocator.h"
+#include "sdm-service/sdm_display_debugger.h"
+#include "sdm-service/sdm_display_buffer_allocator.h"
 
 #define __CLASS__ "SdmDisplayBufferAllocator"
 
@@ -354,14 +354,8 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
         return kErrorNone;
     }
 
-    uint32_t width, height;
-    uint32_t *fbid;
-    uint32_t fb_id, stride1, handle, size, format;
-    uint32_t fb_id1;
-    width = gbm_bo_get_width(bo);
-    height = gbm_bo_get_height(bo);
-    stride1 = gbm_bo_get_stride(bo);
-    handle = gbm_bo_get_handle(bo).u32;
+    uint32_t height;
+    uint32_t format;
     format = gbm_bo_get_format(bo);
 
     if (IsFormatVideo(format) == false) {
@@ -372,8 +366,9 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
       return kErrorNone;
     }
 
-    // for NV12 format
-    *num_planes = 2;
+    if (format == GBM_FORMAT_NV12)
+    	*num_planes = 2; // for NV12 format
+
     gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
     gbm_perform(GBM_PERFORM_GET_UBWC_STATUS, bo, &ubwc_status);
 

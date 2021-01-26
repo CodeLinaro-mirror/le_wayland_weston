@@ -65,22 +65,16 @@
 #include <pthread.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
-#include "sdm_display.h"
-#include "uevent.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "sdm-service/sdm_display.h"
+#include "sdm-service/uevent.h"
 
-
-#include "../src/linux-dmabuf.h"
+#include "sdm-internal.h"
 
 #define __CLASS__ "SdmDisplay"
 
 struct drm_output *drm_output_;
 vblank_cb_t vblank_cb_;
-int tone_mapper_disable = 0; /* (user): enable this flag once  */
-                             /* To disable tone mapping functionality. */
 
 namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
@@ -88,7 +82,6 @@ namespace sdm {
 #define GET_CURSOR_SLOT(max_layers) ((max_layers) - 2)
 #define LEN_LOCAL 2048
 
-#define SDM_DISPLAY_DEBUG 0
 #define SDM_DISPLAY_DUMP_LAYER_STACK 0
 
 #define SDM_DEAFULT_NULL_DISPLAY_WIDTH 1920
@@ -126,8 +119,6 @@ const char * SdmDisplay::FourccToString(uint32_t fourcc)
 
 DisplayError SdmDisplay::CreateDisplay() {
     DisplayError error = kErrorNone;
-    struct DisplayHdrInfo display_hdr_info;
-    struct DisplayHdcpProtocol display_hdcp_protocol;
 
     error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
 
@@ -135,36 +126,6 @@ DisplayError SdmDisplay::CreateDisplay() {
         DLOGE("Display creation failed. Error = %d", error);
 
         return error;
-    }
-
-    SdmDisplayDebugger::Get()->GetProperty("sys.weston_disable_hdr", &disable_hdr_handling_);
-    if (disable_hdr_handling_) {
-        DLOGI("HDR Handling disabled");
-    }
-
-    SdmDisplayDebugger::Get()->GetProperty("sys.weston_disable_hdr_tm", &tone_mapper_disable);
-    if (!tone_mapper_disable && !disable_hdr_handling_) {
-        DLOGI("Tone Mapper Enabled");
-        tone_mapper_ = new SdmDisplayToneMapper(buffer_allocator_);
-
-        if (!tone_mapper_)
-            DLOGI("Failed to create tone_mapper instance");
-    }
-
-    GetHdrInfo(&display_hdr_info);
-
-    if (hdr_supported_) {
-        DLOGI("Display Device supports HDR functionality");
-    } else {
-        DLOGI("Display Device doesn't support HDR functionality");
-    }
-
-    GetHdcpProtocol(&display_hdcp_protocol);
-    /* TODO: */
-    if (hdcp_version_) {
-        DLOGI("Display Device supports HDCP functionality");
-    } else {
-        DLOGI("Display Device doesn't support HDCP functionality");
     }
 
     return kErrorNone;
@@ -176,14 +137,12 @@ DisplayError SdmDisplay::DestroyDisplay() {
     error = core_intf_->DestroyDisplay(display_intf_);
     display_intf_ = NULL;
 
-    delete tone_mapper_;
-    tone_mapper_ = nullptr;
-
     return error;
 }
 
 DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
-    DLOGW("Not implemented");
+
+    vblank_cb_(display_id_, vsync.timestamp, drm_output_);
 
     return kErrorNone;
 }
@@ -191,7 +150,7 @@ DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
 DisplayError SdmDisplay::VSync(int fd, unsigned int sequence, unsigned int tv_sec,
                                unsigned int tv_usec, void *data) {
 
-    vblank_cb_(sequence, tv_sec, tv_usec, drm_output_);
+    DLOGW("Not implemented\n");
 
     return kErrorNone;
 }
@@ -217,20 +176,34 @@ DisplayError SdmDisplay::CECMessage(char *message) {
     return kErrorNone;
 }
 
-DisplayError SdmDisplay::SetDisplayState(DisplayState state) {
+DisplayError SdmDisplay::SetDisplayState(DisplayState state,
+					 bool teardown, int *release_fence) {
     DisplayError error;
 
-    error = display_intf_->SetDisplayState(state);
+    error = display_intf_->SetDisplayState(state, teardown, release_fence);
     if (error != kErrorNone) {
         DLOGE("function failed. Error = %d", error);
-     return error;
+        return error;
     }
 
     return kErrorNone;
 }
 
+DisplayError SdmDisplay::HistogramEvent(int /* fd */, uint32_t /* blob_fd */) {
+  return kErrorNone;
+}
+
+DisplayError SdmDisplay::HandleEvent(DisplayEvent event) {
+  return kErrorNone;
+}
+
 DisplayError SdmDisplay::SetVSyncState(bool VSyncState, struct drm_output *output) {
     DisplayError error;
+
+    if (!output) {
+        DLOGE("No output to set VSync");
+	return kErrorNone;
+    }
 
     drm_output_ = output;
     error = display_intf_->SetVSyncState(VSyncState);
@@ -269,6 +242,7 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
     display_config->vsync_period_ns = disp_config.vsync_period_ns;
     display_config->is_yuv       = disp_config.is_yuv;
     fps_                         = disp_config.fps;
+    display_config->is_connected = true;
 
     return kErrorNone;
 }
@@ -280,6 +254,16 @@ DisplayError SdmDisplay::RegisterCb(int display_id,       vblank_cb_t vbcb) {
     display_id_  = display_id;
 
     return error;
+}
+
+int SdmDisplay::OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level) {
+  DisplayError error = display_intf_->OnMinHdcpEncryptionLevelChange(min_enc_level);
+  if (error != kErrorNone) {
+    DLOGE("Failed. Error = %d", error);
+    return -1;
+  }
+
+  return 0;
 }
 
 DisplayError SdmDisplay::FreeLayerStack() {
@@ -309,8 +293,6 @@ DisplayError SdmDisplay::FreeLayerGeometry(struct LayerGeometry *glayer) {
 }
 
 DisplayError SdmDisplay::AllocLayerStackMemory(struct drm_output *output) {
-    uint32_t num_layers = output->view_count;
-
     for (size_t i = 0; i < output->view_count; i++) {
          Layer *layer = new Layer();
          layer_stack_.layers.push_back(layer);
@@ -325,34 +307,6 @@ static void SetRect(sdm::LayerRect *dst, struct Rect *src)
     dst->top = src->top;
     dst->right = src->right;
     dst->bottom = src->bottom;
-}
-
-static void SetRectArray(sdm::LayerRectArray *dst, struct RectArray *src)
-{
-    for (uint32_t i = 0; i < src->count; i++)
-         SetRect(&dst->rect[i], &src->rects[i]);
-}
-
-static uint32_t GetComposition(sdm::LayerComposition composition)
-{
-    uint32_t ret;
-
-    switch (composition) {
-     case sdm::kCompositionGPUTarget:
-          ret = SDM_COMPOSITION_FB_TARGET;
-          break;
-     case sdm::kCompositionGPU:
-          ret = SDM_COMPOSITION_GPU;
-          break;
-     case sdm::kCompositionHWCursor:
-          ret = SDM_COMPOSITION_HW_CURSOR;
-          break;
-     default:
-          ret = SDM_COMPOSITION_OVERLAY;
-          break;
-    }
-
-    return ret;
 }
 
 DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *output,
@@ -496,7 +450,7 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
     fb_layer->unaligned_width = output->base.width;
     fb_layer->unaligned_height = output->base.height;
 
-    fb_layer->format = GetMappedFormatFromGbm(output->format);
+    fb_layer->format = GetMappedFormatFromGbm(output->gbm_format);
     fb_layer->composition = SDM_COMPOSITION_FB_TARGET;
 
     fb_layer->src_rect.left = (float)0.0;
@@ -523,6 +477,7 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
         DLOGE("out of memory for allocating fb dirty region\n");
         return -1;
     }
+
     fb_layer->dirty_regions.rects[0] = fb_layer->dst_rect;
     fb_layer->dirty_regions.count = 1;
 
@@ -536,7 +491,7 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
 
     fb_layer->flags.skip = 0;
     fb_layer->flags.is_cursor = 0;
-    fb_layer->flags.has_ubwc_buf = output->framebuffer_ubwc;
+    fb_layer->flags.has_ubwc_buf = false;
 
     return 0;
 }
@@ -557,14 +512,11 @@ int SdmDisplayInterface::GetDrmMasterFd() {
 int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                          struct LayerGeometry **glayer,
                          struct sdm_layer *sdm_layer) {
-    struct drm_backend *b = (struct drm_backend *)output->base.compositor->backend;
     struct LayerGeometry *layer;
     struct weston_view *ev = sdm_layer->view;
     struct weston_surface *es = ev->surface;
     bool is_cursor = sdm_layer->is_cursor;
     uint32_t format = GBM_FORMAT_XBGR8888;
-    struct linux_dmabuf_buffer *dmabuf;
-    struct gbm_buffer *gbm_buf;
     pixman_region32_t r;
 
     *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
@@ -575,57 +527,23 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->fb_id = -1;
     layer->format = SDM_BUFFER_FORMAT_RGBX_8888;
 
-    if (!sdm_layer->is_skip) {
-        struct gbm_bo *bo;
-        //check whether the buffer resource is created by linux dma buf
-        if ((dmabuf = linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource))) {
-            struct gbm_import_fd_data gbm_dmabuf = {
-                .fd     = dmabuf->dmabuf_fd[0],
-                .width  = dmabuf->width,
-                .height = dmabuf->height,
-                .stride = dmabuf->stride[0],
-                .format = dmabuf->format
-            };
-            bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
-        } else if ((gbm_buf = gbm_buffer_get(es->buffer_ref.buffer->resource))) {
-          struct gbm_buf_info gbm_bufinfo = {
-              .fd           = gbm_buf->fd,
-              .metadata_fd  = gbm_buf->metadata_fd,
-              .width        = gbm_buf->width,
-              .height       = gbm_buf->height,
-              .format       = gbm_buf->format
-          };
-          bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
-                             &gbm_bufinfo,
-                             GBM_BO_USE_SCANOUT);
-        } else {
-            bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
-                               wl_resource_get_user_data(es->buffer_ref.buffer->resource),
-                               GBM_BO_USE_SCANOUT);
-        }
+    if (sdm_layer->fb && sdm_layer->fb->bo) {
+        struct gbm_bo *bo = NULL;
 
-         if (bo == NULL)
+	bo = sdm_layer->fb->bo;
+
+         if (bo == NULL) {
             DLOGE("fail to import gbm bo!\n");
-         else {
+		return -1; 
+	 } else {
             uint32_t width, height;
-            uint32_t *fbid;
-            uint32_t fb_id, stride, handle, size;
-            uint32_t fb_id1;
 
             //save gbm bo in sdm layer for future reference.
             sdm_layer->bo = bo;
 
             width = gbm_bo_get_width(bo);
             height = gbm_bo_get_height(bo);
-            stride = gbm_bo_get_stride(bo);
-            handle = gbm_bo_get_handle(bo).u32;
             format = gbm_bo_get_format(bo);
-            int drm_fd = SdmDisplayInterface::GetDrmMasterFd();
-
-            uint32_t handles[4], pitches[4], offsets[4];
-            handles[0] = handle;
-            pitches[0] = stride;
-            offsets[0] = 0;
 
             uint32_t alignedWidth = 0;
             uint32_t alignedHeight = 0;
@@ -647,14 +565,6 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             layer->ion_fd = gbm_bo_get_fd(bo);
             layer->flags.secure_present = secure_status;
             layer->flags.has_ubwc_buf = ubwc_status;
-
-            bool hdr_layer = layer->color_metadata.colorPrimaries == ColorPrimaries_BT2020 &&
-                             (layer->color_metadata.transfer == Transfer_SMPTE_ST2084 ||
-                             layer->color_metadata.transfer == Transfer_HLG);
-
-            // Set to true if incoming layer has HDR support and Display supports HDR functionality
-            if (!disable_hdr_handling_)
-                layer->flags.hdr_present = hdr_layer;
         }
     }
 
@@ -705,22 +615,20 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
 
 DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     DisplayError error = kErrorNone;
-    struct sdm_layer *sdm_layer = NULL, *next_sdm_layer = NULL;
+    struct sdm_layer *sdm_layer = NULL;
     struct LayerGeometry *glayer = NULL;
     uint32_t gpu_target_index = GET_GPU_TARGET_SLOT(output->view_count);
     uint32_t index = 0;
     LayerBufferFlags layerBufferFlags;
 
     if (shutdown_pending_) {
-    return kErrorShutDown;
+    	return kErrorShutDown;
     }
 
     FreeLayerStack();
     AllocLayerStackMemory(output);
 
-#if SDM_DISPLAY_DEBUG
-    DLOGW("gpu_target_index = %d\n", gpu_target_index);
-#endif
+    DLOGI("gpu_target_index = %d\n", gpu_target_index);
 
     /* If no view can be handled by SDM, just skip below and prepare fb target directly. */
     if (gpu_target_index > 0) {
@@ -742,9 +650,6 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
             // Pass the wl_resource handle from sdm layer to layer stack
             // to use it for egl image creation in tone mapping
             layerBufferFlags = layer_stack_.layers.at(index)->input_buffer.flags;
-            if (layerBufferFlags.video && layerBufferFlags.hdr)
-                layer_stack_.layers.at(index)->userdata =
-                           sdm_layer->view->surface->buffer_ref.buffer->resource;
 
             index++;
             if (sdm_layer->is_skip)
@@ -801,6 +706,7 @@ DisplayError SdmDisplay::PostPrepare(struct drm_output *output)
     return error;
 }
 
+#if SDM_DISPLAY_DUMP_LAYER_STACK
 static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
   if (!buffer || !length) {
     return;
@@ -822,24 +728,24 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
       buffer = layer->input_buffer;
 
       memset(buf, '\0', LEN_LOCAL);
-      sprintf(buf, "Layer: %d\n    width  = %d,     height = %d", i,
+      snprintf(buf, sizeof(buf), "Layer: %d\n    width  = %d,     height = %d", i,
         layer->input_buffer.width, layer->input_buffer.height);
-      sprintf(buf, "%s\n LayerComposition = %#x", buf, layer->composition);
-      sprintf(buf, "%s\n src_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f",
+      snprintf(buf, sizeof(buf), "%s\n LayerComposition = %#x", buf, layer->composition);
+      snprintf(buf, sizeof(buf), "%s\n src_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f",
         buf, layer->src_rect.left, layer->src_rect.top,
         layer->src_rect.right, layer->src_rect.bottom);
-      sprintf(buf, "%s\n dst_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f", buf,
+      snprintf(buf, sizeof(buf), "%s\n dst_rect (LTRB) = %4.2f, %4.2f, %4.2f, %4.2f", buf,
         layer->dst_rect.left, layer->dst_rect.top, layer->dst_rect.right,
         layer->dst_rect.bottom);
-      sprintf(buf, "%s\n LayerBlending = %#x", buf, layer->blending);
-      sprintf(buf,"%s\n LayerTransform:rotation= %f,flip_horizontal=%s,flip_vertical=%s",
+      snprintf(buf, sizeof(buf), "%s\n LayerBlending = %#x", buf, layer->blending);
+      snprintf(buf, sizeof(buf), "%s\n LayerTransform:rotation= %f,flip_horizontal=%s,flip_vertical=%s",
         buf, layer->transform.rotation, (layer->transform.flip_horizontal? \
         "true":"false"), (layer->transform.flip_vertical? "true":"false"));
-      sprintf(buf, "%s\n Plane Alpha = %#x, frame_rate = %d,  solid_fill_color = %d",
+      snprintf(buf, sizeof(buf), "%s\n Plane Alpha = %#x, frame_rate = %d,  solid_fill_color = %d",
         buf, layer->plane_alpha, layer->frame_rate, layer->solid_fill_color);
-      sprintf(buf, "%s\n LayerFlags = %#x", buf, layer->flags);
-      sprintf(buf, "%s\t LayerFlags.skip = %d", buf, layer->flags.skip);
-      sprintf(buf, "%s\n LayerBuffer Flags: hdr:%d secure:%d video:%d", buf,
+      snprintf(buf, sizeof(buf), "%s\n LayerFlags = %#x", buf, layer->flags);
+      snprintf(buf, sizeof(buf), "%s\t LayerFlags.skip = %d", buf, layer->flags.skip);
+      snprintf(buf, sizeof(buf), "%s\n LayerBuffer Flags: hdr:%d secure:%d video:%d", buf,
                     buffer.flags.hdr, buffer.flags.secure, buffer.flags.video);
 
       fprintf(stderr,"\n%s\n", buf);
@@ -848,13 +754,19 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
 
   return;
 }
+#endif
 
 DisplayError SdmDisplay::Prepare(struct drm_output *output)
 {
     DisplayError error = kErrorNone;
+#if SDM_DISPLAY_DUMP_LAYER_STACK
     char dump_buffer[8192] = {0};
+#endif
 
     error = PrePrepare(output);
+    if (error != kErrorNone) {
+        DLOGE("failed during PrePrepare");
+    }
 
 #if SDM_DISPLAY_DUMP_LAYER_STACK
     // Dump all input layers of the layer stack:
@@ -862,45 +774,29 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
 #endif
 
     error = display_intf_->Prepare(&layer_stack_);
+    if (error != kErrorNone) {
+        DLOGE("failed during Prepare");
+    }
+
+#if SDM_DISPLAY_DUMP_LAYER_STACK
     DumpInterface::GetDump(dump_buffer, sizeof(dump_buffer));
+#endif
+
     error = PostPrepare(output);
     if (error != kErrorNone)
-     DLOGE("function failed Error= %d\n", error);
+    	DLOGE("function failed Error= %d\n", error);
 
     return error;
 }
 
 DisplayError SdmDisplay::PreCommit()
 {
-    DisplayError error = kErrorNone;
-
-    if (layer_stack_.flags.hdr_present) {
-        int status = -1;
-        if (tone_mapper_) {
-            status = tone_mapper_->HandleToneMap(&layer_stack_);
-            if (status != 0) {
-                DLOGE("Error handling HDR in ToneMapper, status code = %d", status);
-            }
-        } else {
-            DLOGD("HandleToneMap failed due to invalid tone_mapper_ instance");
-        }
-    } else {
-        if (tone_mapper_)
-            tone_mapper_->Terminate();
-        else
-            DLOGD("ToneMap Terminate failed due to invalid tone_mapper_ instance");
-    }
-
-    return error;
+    return kErrorNone;
 }
 
 DisplayError SdmDisplay::PostCommit()
 {
     DisplayError error = kErrorNone;
-
-    if (tone_mapper_ && tone_mapper_->IsActive()) {
-        tone_mapper_->PostCommit(&layer_stack_);
-     }
 
     //Iterate through the layer buffer and close release fences
     for (uint32_t i = 0; i < layer_stack_.layers.size(); i++) {
@@ -924,17 +820,23 @@ DisplayError SdmDisplay::PostCommit()
 
 DisplayError SdmDisplay::Commit(struct drm_output *output)
 {
+    DTRACE_SCOPED();
     DisplayError ret = kErrorNone;
 
     uint32_t layer_count = layer_stack_.layers.size();
-
     uint32_t GPUTarget_index = layer_count-1;
     Layer *GpuTargetlayer;
-    uint32_t fb_id = output->next->fb_id;
+
+    if (!output->next_fb) {
+	DLOGE("Scanout state fb not found for output=%d", output->base.id);
+	return kErrorUndefined;
+    }
 
     GpuTargetlayer = layer_stack_.layers.at(GPUTarget_index);
+    GpuTargetlayer->input_buffer.planes[0].fd = output->next_fb->ion_fd;
 
-    GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
+    DLOGI("commiting ion fd = %d", output->next_fb->ion_fd);
+
 
     PreCommit();
 
@@ -1201,9 +1103,7 @@ uint32_t SdmDisplay::ConvertToOpaqueGbmFormat(uint32_t format)
 void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view *ev,
                     struct Rect *src_ret, struct Rect *dst_ret)
 {
-    struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
     pixman_region32_t src_rect, dest_rect;
-    pixman_box32_t *box, tbox;
     float sx1, sy1, sx2, sy2;
 
     /* dst rect */
@@ -1211,17 +1111,17 @@ void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view
     pixman_region32_intersect(&dest_rect, &ev->transform.boundingbox, &output->base.region);
 
     pixman_region32_translate(&dest_rect, -output->base.x, -output->base.y);
+
+    pixman_box32_t *box, tbox = {0};
     box = pixman_region32_extents(&dest_rect);
 
-    tbox = weston_transformed_rect(output->base.width,
-                                   output->base.height,
-                                   (wl_output_transform)output->base.transform,
-                                   output->base.current_scale,
-                                   *box);
+    sdm_weston_transformed_rect(output, &tbox, *box);
+
     dst_ret->left = tbox.x1;
     dst_ret->right = tbox.x2;
     dst_ret->top = tbox.y1;
     dst_ret->bottom = tbox.y2;
+
     pixman_region32_fini(&dest_rect);
 
     /* src rect */
@@ -1230,11 +1130,10 @@ void SdmDisplay::ComputeSrcDstRect(struct drm_output *output, struct weston_view
                               &output->base.region);
     box = pixman_region32_extents(&src_rect);
 
-    weston_view_from_global_float(ev, box->x1, box->y1, &sx1, &sy1);
-    weston_surface_to_buffer_float(ev->surface, sx1, sy1, &sx1, &sy1);
-    weston_view_from_global_float(ev, box->x2, box->y2, &sx2, &sy2);
-    weston_surface_to_buffer_float(ev->surface, sx2, sy2, &sx2, &sy2);
+    sdm_weston_global_transform_rect(ev, box, &sx1, &sy1, &sx2, &sy2);
+
     pixman_region32_fini(&src_rect);
+
     src_ret->left = sx1;
     src_ret->top = sy1;
     src_ret->right = sx2;
@@ -1340,87 +1239,6 @@ const char *SdmDisplay::GetDisplayString() {
   }
 }
 
-DisplayError SdmDisplay::EnablePllUpdate(int32_t enable)
-{
-  DisplayError error;
-
-  error = display_intf_->EnablePllUpdate(enable);
-  if (error != kErrorNone) {
-    DLOGE("%s pll update failed. Error = %d",
-      enable ? "enable" : "disable", error);
-    return error;
-  }
-
-  return kErrorNone;
-}
-
-DisplayError SdmDisplay::UpdateDisplayPll(int32_t ppm)
-{
-  DisplayError error;
-
-  error = display_intf_->UpdateDisplayPll(ppm);
-  if (error != kErrorNone) {
-    DLOGE("Update display pll failed. Error = %d", error);
-    return error;
-  }
-
-  return kErrorNone;
-}
-
-DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
-    DisplayError error;
-
-    DisplayConfigFixedInfo fixed_info = {};
-    error = display_intf_->GetConfig(&fixed_info);
-
-    if (error != kErrorNone) {
-        DLOGE("Failed to get fixed info. Error = %d", error);
-        return error;
-    }
-
-    hdr_supported_ = fixed_info.hdr_supported;
-
-    if (!fixed_info.hdr_supported) {
-        DLOGI("HDR is not supported");
-        return error;
-    }
-
-    static const float kLuminanceFactor = 10000.0;
-    // luminance is expressed in the unit of 0.0001 cd/m2, convert it to 1cd/m2.
-    max_luminance_ = FLOAT(fixed_info.max_luminance)/kLuminanceFactor;
-    max_average_luminance_ = FLOAT(fixed_info.average_luminance)/kLuminanceFactor;
-    min_luminance_ = FLOAT(fixed_info.min_luminance)/kLuminanceFactor;
-
-    display_hdr_info->hdr_supported = fixed_info.hdr_supported;
-    display_hdr_info->hdr_eotf = fixed_info.hdr_eotf;
-    display_hdr_info->hdr_metadata_type_one = fixed_info.hdr_metadata_type_one;
-    display_hdr_info->max_luminance = fixed_info.max_luminance;
-    display_hdr_info->average_luminance = fixed_info.average_luminance;
-    display_hdr_info->min_luminance = fixed_info.min_luminance;
-
-    return error;
-}
-
-DisplayError SdmDisplay::GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) {
-    DisplayError error;
-
-    DisplayConfigFixedInfo fixed_info = {};
-    error = display_intf_->GetConfig(&fixed_info);
-
-    if (error != kErrorNone) {
-        DLOGE("Failed to get fixed info. Error = %d", error);
-        return error;
-    }
-
-    hdcp_version_ = fixed_info.hdcp_version;
-
-    display_hdcp_protocol->hdcp_version = fixed_info.hdcp_version;
-    display_hdcp_protocol->hdcp_interface_type = fixed_info.hdcp_interface_type;
-
-    return error;
-}
-
-
 SdmNullDisplay::SdmNullDisplay(DisplayType type, CoreInterface *core_intf) {
 }
 
@@ -1444,7 +1262,8 @@ DisplayError SdmNullDisplay::Commit(struct drm_output *output) {
    */
   return kErrorNone;
 }
-DisplayError SdmNullDisplay::SetDisplayState(DisplayState state) {
+DisplayError SdmNullDisplay::SetDisplayState(DisplayState state,
+					bool teardown, int *release_fence) {
   return kErrorNone;
 }
 
@@ -1499,19 +1318,6 @@ DisplayError SdmNullDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
 
   return kErrorNone;
 }
-DisplayError SdmNullDisplay::EnablePllUpdate(int32_t enable) {
-  return kErrorNone;
-}
-DisplayError SdmNullDisplay::UpdateDisplayPll(int32_t ppm) {
-  return kErrorNone;
-}
-DisplayError SdmNullDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
-  return kErrorNone;
-}
-DisplayError SdmNullDisplay::GetHdcpProtocol(struct DisplayHdcpProtocol *display_hdcp_protocol) {
-  return kErrorNone;
-}
-
 
 SdmDisplayProxy::SdmDisplayProxy(DisplayType type, CoreInterface *core_intf,
                                  SdmDisplayBufferAllocator *buffer_allocator)
@@ -1531,6 +1337,7 @@ SdmDisplayProxy::~SdmDisplayProxy () {
 
 int SdmDisplayProxy::HandleHotplug(bool connected) {
   DisplayError error = kErrorNone;
+  int release_fence = -1;
 
   DLOGI("HandleHotplug = %d", connected);
 
@@ -1543,7 +1350,9 @@ int SdmDisplayProxy::HandleHotplug(bool connected) {
         display_intf_ = &null_disp_;
         return error;
       }
-      display_intf_->SetDisplayState(kStateOn);
+      
+      DLOGI("Display Vsync State = %d\n", kStateOn);
+      display_intf_->SetDisplayState(kStateOn, false, &release_fence);
       display_intf_->SetVSyncState(true, drm_output_);
 
       if (hotplug_cb_) {
@@ -1600,9 +1409,9 @@ void *SdmDisplayProxy::UeventThreadHandler() {
     length = uevent_next_event(uevent_data, INT32(sizeof(uevent_data)) - 2);
     string s(uevent_data, length);
 
-    if (s.find("name=HDMI-A-1") != string::npos) {
+    if (s.find("name=DSI-1") != string::npos) {
       bool connected = s.find("status=connected") != string::npos;
-      DLOGI("HDMI is %s !\n", connected ? "connected" : "removed");
+      DLOGI("DSI is %s !\n", connected ? "connected" : "removed");
       HandleHotplug(connected);
     }
   }
@@ -1610,8 +1419,5 @@ void *SdmDisplayProxy::UeventThreadHandler() {
 
   return NULL;
 }
-#ifdef __cplusplus
-}
-#endif
 
 }  // namespace sdm

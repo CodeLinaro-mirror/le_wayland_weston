@@ -3,6 +3,12 @@
 # It is hardcoded to cairo-image for now.
 
 option(
+	'backend-sdm',
+	type: 'boolean',
+	value: true,
+	description: 'Weston backend with MSM SDM compositor'
+)
+option(
 	'backend-drm',
 	type: 'boolean',
 	value: true,

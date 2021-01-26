@@ -58,7 +58,7 @@
 #include <libweston/libweston.h>
 #include <libweston/weston-log.h>
 #include "linux-dmabuf.h"
-#include "../src/gbm-buffer-backend.h"
+#include "gbm-buffer-backend.h"
 #include "viewporter-server-protocol.h"
 #include "presentation-time-server-protocol.h"
 #include "xdg-output-unstable-v1-server-protocol.h"
@@ -7779,6 +7779,7 @@ weston_compositor_get_user_data(struct weston_compositor *compositor)
 
 static const char * const backend_map[] = {
 	[WESTON_BACKEND_DRM] =		"drm-backend.so",
+	[WESTON_BACKEND_SDM] =		"sdm-backend.so",
 	[WESTON_BACKEND_FBDEV] =	"fbdev-backend.so",
 	[WESTON_BACKEND_HEADLESS] =	"headless-backend.so",
 	[WESTON_BACKEND_RDP] =		"rdp-backend.so",
