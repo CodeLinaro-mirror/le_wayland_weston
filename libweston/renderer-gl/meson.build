@@ -16,7 +16,8 @@ deps_renderer_gl = [
 	dep_pixman,
 	dep_libweston_private,
 	dep_libdrm_headers,
-	dep_vertex_clipping
+	dep_vertex_clipping,
+        dep_gbm
 ]
 
 foreach name : [ 'egl', 'glesv2' ]
