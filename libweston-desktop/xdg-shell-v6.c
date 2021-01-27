@@ -695,7 +695,6 @@ weston_desktop_xdg_toplevel_committed(struct weston_desktop_xdg_toplevel *toplev
 		wl_resource_post_error(client_resource,
 				       ZXDG_SHELL_V6_ERROR_INVALID_SURFACE_STATE,
 				       "xdg_surface larger fullscreen buffer does not match the configured state");
-        weston_log("xljun xdg_surface buffer does not match the configured state here\n");
 		return;
 	}
 	toplevel->current.state = toplevel->next.state;

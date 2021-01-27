@@ -2373,7 +2373,11 @@ weston_output_maybe_repaint(struct weston_output *output, struct timespec *now,
 	/* We don't actually need to repaint this output; drop it from
 	 * repaint until something causes damage. */
 	if (!output->repaint_needed)
-		goto err;
+    {
+        if(output->repaint_status == REPAINT_AWAITING_COMPLETION)
+            goto err;
+        return ret;
+    }
 
 	/*Revisit: frame_time is needed by clients to track the presented time.*/
 	output->frame_time = timespec_to_msec(now);
@@ -2522,7 +2526,7 @@ weston_output_finish_frame(struct weston_output *output,
 	 * timing of the repaint cycle to lock on. */
 	if (presented_flags == WP_PRESENTATION_FEEDBACK_INVALID && msec_rel < 0) {
 		while (timespec_sub_to_nsec(&output->next_repaint, &now) < 0) {
-			timespec_add_nsec(&output->next_repaint, &output->next_repaint, refresh_nsec);
+		        output->next_repaint = now;
 		}
 	}
 #endif
