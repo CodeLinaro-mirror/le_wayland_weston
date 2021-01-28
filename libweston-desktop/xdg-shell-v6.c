@@ -1259,6 +1259,9 @@ weston_desktop_xdg_surface_destroy(struct weston_desktop_surface *dsurface,
 	struct weston_desktop_xdg_surface *surface = user_data;
 	struct weston_desktop_xdg_surface_configure *configure, *temp;
 
+    if(surface->configured != true && surface->configured != false)
+        return;
+
 	switch (surface->role) {
 	case WESTON_DESKTOP_XDG_SURFACE_ROLE_NONE:
 		break;
