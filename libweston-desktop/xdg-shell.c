@@ -430,6 +430,29 @@ weston_desktop_xdg_toplevel_protocol_move(struct wl_client *wl_client,
 }
 
 static void
+weston_desktop_xdg_toplevel_protocol_set_position(struct wl_client *wl_client,
+                                         struct wl_resource *resource,
+                                         uint32_t x,
+                                         uint32_t y)
+{
+       struct weston_desktop_surface *dsurface =
+               wl_resource_get_user_data(resource);
+       struct weston_desktop_xdg_toplevel *toplevel =
+               weston_desktop_surface_get_implementation_data(dsurface);
+
+       if (!toplevel->base.configured) {
+               wl_resource_post_error(toplevel->resource,
+                                      XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
+                                      "Surface has not been configured yet");
+               return;
+       }
+
+       if (toplevel->next.state.maximized || toplevel->next.state.fullscreen)
+               return;
+       weston_desktop_surface_set_position(toplevel->base.desktop, dsurface, x, y);
+}
+
+static void
 weston_desktop_xdg_toplevel_protocol_resize(struct wl_client *wl_client,
 					    struct wl_resource *resource,
 					    struct wl_resource *seat_resource,
@@ -763,6 +786,7 @@ static const struct xdg_toplevel_interface weston_desktop_xdg_toplevel_implement
 	.set_app_id          = weston_desktop_xdg_toplevel_protocol_set_app_id,
 	.show_window_menu    = weston_desktop_xdg_toplevel_protocol_show_window_menu,
 	.move                = weston_desktop_xdg_toplevel_protocol_move,
+        .set_position        = weston_desktop_xdg_toplevel_protocol_set_position,
 	.resize              = weston_desktop_xdg_toplevel_protocol_resize,
 	.set_min_size        = weston_desktop_xdg_toplevel_protocol_set_min_size,
 	.set_max_size        = weston_desktop_xdg_toplevel_protocol_set_max_size,
