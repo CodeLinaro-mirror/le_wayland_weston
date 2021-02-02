@@ -1,4 +1,28 @@
-/*
+ /*
+ *
+ * Copyright (c) 2021, The Linux Foundation. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification, are permitted
+ * provided that the following conditions are met:
+ *    * Redistributions of source code must retain the above copyright notice, this list of
+ *      conditions and the following disclaimer.
+ *    * Redistributions in binary form must reproduce the above copyright notice, this list of
+ *      conditions and the following disclaimer in the documentation and/or other materials provided
+ *      with the distribution.
+ *    * Neither the name of The Linux Foundation nor the names of its contributors may be used to
+ *      endorse or promote products derived from this software without specific prior written
+ *      permission.
+ *
+ * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NON-INFRINGEMENT ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ *
  * Copyright © 2010-2011 Intel Corporation
  * Copyright © 2008-2011 Kristian Høgsberg
  * Copyright © 2012-2018 Collabora, Ltd.
@@ -45,6 +69,8 @@
 #include <linux/input.h>
 #include <sys/time.h>
 #include <linux/limits.h>
+#include <log/log.h>
+#include <stdarg.h>
 
 #include "weston.h"
 #include <libweston/libweston.h>
@@ -65,6 +91,8 @@
 #include <libweston/weston-log.h>
 #include "../remoting/remoting-plugin.h"
 #include "../pipewire/pipewire-plugin.h"
+
+#define LOG_TAG "weston"
 
 #define WINDOW_TITLE "Weston Compositor"
 /* flight recorder size (in bytes) */
@@ -226,6 +254,19 @@ static int
 vlog_continue(const char *fmt, va_list argp)
 {
 	return weston_log_scope_vprintf(log_scope, fmt, argp);
+}
+
+/* logcat_log redirects weston logs to adb logcat */
+static int
+logcat_log(const char *fmt, va_list argp)
+{
+        char buffer[1024];
+        int l;
+
+        l = vsnprintf(buffer, 1024, fmt, argp);
+        ALOGI("%s", buffer);
+
+        return l;
 }
 
 static const char *
@@ -3226,8 +3267,11 @@ wet_main(int argc, char *argv[])
 			"Weston and Wayland log\n", NULL, NULL, NULL);
 
 	weston_log_file_open(log);
-	weston_log_set_handler(vlog, vlog_continue);
-
+        if (log == NULL || strcmp(log, "logcat") != 0) {
+                weston_log_set_handler(vlog, vlog_continue);
+        } else {
+                weston_log_set_handler(logcat_log, logcat_log);
+        }
 	logger = weston_log_subscriber_create_log(weston_logfile);
 	flight_rec = weston_log_subscriber_create_flight_rec(DEFAULT_FLIGHT_REC_SIZE);
 
