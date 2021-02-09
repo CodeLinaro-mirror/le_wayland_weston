@@ -243,21 +243,17 @@ void SdmDisplayDebugger::Verbose(const char *format, ...) {
 int SdmDisplayDebugger::GetProperty(const char *property_name, int *value) {
   char property[PROPERTY_VALUE_MAX];
 
-  if (verbose_level_ > VERBOSE) {
-      if (property_get(property_name, property, NULL) > 0) {
-        *value = atoi(property);
-        return kErrorNone;
-      }
+  if (property_get(property_name, property, NULL) > 0) {
+    *value = atoi(property);
+    return kErrorNone;
   }
 
   return kErrorNotSupported;
 }
 
 int SdmDisplayDebugger::GetProperty(const char *property_name, char *value) {
-  if (verbose_level_ > VERBOSE) {
-      if (property_get(property_name, value, NULL) > 0) {
-        return kErrorNone;
-      }
+  if (property_get(property_name, value, NULL) > 0) {
+    return kErrorNone;
   }
 
   return kErrorNotSupported;
