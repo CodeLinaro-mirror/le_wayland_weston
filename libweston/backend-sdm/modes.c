@@ -181,7 +181,7 @@ drm_output_set_mode(struct weston_output *base,
         display_config.is_yuv          = false;
 
         int rc = GetDisplayConfiguration(display_id, &display_config);
-        if (rc == 0) {
+        if (rc != 0) {
             width   = display_config.x_pixels;
             height  = display_config.y_pixels;
             refresh = display_config.fps*1000;
