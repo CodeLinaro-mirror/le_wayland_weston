@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017,2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -190,6 +190,7 @@ void SdmDisplayDebugger::config_debug_level(void) {
   fp = fopen("/data/misc/display/sdm_dbg_cfg.txt", "r");
   if (fp) {
       fscanf(fp, "%d", &verbose_level_);
+      DebugAll(true /* enable */, verbose_level_);
       printf("\n sdm debug level configured to %d\n", verbose_level_);
       fclose(fp);
   }
