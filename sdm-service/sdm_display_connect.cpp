@@ -462,6 +462,12 @@ int UpdateDisplayPll(int display_id, int enable)
     return display_[display_id]->UpdateDisplayPll(enable);
 }
 
+int HandleHotplug(int display_id, bool connected)
+{
+    DLOGD("Inside HandleHotplug");
+    return display_[display_id]->HandleHotplug(connected);
+}
+
 }// namespace sdm
 #ifdef __cplusplus
 }

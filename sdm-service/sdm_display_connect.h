@@ -273,6 +273,8 @@ int EnablePllUpdate(int display_id, int enable);
 */
 int UpdateDisplayPll(int display_id, int ppm);
 
+int HandleHotplug(int display_id, bool connected);
+
 #ifdef __cplusplus
 }
 #endif
