@@ -126,6 +126,11 @@ struct drm_parameters {
 };
 int display_id = -1;
 
+enum {
+    PRIMARY_DISPLAY_ID,
+    EXTERNAL_DISPLAY_ID
+};
+
 static struct gl_renderer_interface *gl_renderer;
 
 static const char default_seat[] = "seat0";
@@ -2030,40 +2035,58 @@ udev_drm_event(int fd, uint32_t mask, void *data)
 {
     struct drm_backend *b = data;
     struct udev_device *event;
+    int error = -1;
     sdm_cbs_t sdm_cbs;
     event = udev_monitor_receive_device(b->udev_monitor);
     static bool display_created = false;
 
     if (udev_event_is_hotplug(b, event) || udev_event_is_connected(b, event)) {
-        if (display_created) {
+        if (display_created && !b->external_as_primary) {
             SetVSyncState(display_id, true,b->output );
             udev_device_unref(event);
             return 1;
-      }
-      int rc = CreateDisplay(display_id);
-      if (!rc) {
-          weston_log("CreateDisplay: success %d \n", rc);
-      } else {
-          weston_log("CreateDisplay: fail %d \n", rc);
-          udev_device_unref(event);
-          return 0;
-      }
-          /* Now register callbacks with SDM services */
-      sdm_cbs.vblank_cb = vblank_handler;
-      sdm_cbs.hotplug_cb = hotplug_handler;
-      RegisterCbs(display_id, &sdm_cbs);
-      if (create_outputs(b, 0, b->drm_device) < 0) {
+        }
+        if (b->external_as_primary && display_created) {
+            weston_log("HandleHotplug: connect \n");
+            error = HandleHotplug(display_id, true);
+            udev_device_unref(event);
+            if (error > 0) {
+                weston_log("HandleHotplug: failed err = %d \n",error);
+                return 0;
+            }
+            return 1;
+        }
+        int rc = CreateDisplay(display_id);
+        if (!rc) {
+            weston_log("CreateDisplay: success %d \n", rc);
+        } else {
+            weston_log("CreateDisplay: fail %d \n", rc);
+            udev_device_unref(event);
+            return 0;
+        }
+        /* Now register callbacks with SDM services */
+        sdm_cbs.vblank_cb = vblank_handler;
+        sdm_cbs.hotplug_cb = hotplug_handler;
+        RegisterCbs(display_id, &sdm_cbs);
+        if (create_outputs(b, 0, b->drm_device) < 0) {
             weston_log("failed to create output\n");
             udev_device_unref(event);
             return 0;
-      }
-      weston_log("create output successful \n");
-      display_created = true;
+        }
+        weston_log("create output successful \n");
+        display_created = true;
     } else if(udev_event_is_disconnected(b, event)) {
-      SetVSyncState(display_id, false,b->output );
+        SetVSyncState(display_id, false,b->output );
+        if (b->external_as_primary) {
+            weston_log("HandleHotplug: disconnect \n");
+            error = HandleHotplug(display_id, false);
+        }
     }
     udev_device_unref(event);
-
+    if (error > 0) {
+        weston_log("HandleHotplug: failed err = %d \n",error);
+        return 0;
+    }
     return 1;
 }
 
@@ -2491,8 +2514,14 @@ drm_backend_create(struct weston_compositor *compositor,
     int rc = CreateCore();
     rc = GetFirstDisplayType(&display_id);
     weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
+    if (param->device != NULL && strcmp(param->device,"displayport") == 0) {
+        b->external_as_primary = true;
+        // override display id
+        display_id = EXTERNAL_DISPLAY_ID;
+    }
 
-    if (param->device != NULL && strcmp(param->device,"hdmi") != 0) {
+    if (param->device != NULL && strcmp(param->device,"hdmi") != 0
+        && strcmp(param->device,"displayport") !=0 ) {
         /* and create default display */
         rc = CreateDisplay(display_id);
         if (!rc) {

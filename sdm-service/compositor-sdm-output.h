@@ -111,6 +111,7 @@ struct drm_backend {
        uint32_t min_height, max_height;
        struct drm_output *output;
        struct udev_device *drm_device;
+       bool external_as_primary;
 };
 
 struct drm_edid {

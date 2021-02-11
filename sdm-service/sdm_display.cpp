@@ -1524,13 +1524,10 @@ SdmDisplayProxy::SdmDisplayProxy(DisplayType type, CoreInterface *core_intf,
 
     display_intf_ = &sdm_disp_;
     buffer_allocator_ = buffer_allocator;
-    std::thread uevent_thread(UeventThread, this);
-    uevent_thread_.swap(uevent_thread);
 }
 
 SdmDisplayProxy::~SdmDisplayProxy () {
     uevent_thread_exit_ = true;
-    uevent_thread_.detach();
 }
 
 int SdmDisplayProxy::HandleHotplug(bool connected) {
@@ -1570,17 +1567,15 @@ int SdmDisplayProxy::HandleHotplug(bool connected) {
       display_intf_ = &null_disp_;
 
       DLOGI("Display is disconnected successfully.");
+      return error;
     } else {
       DLOGI("Display is already disconnected.");
     }
   }
+  return error;
 }
 
 void *SdmDisplayProxy::UeventThread(void *context) {
-  if (context) {
-    return reinterpret_cast<SdmDisplayProxy *>(context)->UeventThreadHandler();
-  }
-
   return NULL;
 }
 
