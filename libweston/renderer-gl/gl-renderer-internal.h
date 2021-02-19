@@ -52,6 +52,8 @@ struct gl_renderer {
 	EGLContext egl_context;
 	EGLConfig egl_config;
 
+        struct gbm_device *gbm_hdle;
+
 	EGLSurface dummy_surface;
 
 	uint32_t gl_version;
@@ -86,6 +88,7 @@ struct gl_renderer {
 
 	bool has_dmabuf_import;
 	struct wl_list dmabuf_images;
+        struct wl_list gbmbuf_images;
 
 	bool has_gl_texture_rg;
 

@@ -329,4 +329,7 @@ weston_protected_surface_send_event(struct protected_surface *psurface,
 int
 wl_data_device_manager_init(struct wl_display *display);
 
+void
+weston_output_refresh_metadata(struct weston_output *output);
+
 #endif

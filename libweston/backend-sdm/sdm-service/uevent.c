@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <uevent.h>
+#include "sdm-service/uevent.h"
 #include <malloc.h>
 #include <string.h>
 #include <unistd.h>

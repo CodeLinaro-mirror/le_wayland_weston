@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017,2020-2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -22,9 +22,12 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "sdm_display.h"
-#include "sdm_display_connect.h"
-#include "uevent.h"
+#include <display_properties.h>
+#include <cutils/properties.h>
+
+#include "sdm-service/sdm_display.h"
+#include "sdm-service/sdm_display_connect.h"
+#include "sdm-service/uevent.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,6 +50,15 @@ SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
 SdmDisplayProxy *display_[kDisplayMax] = {0};
 
+static DisplayError
+SetProperty(const char *property_name, const char *value)
+{
+  if (property_set(property_name, value) == 0) {
+    return kErrorNone;
+  }
+  return kErrorNotSupported;
+}
+
 int CreateCore()
 {
     DisplayError error = kErrorNone;
@@ -56,8 +68,7 @@ int CreateCore()
     }
     buffer_allocator_ = new SdmDisplayBufferAllocator;
 
-    error = CoreInterface::CreateCore(SdmDisplayDebugger::Get(),
-                                      buffer_allocator_,
+    error = CoreInterface::CreateCore(buffer_allocator_,
                                       &buffer_sync_handler_,
                                       &socket_handler_,
                                       &core_intf_);
@@ -154,6 +165,8 @@ int CreateDisplay(int display_id)
         return kErrorNotSupported;
     }
 
+    SetProperty(DISABLE_SINGLE_LM_SPLIT_PROP, "1");
+
     enum DisplayType display_type;
     switch(display_id) {
        case 0:  display_type  = kPrimary;    break;
@@ -213,6 +226,7 @@ int Commit(int display_id, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
 
+    DLOGV("function successful.");
     if (display_id >= kDisplayMax || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
@@ -230,9 +244,7 @@ int Commit(int display_id, struct drm_output *output)
         return error;
     }
 
-    #if SDM_DISPLAY_DEBUG
-    DLOGD("function successful.");
-    #endif
+    DLOGV("function successful.");
 
     return kErrorNone;
 }
@@ -298,8 +310,6 @@ bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_c
 
 bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info)
 {
-    DisplayError error = kErrorNone;
-
     if (display_id >= kDisplayMax || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return FAIL;
@@ -307,41 +317,6 @@ bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info)
 
     if (!display_[display_id]) {
         DLOGE("function failed. Display(%d) not created yet.", display_id);
-        return FAIL;
-    }
-
-    error = display_[display_id]->GetHdrInfo(display_hdr_info);
-
-    if (error != kErrorNone) {
-        DLOGE("function failed with error = %d", error);
-        return FAIL;
-    }
-
-    #if SDM_DISPLAY_DEBUG
-    DLOGD("function successful.");
-    #endif
-
-    return SUCCESS;
-}
-
-bool GetDisplayHdcpProtocol(int display_id, struct DisplayHdcpProtocol *display_hdcp_protocol)
-{
-    DisplayError error = kErrorNone;
-
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return FAIL;
-    }
-
-    if (!display_[display_id]) {
-        DLOGE("function failed. Display(%d) not created yet.", display_id);
-        return FAIL;
-    }
-
-    error = display_[display_id]->GetHdcpProtocol(display_hdcp_protocol);
-
-    if (error != kErrorNone) {
-        DLOGE("function failed with error = %d", error);
         return FAIL;
     }
 
@@ -373,14 +348,10 @@ int RegisterCbs(int display_id, sdm_cbs *cbs) {
         return error;
     }
 
-    #if SDM_DISPLAY_DEBUG
-    DLOGD("function successful.");
-    #endif
-
     return kErrorNone;
 }
 
-int get_drm_master_fd() {
+int get_drm_master_fd(void) {
 
     int fd = SdmDisplayInterface::GetDrmMasterFd();
 
@@ -393,6 +364,9 @@ int get_drm_master_fd() {
 
 int SetDisplayState(int display_id, int power_mode) {
     DisplayError error = kErrorNone;
+    bool teardown;
+    int release_fence = -1;
+    sdm::DisplayState disp_state;
 
     if (display_id >= kDisplayMax || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
@@ -405,13 +379,20 @@ int SetDisplayState(int display_id, int power_mode) {
         return kErrorParameters;
     }
 
+    if (power_mode == WESTON_DPMS_ON) {
+        teardown = false;
+        disp_state = kStateOn;
+    } else {
+        teardown = true;
+        disp_state = kStateOff;
+    }
+ 
     /* When WESTON_DPMS_ON == 0, set state ON (kStateOn)     */
     /* for all other power modes, i.e. WESTON_DPMS_STANDBY,  */
     /* WESTON_DPMS_SUSPEND, WESTON_DPMS_OFF turn off display */
     /* set state off (kStateOff)                             */
-    error = display_[display_id]->SetDisplayState((power_mode == \
-                                                   WESTON_DPMS_ON)? \
-                                                   kStateOn: kStateOff);
+    error = display_[display_id]->SetDisplayState(disp_state, teardown,
+                                                  &release_fence);
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
         return error;
@@ -450,16 +431,6 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
     #endif
 
     return kErrorNone;
-}
-
-int EnablePllUpdate(int display_id, int enable)
-{
-    return display_[display_id]->EnablePllUpdate(enable);
-}
-
-int UpdateDisplayPll(int display_id, int enable)
-{
-    return display_[display_id]->UpdateDisplayPll(enable);
 }
 
 }// namespace sdm
