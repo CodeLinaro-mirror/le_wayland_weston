@@ -1,4 +1,28 @@
-/*
+ /*
+ *
+ * Copyright (c) 2021, The Linux Foundation. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification, are permitted
+ * provided that the following conditions are met:
+ *    * Redistributions of source code must retain the above copyright notice, this list of
+ *      conditions and the following disclaimer.
+ *    * Redistributions in binary form must reproduce the above copyright notice, this list of
+ *      conditions and the following disclaimer in the documentation and/or other materials provided
+ *      with the distribution.
+ *    * Neither the name of The Linux Foundation nor the names of its contributors may be used to
+ *      endorse or promote products derived from this software without specific prior written
+ *      permission.
+ *
+ * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NON-INFRINGEMENT ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ *
  * Copyright © 2010-2011 Intel Corporation
  * Copyright © 2008-2011 Kristian Høgsberg
  * Copyright © 2012-2018 Collabora, Ltd.
@@ -45,6 +69,8 @@
 #include <linux/input.h>
 #include <sys/time.h>
 #include <linux/limits.h>
+#include <log/log.h>
+#include <stdarg.h>
 
 #include "weston.h"
 #include <libweston/libweston.h>
@@ -65,6 +91,8 @@
 #include <libweston/weston-log.h>
 #include "../remoting/remoting-plugin.h"
 #include "../pipewire/pipewire-plugin.h"
+
+#define LOG_TAG "weston"
 
 #define WINDOW_TITLE "Weston Compositor"
 /* flight recorder size (in bytes) */
@@ -226,6 +254,19 @@ static int
 vlog_continue(const char *fmt, va_list argp)
 {
 	return weston_log_scope_vprintf(log_scope, fmt, argp);
+}
+
+/* logcat_log redirects weston logs to adb logcat */
+static int
+logcat_log(const char *fmt, va_list argp)
+{
+        char buffer[1024];
+        int l;
+
+        l = vsnprintf(buffer, 1024, fmt, argp);
+        ALOGI("%s", buffer);
+
+        return l;
 }
 
 static const char *
@@ -2473,6 +2514,64 @@ load_pipewire(struct weston_compositor *c, struct weston_config *wc)
 	}
 }
 
+
+static int
+load_sdm_backend(struct weston_compositor *c,
+		 int *argc, char **argv, struct weston_config *wc)
+{
+	struct weston_drm_backend_config config = {{ 0, }};
+	struct weston_config_section *section;
+	struct wet_compositor *wet = to_wet_compositor(c);
+	int ret = 0;
+
+	wet->drm_use_current_mode = false;
+
+	section = weston_config_get_section(wc, "core", NULL, NULL);
+	weston_config_section_get_bool(section, "use-pixman", &config.use_pixman,
+				       false);
+
+	const struct weston_option options[] = {
+		{ WESTON_OPTION_STRING, "seat", 0, &config.seat_id },
+		{ WESTON_OPTION_INTEGER, "tty", 0, &config.tty },
+		{ WESTON_OPTION_STRING, "drm-device", 0, &config.specific_device },
+		{ WESTON_OPTION_BOOLEAN, "current-mode", 0, &wet->drm_use_current_mode },
+		{ WESTON_OPTION_BOOLEAN, "use-pixman", 0, &config.use_pixman },
+	};
+
+	parse_options(options, ARRAY_LENGTH(options), argc, argv);
+
+	section = weston_config_get_section(wc, "core", NULL, NULL);
+	weston_config_section_get_string(section,
+					 "gbm-format", &config.gbm_format,
+					 NULL);
+	weston_config_section_get_uint(section, "pageflip-timeout",
+	                               &config.pageflip_timeout, 0);
+	weston_config_section_get_bool(section, "pixman-shadow",
+				       &config.use_pixman_shadow, true);
+
+	config.base.struct_version = WESTON_DRM_BACKEND_CONFIG_VERSION;
+	config.base.struct_size = sizeof(struct weston_drm_backend_config);
+	config.configure_device = configure_input_device;
+
+	wet->heads_changed_listener.notify = drm_heads_changed;
+	weston_compositor_add_heads_changed_listener(c,
+						&wet->heads_changed_listener);
+
+	ret = weston_compositor_load_backend(c, WESTON_BACKEND_SDM,
+					     &config.base);
+
+	/* remoting */
+	load_remoting(c, wc);
+
+	/* pipewire */
+	load_pipewire(c, wc);
+
+	free(config.gbm_format);
+	free(config.seat_id);
+
+	return ret;
+}
+
 static int
 load_drm_backend(struct weston_compositor *c,
 		 int *argc, char **argv, struct weston_config *wc)
@@ -2993,6 +3092,8 @@ load_backend(struct weston_compositor *compositor, const char *backend,
 		return load_fbdev_backend(compositor, argc, argv, config);
 	else if (strstr(backend, "drm-backend.so"))
 		return load_drm_backend(compositor, argc, argv, config);
+	else if (strstr(backend, "sdm-backend.so"))
+		return load_sdm_backend(compositor, argc, argv, config);
 	else if (strstr(backend, "x11-backend.so"))
 		return load_x11_backend(compositor, argc, argv, config);
 	else if (strstr(backend, "wayland-backend.so"))
@@ -3166,8 +3267,11 @@ wet_main(int argc, char *argv[])
 			"Weston and Wayland log\n", NULL, NULL, NULL);
 
 	weston_log_file_open(log);
-	weston_log_set_handler(vlog, vlog_continue);
-
+        if (log == NULL || strcmp(log, "logcat") != 0) {
+                weston_log_set_handler(vlog, vlog_continue);
+        } else {
+                weston_log_set_handler(logcat_log, logcat_log);
+        }
 	logger = weston_log_subscriber_create_log(weston_logfile);
 	flight_rec = weston_log_subscriber_create_flight_rec(DEFAULT_FLIGHT_REC_SIZE);
 

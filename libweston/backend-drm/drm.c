@@ -2030,8 +2030,10 @@ drm_head_update_info(struct drm_head *head)
 		return;
 	}
 
+#ifndef BUILD_DRM_COMPOSITOR
 	if (drm_head_assign_connector_info(head, connector) < 0)
 		drmModeFreeConnector(connector);
+#endif
 
 	if (head->base.device_changed)
 		drm_head_log_info(head, "updated");
@@ -2956,6 +2958,12 @@ drm_backend_create(struct weston_compositor *compositor,
 			weston_log("Error: initializing direct-display "
 				   "support failed.\n");
 	}
+
+        if (compositor->renderer->import_gbm_buffer) {
+                if (gbm_buffer_backend_setup(compositor) < 0)
+                        weston_log("Error: initializing gbm_buffer_backend_setup"
+                                   "support failed.\n");
+        }
 
 	if (compositor->capabilities & WESTON_CAP_EXPLICIT_SYNC) {
 		if (linux_explicit_synchronization_setup(compositor) < 0)

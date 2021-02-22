@@ -22,21 +22,21 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <cutils/sockets.h>
-#include "sdm_display_debugger.h"
-#include "sdm_display_socket_handler.h"
-
-#define __CLASS__ "SdmDisplaySocketHandler"
+#ifndef __SDM_DISPLAY_BUFFER_SYNC_HANDLER_H__
+#define __SDM_DISPLAY_BUFFER_SYNC_HANDLER_H__
+#include <core/buffer_sync_handler.h>
 
 namespace sdm {
 
-SdmDisplaySocketHandler::SdmDisplaySocketHandler() {
-  DLOGW("Not supported.");
-}
-int SdmDisplaySocketHandler::GetSocketFd(SocketType socket_type) {
-  DLOGW("Not supported.");
+class SdmDisplayBufferSyncHandler : public BufferSyncHandler {
+ public:
+  SdmDisplayBufferSyncHandler();
 
-  return 0;
-}
+  DisplayError SyncWait(int fd, int timeout);
+  DisplayError SyncWait(int fd);
+  DisplayError SyncMerge(int fd1, int fd2, int *merged_fd);
+  bool IsSyncSignaled(int fd);
+};
 
 }  // namespace sdm
+#endif  // __SDM_DISPLAY_BUFFER_SYNC_HANDLER_H__

@@ -34,6 +34,7 @@ generated_protocols = [
 	[ 'weston-test', 'internal' ],
 	[ 'weston-touch-calibration', 'internal' ],
 	[ 'weston-direct-display', 'internal' ],
+	[ 'gbm-buffer-backend', 'internal' ],
 	[ 'xdg-output', 'v1' ],
 	[ 'xdg-shell', 'v6' ],
 	[ 'xdg-shell', 'stable' ],

@@ -1,11 +1,13 @@
 deps_libweston = [
+	dep_gbm,
 	dep_wayland_server,
 	dep_pixman,
 	dep_libm,
 	dep_libdl,
 	dep_libdrm_headers,
 	dep_xkbcommon,
-	dep_matrix_c
+	dep_matrix_c,
+        dep_gbm
 ]
 srcs_libweston = [
 	git_version_h,
@@ -33,6 +35,7 @@ srcs_libweston = [
 	'weston-log.c',
 	'weston-direct-display.c',
 	'zoom.c',
+	'gbm-buffer-backend.c',
 	linux_dmabuf_unstable_v1_protocol_c,
 	linux_dmabuf_unstable_v1_server_protocol_h,
 	linux_explicit_synchronization_unstable_v1_protocol_c,
@@ -65,6 +68,8 @@ srcs_libweston = [
 	weston_debug_server_protocol_h,
 	weston_direct_display_protocol_c,
 	weston_direct_display_server_protocol_h,
+        gbm_buffer_backend_protocol_c,
+        gbm_buffer_backend_server_protocol_h,
 ]
 
 if get_option('renderer-gl')
@@ -151,6 +156,10 @@ if get_option('backend-drm')
 	deps_session_helper += dep_libdrm
 endif
 
+if get_option('backend-sdm')
+	deps_session_helper += [dep_libdrm, dep_libsdmcore, dep_libsdmutils]
+endif
+
 systemd_dep = dependency('', required: false)
 if get_option('launcher-logind')
 	systemd_dep = dependency('libsystemd', version: '>= 209', required: false)
@@ -184,12 +193,11 @@ endif
 lib_session_helper = static_library(
 	'session-helper',
 	srcs_session_helper,
-	include_directories: common_inc,
+	include_directories: [common_inc, ('backend-sdm')],
 	dependencies: deps_session_helper,
 	install: false
 )
 dep_session_helper = declare_dependency(link_with: lib_session_helper)
-
 
 lib_libinput_backend = static_library(
 	'libinput-backend',
@@ -235,6 +243,7 @@ endif
 
 subdir('renderer-gl')
 subdir('backend-drm')
+subdir('backend-sdm')
 subdir('backend-fbdev')
 subdir('backend-headless')
 subdir('backend-rdp')

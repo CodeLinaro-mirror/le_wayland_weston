@@ -22,37 +22,47 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "sdm_display_debugger.h"
-#include "sdm_display_buffer_sync_handler.h"
+#ifndef __SDM_DISPLAY_BUFFER_ALLOCATOR_H__
+#define __SDM_DISPLAY_BUFFER_ALLOCATOR_H__
 
-#define __CLASS__ "SdmDisplayBufferSyncHandler"
+#include <core/buffer_allocator.h>
+#include <gbm.h>
+#include <gbm_priv.h>
+#include "sdm-service/sdm_display_connect.h"
+#include <core/layer_stack.h>
 
 namespace sdm {
 
-SdmDisplayBufferSyncHandler::SdmDisplayBufferSyncHandler() {
-  DLOGW("Not supported.");
+template <class Type>
+inline Type ALIGN(Type x, Type align) {
+  return (x + align - 1) & ~(align - 1);
 }
+class SdmDisplayBufferAllocator : public BufferAllocator {
+ public:
+  SdmDisplayBufferAllocator();
+  ~SdmDisplayBufferAllocator() {
+    gbm_device_destroy(gbm_);
+    gbm_ = NULL;
+  };
 
-DisplayError SdmDisplayBufferSyncHandler::SyncWait(int fd) {
-  DLOGW("Not supported.");
+  DisplayError AllocateBuffer(BufferInfo *buffer_info);
+  DisplayError FreeBuffer(BufferInfo *buffer_info);
+  uint32_t GetBufferSize(BufferInfo *buffer_info);
 
-  return kErrorNone;
-}
-
-DisplayError SdmDisplayBufferSyncHandler::SyncMerge(int fd1,
-                                                    int fd2,
-                                                    int *merged_fd) {
-  DLOGW("Not supported.");
-
-  return kErrorNone;
-}
-
-bool SdmDisplayBufferSyncHandler::IsSyncSignaled(int fd) {
-  DLOGW("Not supported.");
-
-  return true;
-}
+  DisplayError GetAllocatedBufferInfo(const BufferConfig &buffer_config,
+                                      AllocatedBufferInfo *allocated_buffer_info);
+  int SetBufferInfo(LayerBufferFormat format, uint32_t *target, uint64_t *flags);
+  DisplayError GetBufferLayout(const AllocatedBufferInfo &buf_info,
+                               uint32_t stride[4], uint32_t offset[4],
+                               uint32_t *num_planes);
+  void GetGbmDeviceHandle(void **userdata);
+ private:
+  bool IsFormatVideo(uint32_t fmt);
+  bool IsVideoFormatLinear(uint32_t fmt, uint32_t ubwc_status);
+  bool IsVideoFormatUBWC(uint32_t fmt, uint32_t ubwc_status);
+  struct gbm_device *gbm_ = NULL;
+};
 
 }  // namespace sdm
-
+#endif  // __SDM_DISPLAY_BUFFER_ALLOCATOR_H__
 

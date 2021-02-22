@@ -4,6 +4,7 @@
  * Copyright © 2017, 2018 Collabora, Ltd.
  * Copyright © 2017, 2018 General Electric Company
  * Copyright (c) 2018 DisplayLink (UK) Ltd.
+ * Copyright (c) 2021 The Linux Foundation. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -40,10 +41,12 @@
 #include <libweston/pixel-formats.h>
 #include <libweston/linux-dmabuf.h>
 #include "shared/helpers.h"
-#include "drm-internal.h"
+#include "sdm-internal.h"
 #include "linux-dmabuf.h"
-#include <gbm_priv.h>
 #include "gbm-buffer-backend.h"
+
+#include <gbm.h>
+#include <gbm_priv.h>
 
 static void
 drm_fb_destroy(struct drm_fb *fb)
@@ -100,18 +103,9 @@ drm_fb_addfb(struct drm_backend *b, struct drm_fb *fb)
 	if (ret == 0)
 		return 0;
 
-	/* Legacy AddFB can't always infer the format from depth/bpp alone, so
-	 * check if our format is one of the lucky ones. */
-	if (!fb->format->depth || !fb->format->bpp)
-		return ret;
+	ret = drmModeAddFB(b->drm.fd, fb->width, fb->height,
+			   24, 32, fb->strides[0], fb->handles[0], &fb->fb_id);
 
-	/* Cannot fall back to AddFB for multi-planar formats either. */
-	if (fb->handles[1] || fb->handles[2] || fb->handles[3])
-		return ret;
-
-	ret = drmModeAddFB(fb->fd, fb->width, fb->height,
-			   fb->format->depth, fb->format->bpp,
-			   fb->strides[0], fb->handles[0], &fb->fb_id);
 	return ret;
 }
 
@@ -205,8 +199,6 @@ drm_fb_destroy_gbm(struct gbm_bo *bo, void *data)
 {
 	struct drm_fb *fb = data;
 
-	assert(fb->type == BUFFER_GBM_SURFACE || fb->type == BUFFER_CLIENT ||
-	       fb->type == BUFFER_CURSOR);
 	drm_fb_destroy(fb);
 }
 
@@ -242,7 +234,9 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	};
 #endif /* HAVE_GBM_FD_IMPORT */
 
+#ifdef HAVE_GBM_MODIFIERS
 	int i;
+#endif
 
 	/* XXX: TODO:
 	 *
@@ -341,14 +335,6 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	if (is_opaque)
 		fb->format = pixel_format_get_opaque_substitute(fb->format);
 
-	if (backend->min_width > fb->width ||
-	    fb->width > backend->max_width ||
-	    backend->min_height > fb->height ||
-	    fb->height > backend->max_height) {
-		weston_log("bo geometry out of bounds\n");
-		goto err_free;
-	}
-
 #ifdef HAVE_GBM_MODIFIERS
 	fb->num_planes = dmabuf->attributes.n_planes;
 	for (i = 0; i < dmabuf->attributes.n_planes; i++) {
@@ -373,7 +359,6 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	}
 #endif /* NOT HAVE_GBM_MODIFIERS */
 
-
 	if (drm_fb_addfb(backend, fb) != 0)
 		goto err_free;
 
@@ -389,8 +374,6 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 		   bool is_opaque, enum drm_fb_type type)
 {
 	struct drm_fb *fb = gbm_bo_get_user_data(bo);
-	int j, ret;
-	generic_buf_layout_t buf_lyt;
 #ifdef HAVE_GBM_MODIFIERS
 	int i;
 #endif
@@ -412,7 +395,7 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 	fb->width = gbm_bo_get_width(bo);
 	fb->height = gbm_bo_get_height(bo);
 	fb->format = pixel_format_get_info(gbm_bo_get_format(bo));
-	fb->size = 0;
+	fb->ion_fd = gbm_bo_get_fd(bo);
 
 #ifdef HAVE_GBM_MODIFIERS
 	fb->modifier = gbm_bo_get_modifier(bo);
@@ -423,48 +406,24 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 		fb->offsets[i] = gbm_bo_get_offset(bo, i);
 	}
 #else
-	fb->num_planes = gbm_bo_get_plane_count(bo);
-        if (fb->num_planes ==1) {
-	        fb->strides[0] = gbm_bo_get_stride(bo);
-	        fb->handles[0] = gbm_bo_get_handle(bo).u32;
-        } else {
-                if (gbm_bo_get_format(bo) == GBM_FORMAT_NV12) {
-			ret=gbm_perform(GBM_PERFORM_GET_YUV_PLANE_INFO,bo,&buf_lyt);
-                        if(ret == GBM_ERROR_NONE){
-				printf("GET YUV Info success in drm_fb_get_from_bo\n");
-				fb->num_planes = buf_lyt.num_planes;
-				for (j = 0; j < fb->num_planes; j++) {
-				    fb->strides[j] = buf_lyt.planes[j].stride;
-				    fb->handles[j] = gbm_bo_get_handle(bo).u32;;
-			        }
-                        }
-                }
-	}
-        fb->modifier = DRM_FORMAT_MOD_INVALID;
+	fb->num_planes = 1;
+	fb->strides[0] = gbm_bo_get_stride(bo);
+	fb->handles[0] = gbm_bo_get_handle(bo).u32;
+	fb->modifier = DRM_FORMAT_MOD_INVALID;
 #endif
 
+	fb->size = fb->strides[0] * fb->height;
 	if (!fb->format) {
 		weston_log("couldn't look up format 0x%lx\n",
 			   (unsigned long) gbm_bo_get_format(bo));
 		goto err_free;
 	}
 
-	/* We can scanout an ARGB buffer if the surface's opaque region covers
-	 * the whole output, but we have to use XRGB as the KMS format code. */
 	if (is_opaque)
 		fb->format = pixel_format_get_opaque_substitute(fb->format);
 
-	if (backend->min_width > fb->width ||
-	    fb->width > backend->max_width ||
-	    backend->min_height > fb->height ||
-	    fb->height > backend->max_height) {
-		weston_log("bo geometry out of bounds\n");
-		goto err_free;
-	}
-
 	if (drm_fb_addfb(backend, fb) != 0) {
-		if (type == BUFFER_GBM_SURFACE)
-			weston_log("failed to create kms fb: %s\n",
+		weston_log("failed to create kms fb: %s\n",
 				   strerror(errno));
 		goto err_free;
 	}
@@ -483,7 +442,6 @@ drm_fb_set_buffer(struct drm_fb *fb, struct weston_buffer *buffer,
 		  struct weston_buffer_release *buffer_release)
 {
 	assert(fb->buffer_ref.buffer == NULL);
-	assert(fb->type == BUFFER_CLIENT || fb->type == BUFFER_DMABUF);
 	weston_buffer_reference(&fb->buffer_ref, buffer);
 	weston_buffer_release_reference(&fb->buffer_release_ref,
 					buffer_release);
@@ -542,16 +500,15 @@ drm_can_scanout_dmabuf(struct weston_compositor *ec,
 }
 
 struct drm_fb *
-drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev)
+drm_fb_get_from_view(struct drm_output *output, struct weston_view *ev)
 {
-	struct drm_output *output = state->output;
 	struct drm_backend *b = to_drm_backend(output->base.compositor);
 	struct weston_buffer *buffer = ev->surface->buffer_ref.buffer;
 	bool is_opaque = weston_view_is_opaque(ev, &ev->transform.boundingbox);
 	struct linux_dmabuf_buffer *dmabuf;
 	struct drm_fb *fb;
 	struct gbm_bo *bo;
-	struct gbm_buffer *gbm_buf;
+	struct gbm_buffer *gbmbuf;
 
 	if (ev->alpha != 1.0f)
 		return NULL;
@@ -573,26 +530,34 @@ drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev)
 	if (!b->gbm)
 		return NULL;
 
-        if (dmabuf = linux_dmabuf_buffer_get(buffer->resource)) {
+	dmabuf = linux_dmabuf_buffer_get(buffer->resource);
+	if (dmabuf) {
+		//simple-dmabuf-egl will use this
 		fb = drm_fb_get_from_dmabuf(dmabuf, b, is_opaque);
 		if (!fb)
 			return NULL;
-	} else if (gbm_buf = gbm_buffer_get(buffer->resource)) {
-                struct gbm_buf_info gbm_bufinfo = {
-                        .fd = gbm_buf->fd,
-                        .metadata_fd = gbm_buf->metadata_fd,
-                        .width = gbm_buf->width,
-                        .height = gbm_buf->height,
-                        .format = gbm_buf->format
-                };
+	} else if (gbmbuf = gbm_buffer_get(buffer->resource)) {
+		//gstreamer will use this for buffer sharing
+		struct gbm_buf_info gbmbuf_info = {
+			.fd = gbmbuf->fd,
+			.metadata_fd = gbmbuf->metadata_fd,
+			.width = gbmbuf->width,
+			.height = gbmbuf->height,
+			.format = gbmbuf->format
+		};
+		struct weston_surface *es = ev->surface;
+
 		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
-				   &gbm_bufinfo, GBM_BO_USE_SCANOUT);
-        } else {
+					&gbmbuf_info, GBM_BO_USE_SCANOUT);
+	} else {
+		//simple-egl will use WL_BUFFER
 		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_WL_BUFFER,
 				   buffer->resource, GBM_BO_USE_SCANOUT);
-        }
-        if (!bo)
+	}
+
+	if (!bo) {
 		return NULL;
+	}
 
 	fb = drm_fb_get_from_bo(bo, b, is_opaque, BUFFER_CLIENT);
 	if (!fb) {
@@ -606,4 +571,5 @@ drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev)
 			  ev->surface->buffer_release_ref.buffer_release);
 	return fb;
 }
+
 #endif
