@@ -154,6 +154,7 @@ dep_gbm = cc.find_library('gbm')
 dep_libsdmcore = cc.find_library('sdmcore')
 dep_libsdmutils = cc.find_library('sdmutils')
 dep_libdrmutils = cc.find_library('drmutils')
+dep_log = cc.find_library('liblog', required : true)
 
 subdir('include')
 subdir('protocol')
