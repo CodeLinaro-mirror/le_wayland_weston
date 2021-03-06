@@ -88,6 +88,36 @@ namespace sdm {
 #define SDM_DISPLAY_DEBUG 0
 #define SDM_DISPLAY_DUMP_LAYER_STACK 0
 
+Layer *SdmLayerManager::get_layer(struct sdm_layer *sdm_layer)
+{
+  std::lock_guard<std::mutex> lock(lock_);
+  SdmLayer *layer;
+
+  auto iter = layer_cache_.find(sdm_layer->view);
+  if (iter == layer_cache_.end()) {
+    layer = new SdmLayer;
+    layer->layer_manager_ = this;
+    layer->destroy_listener_.notify = destroy;
+    layer_cache_.emplace(sdm_layer->view, layer);
+    wl_signal_add(&sdm_layer->view->destroy_signal, &layer->destroy_listener_);
+  } else {
+    layer = iter->second;
+  }
+
+  return &layer->layer_;
+}
+
+void SdmLayerManager::destroy(struct wl_listener *listener, void *data)
+{
+  struct SdmLayer *layer = reinterpret_cast<struct SdmLayer *>(
+      container_of(listener, struct SdmLayer, destroy_listener_));
+  struct weston_view *view = reinterpret_cast<struct weston_view*>(data);
+
+  std::lock_guard<std::mutex> lock(layer->layer_manager_->lock_);
+  layer->layer_manager_->layer_cache_.erase(view);
+  delete layer;
+}
+
 int SdmDisplayInterface::GetDrmMasterFd() {
   DRMMaster *master = nullptr;
   int ret = DRMMaster::GetInstance(&master);
@@ -252,20 +282,6 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
   return kErrorNone;
 }
 
-DisplayError SdmDisplay::FreeLayerStack() {
-  for (Layer *layer : layer_stack_.layers) {
-    layer->visible_regions.erase(layer->visible_regions.begin(),
-                                 layer->visible_regions.end());
-    layer->dirty_regions.erase(layer->dirty_regions.begin(),
-                               layer->dirty_regions.end());
-
-    delete layer;
-  }
-  layer_stack_ = {};
-
-  return kErrorNone;
-}
-
 DisplayError SdmDisplay::FreeLayerGeometry(struct LayerGeometry *glayer) {
   if (glayer->dirty_regions.count)
     free(glayer->dirty_regions.rects);
@@ -273,17 +289,6 @@ DisplayError SdmDisplay::FreeLayerGeometry(struct LayerGeometry *glayer) {
     free(glayer->visible_regions.rects);
 
   free(glayer);
-
-  return kErrorNone;
-}
-
-DisplayError SdmDisplay::AllocLayerStackMemory(struct drm_output *output) {
-  uint32_t num_layers = output->view_count;
-
-  for (size_t i = 0; i < output->view_count; i++) {
-    Layer *layer = new Layer();
-    layer_stack_.layers.push_back(layer);
-  }
 
   return kErrorNone;
 }
@@ -432,6 +437,9 @@ DisplayError SdmDisplay::AllocateMemoryForLayerGeometry(struct drm_output *outpu
       return kErrorParameters;
     }
     /* It's permissive the visible/dirty region can be NULL */
+    layer_stack_.layers.at(index)->visible_regions.clear();
+    layer_stack_.layers.at(index)->dirty_regions.clear();
+
     num_visible_rects = glayer->visible_regions.count;
     for (uint32_t j = 0; j < num_visible_rects; j++) {
       LayerRect visible_rect {};
@@ -749,8 +757,7 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     return kErrorShutDown;
   }
 
-  FreeLayerStack();
-  AllocLayerStackMemory(output);
+  layer_stack_ = {};
 
 #if SDM_DISPLAY_DEBUG
   DLOGW("gpu_target_index = %d\n", gpu_target_index);
@@ -759,6 +766,8 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
   /* If no view can be handled by SDM, just skip below and prepare fb target directly. */
   if (gpu_target_index > 0) {
     wl_list_for_each_reverse(sdm_layer, &output->sdm_layer_list, link) {
+      layer_stack_.layers.push_back(layer_manager_.get_layer(sdm_layer));
+
       glayer = NULL;
       if(PrepareNormalLayerGeometry(output, &glayer, sdm_layer)) {
         DLOGE("fail to prepare normal layer geometry.");
@@ -778,6 +787,7 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     }
   }
 
+  layer_stack_.layers.push_back(&fb_layer_);
   int err = PrepareFbLayerGeometry(output, &glayer);
   if (err) {
     DLOGE("failed to prepare Layer Geometry Fb target\n");
