@@ -82,6 +82,22 @@ private:
   std::mutex lock_;
 };
 
+class SdmBufferManager {
+public:
+  uint32_t GetBufferId(int fd, struct weston_buffer *buffer);
+private:
+  static void destroy_notify(struct wl_listener *listener, void *data);
+  std::map<int, uint32_t> buffer_ids;
+  uint32_t buffer_id_seed = 0;
+  std::mutex buffer_lock;
+private:
+  struct SdmBuffer {
+    struct wl_listener destroy_listener;
+    SdmBufferManager *buffer_manager;
+    int fd;
+  };
+};
+
 class SdmDisplayInterface {
 public:
   virtual ~SdmDisplayInterface() {}
@@ -220,6 +236,7 @@ private:
   bool hdr_supported_ = false;
   Layer fb_layer_;
   SdmLayerManager layer_manager_;
+  SdmBufferManager buffer_manager_;
 
   struct drm_output *drm_output_ = NULL;
 };
