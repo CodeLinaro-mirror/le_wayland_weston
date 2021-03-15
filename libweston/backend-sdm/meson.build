@@ -55,6 +55,10 @@ if get_option('renderer-gl')
 	config_h.set('BUILD_DRM_GBM', '1')
 endif
 
+if get_option('multi-display')
+	config_h.set('MULTI_DISPLAY', '1')
+endif
+
 plugin_drm = shared_library(
 	'sdm-backend',
 	srcs_drm,

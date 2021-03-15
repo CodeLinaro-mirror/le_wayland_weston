@@ -59,6 +59,9 @@ using std::pair;
 using std::fstream;
 
 enum SdmDisplayIntfType {null_disp, sdm_disp};
+#ifdef MULTI_DISPLAY
+typedef std::map<uint32_t, HWDisplayInfo> SdmDisplaysInfo;
+#endif
 
 class SdmDisplayInterface {
   public:

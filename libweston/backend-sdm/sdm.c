@@ -74,7 +74,9 @@
 
 static const char default_seat[] = "seat0";
 
+#ifndef MULTI_DISPLAY
 int display_id = -1;
+#endif
 
 static void
 vblank_handler(int display_id, int64_t timestamp, void *data)
@@ -189,7 +191,11 @@ drm_output_disable_vblank(struct drm_output *output)
 		output->vblank_ev_fd = -1;
 	}
 
+#ifndef MULTI_DISPLAY
 	SetVSyncState(display_id, false, output);
+#else
+	SetVSyncState(output->display_id, false, output);
+#endif
 }
 
 static int
@@ -347,7 +353,11 @@ drm_output_repaint(struct weston_output *output_base,
 		return -1;
 	}
 
+#ifndef MULTI_DISPLAY
 	ret = SetDisplayState(display_id, WESTON_DPMS_ON);
+#else
+	ret = SetDisplayState(output->display_id, WESTON_DPMS_ON);
+#endif
 	if (ret) {
 		weston_log("%s: SDM DPMS ON failed error=%d\n", __func__, ret);
 		return ret;
@@ -419,13 +429,21 @@ drm_repaint_flush(struct weston_compositor *compositor, void *repaint_data)
 		if (!drm_output->next_fb)
 			continue;
 
+#ifndef MULTI_DISPLAY
 		ret = SetVSyncState(display_id, true, drm_output);
+#else
+		ret = SetVSyncState(drm_output->display_id, true, drm_output);
+#endif
 		if (ret != 0) {
 			weston_log("Vsync failed\n");
 			return -1;
 		}
 
+#ifndef MULTI_DISPLAY
 		ret = Commit(display_id, drm_output);
+#else
+		ret = Commit(drm_output->display_id, drm_output);
+#endif
 		if (ret != 0) {
 			weston_log("%s : commit failed err = %d\n", __func__, ret);
 			return -2;
@@ -771,8 +789,13 @@ drm_output_enable(struct weston_output *base)
 		return -1;
 	}
 
+#ifndef MULTI_DISPLAY
 	if (SetVSyncState(display_id, true, output) != 0)
 		return -1;
+#else
+	if (SetVSyncState(output->display_id, true, output) != 0)
+		return -1;
+#endif
 
 	drm_output_print_modes(output);
 
@@ -836,7 +859,11 @@ drm_output_disable(struct weston_output *base)
 		drm_output_deinit(&output->base);
 
 	output->disable_pending = false;
+#ifndef MULTI_DISPLAY
 	SetVSyncState(display_id, false, output);
+#else
+	SetVSyncState(output->display_id, false, output);
+#endif
 
 	return 0;
 }
@@ -867,6 +894,7 @@ drm_head_log_info(struct drm_head *head, const char *msg)
  * @param drm_device udev device pointer
  * @returns The new head, or NULL on failure.
  */
+#ifndef MULTI_DISPLAY
 static struct drm_head *
 drm_head_create(struct drm_backend *backend, struct udev_device *drm_device)
 {
@@ -914,7 +942,82 @@ err_alloc:
 
 	return NULL;
 }
+#else
+static struct drm_head *
+drm_head_create(struct drm_backend *backend, struct udev_device *drm_device, int display_id)
+{
+	struct drm_head *head;
+	char *name;
+	const char *make = "unknown";
+	const char *model = "unknown";
+	const char *serial_number = "unknown";
+	int width, height, refresh;
 
+	head = zalloc(sizeof *head);
+	if (!head)
+		return NULL;
+
+	name = GetConnectorName(display_id);
+	if (!name)
+		goto err_alloc;
+	weston_log("display_id:%d and connector name:%s",display_id, name);
+
+	weston_head_init(&head->base, name);
+
+	free(name);
+
+	head->connector_id = GetConnectorId(display_id);
+	head->backend = backend;
+	head->display_id = display_id;
+	weston_log("display_id:%d and connector id:%d",display_id, head->connector_id);
+
+	weston_head_set_monitor_strings(&head->base, make, model, serial_number);
+	weston_head_set_non_desktop(&head->base, false);
+	weston_head_set_subpixel(&head->base, WL_OUTPUT_SUBPIXEL_UNKNOWN);
+
+	struct DisplayConfigInfo display_config;
+	display_config.x_pixels        = 0;
+	display_config.y_pixels        = 0;
+	display_config.x_dpi           = 96.0f;
+	display_config.y_dpi           = 96.0f;
+	display_config.fps             = 0;
+	display_config.vsync_period_ns = 0;
+	display_config.is_yuv          = false;
+
+	bool rc = GetDisplayConfiguration(display_id, &display_config);
+
+	if (rc != 0) {
+		width   = display_config.x_pixels;
+		height  = display_config.y_pixels;
+		refresh = display_config.fps*1000;
+		weston_log("Display configuration w*h:%d %d", width, height);
+	} else { /* default 1080p, 60 fps */
+		weston_log("Fail to get preferred mode, use default mode instead!");
+		width   = 1920;
+		height  = 1080;
+		refresh = 60*1000;
+	}
+
+	weston_head_set_physical_size(&head->base, width, height);
+
+	weston_head_set_connection_status(&head->base, true);
+
+	/* Disable HDCP for now */
+	weston_head_set_content_protection_status(&head->base,
+							 WESTON_HDCP_DISABLE);
+	weston_head_set_internal(&head->base);
+	weston_compositor_add_head(backend->compositor, &head->base);
+
+	drm_head_log_info(head, "found");
+
+	return head;
+
+err_alloc:
+	free(head);
+
+	return NULL;
+}
+#endif
 static void
 drm_head_destroy(struct drm_head *head)
 {
@@ -969,6 +1072,7 @@ drm_output_create(struct weston_compositor *compositor, const char *name)
 	return &output->base;
 }
 
+#ifndef MULTI_DISPLAY
 static int
 drm_backend_create_heads(struct drm_backend *b, struct udev_device *drm_device)
 {
@@ -982,6 +1086,56 @@ drm_backend_create_heads(struct drm_backend *b, struct udev_device *drm_device)
 
 	return 0;
 }
+#else
+static int
+drm_backend_create_heads(struct drm_backend *b, struct udev_device *drm_device)
+{
+	struct drm_head *head;
+	int idx = 0, rc;
+	uint32_t display_count = 0; // number of displays
+
+	if (GetDisplayInfos()) {
+		weston_log("fail to get display info from SDM!\n");
+		return -1;
+	}
+
+	display_count = GetDisplayCount();
+	if (!display_count) {
+		weston_log("fail to get display from SDM! count=%d \n", display_count);
+		return -1;
+	}
+	weston_log("%d displays are connected\n", display_count);
+
+	for (idx = 0; idx < display_count; idx++) {
+		sdm_cbs_t sdm_cbs;
+		rc = CreateDisplay(idx);
+
+		if (rc != 0) {
+			weston_log("SDM failed to create display %d, error = %d\n", idx, rc);
+			return rc;
+		}
+
+	    /* Now register callbacks with SDM services */
+		sdm_cbs.vblank_cb = vblank_handler;
+		sdm_cbs.hotplug_cb = hotplug_handler;
+		RegisterCbs(idx, &sdm_cbs);
+		b->display_config.is_connected = true;
+
+		head = drm_head_create(b, drm_device, idx);
+		if (!head) {
+			weston_log("DRM: failed to create head\n");
+			return -1;
+		}
+
+		rc = SetDisplayState(idx, WESTON_DPMS_ON);
+		if (rc) {
+			weston_log("%s: SDM failed to turn on display, error=%d\n", __func__, rc);
+			return rc;
+		}
+	}
+	return 0;
+}
+#endif
 
 static int
 udev_event_is_disconnected(struct drm_backend *b, struct udev_device *device) {
@@ -1020,6 +1174,7 @@ udev_event_is_hotplug(struct drm_backend *b, struct udev_device *device)
 	return strcmp(val, "1") == 0;
 }
 
+#ifndef MULTI_DISPLAY
 static int
 udev_drm_event(int fd, uint32_t mask, void *data)
 {
@@ -1059,6 +1214,47 @@ udev_drm_event(int fd, uint32_t mask, void *data)
 
 	return 1;
 }
+#else
+static int
+udev_drm_event(int fd, uint32_t mask, void *data)
+{
+	struct drm_backend *b = data;
+	struct udev_device *event;
+	sdm_cbs_t sdm_cbs;
+	static bool display_created = false;
+
+	event = udev_monitor_receive_device(b->udev_monitor);
+
+	if (udev_event_is_hotplug(b, event)) {
+		weston_log("%s: HOTPLUG event\n", __func__);
+		if (udev_event_is_connected(b, event)) {
+			weston_log("%s: CONNECT event\n", __func__);
+			if (display_created) {
+			      udev_device_unref(event);
+			      return 1;
+			}
+
+			int rc = CreateDisplay(1);
+			if (rc) {
+			    weston_log("CreateDisplay: fail %d \n", rc);
+			    udev_device_unref(event);
+			    return 0;
+			}
+			    /* Now register callbacks with SDM services */
+			sdm_cbs.vblank_cb = vblank_handler;
+			sdm_cbs.hotplug_cb = hotplug_handler;
+			RegisterCbs(1, &sdm_cbs);
+			display_created = true;
+		} else if(udev_event_is_disconnected(b, event)) {
+			weston_log("%s: DISCONNECT event\n", __func__);
+		}
+	}
+
+	udev_device_unref(event);
+
+	return 1;
+}
+#endif
 
 static void
 drm_destroy(struct weston_compositor *ec)
@@ -1451,10 +1647,12 @@ drm_backend_create(struct weston_compositor *compositor,
 		goto err_sprite;
 	}
 
+#ifndef MULTI_DISPLAY
 	if (drm_backend_create_heads(b, drm_device) < 0) {
 		weston_log("Failed to create heads for %s\n", b->drm.filename);
 		goto err_udev_input;
 	}
+#endif
 
 	/* A this point we have some idea of whether or not we have a working
 	 * cursor plane. */
@@ -1498,6 +1696,7 @@ drm_backend_create(struct weston_compositor *compositor,
 		return rc;
 	}
 
+#ifndef MULTI_DISPLAY
 	rc = GetFirstDisplayType(&display_id);
 	if (rc != 0) {
 		weston_log("SDM failed to get First display type\n");
@@ -1521,6 +1720,12 @@ drm_backend_create(struct weston_compositor *compositor,
 		weston_log("%s: SDM failed to turn on display, error=%d\n", __func__, ret);
 		return ret;
 	}
+#else
+	if (drm_backend_create_heads(b, drm_device) < 0) {
+		weston_log("Failed to create heads for %s\n", b->drm.filename);
+		goto err_udev_input;
+	}
+#endif
 
 	if (compositor->renderer->import_dmabuf) {
 		if (linux_dmabuf_setup(compositor) < 0)
