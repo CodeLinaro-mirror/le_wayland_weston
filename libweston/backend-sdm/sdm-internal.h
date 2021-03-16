@@ -385,6 +385,11 @@ sdm_weston_global_transform_rect(struct weston_view *ev,
 				pixman_box32_t *box, float *x1, float *y1,
 				float *x2, float *y2);
 
+#ifdef MULTI_DISPLAY
+struct drm_head *
+drm_head_find_by_connector(struct drm_backend *backend, uint32_t connector_id);
+#endif
+
 static inline bool
 drm_view_transform_supported(struct weston_view *ev, struct weston_output *output)
 {

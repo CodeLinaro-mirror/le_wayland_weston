@@ -454,6 +454,7 @@ uint32_t GetDisplayCount(void) {
 
 void HandlePrimaryDisplayInfo() {
   HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
+  sdm_displays_info_.clear();
   int slot = sdm_displays_info_.size();
 
   for (iter; iter != hw_displays_info_.end(); ++iter) {
@@ -481,6 +482,7 @@ void HandleNonPrimaryDisplayInfos(DisplayType type) {
       continue;
     if (!iter->second.is_connected)
       continue;
+
     sdm_displays_info_[slot] = iter->second;
     slot++;
   }
@@ -521,6 +523,7 @@ char *GetConnectorName(uint32_t display_id) {
   }
 
   snprintf(name, sizeof name, "%s-%d", type_name, display_id);
+
   return strdup(name);
 }
 
