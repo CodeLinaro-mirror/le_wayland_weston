@@ -56,6 +56,9 @@
 #include <libweston/libweston.h>
 #include <libweston/backend-drm.h>
 #include <libweston/weston-log.h>
+#ifdef MULTI_DISPLAY
+#include <libweston/linux-sync-file-uapi.h>
+#endif
 #include "sdm-internal.h"
 #include "shared/helpers.h"
 #include "shared/timespec-util.h"
@@ -99,6 +102,51 @@ hotplug_handler(int disp, bool connected, void *data)
 	weston_log("Hotplug connected = %d called\n", connected);
 }
 
+#ifdef MULTI_DISPLAY
+static int get_fence_timestamp(int fd, struct timespec *ts)
+{
+    struct sync_file_info *info;
+    struct sync_fence_info *fence_info;
+    int ret;
+
+    info = calloc(1, sizeof(*info));
+    if (!info)
+        return -1;
+
+    ret = ioctl(fd, SYNC_IOC_FILE_INFO, info);
+    if (ret < 0)
+        return ret;
+
+    if (info->num_fences) {
+        info->flags = 0;
+
+        fence_info = calloc(info->num_fences, sizeof(*fence_info));
+        if (!fence_info) {
+            free(info);
+            return -1;
+        }
+
+        info->sync_fence_info = (uint64_t)fence_info;
+        ret = ioctl(fd, SYNC_IOC_FILE_INFO, info);
+        if (ret < 0) {
+            free(fence_info);
+            free(info);
+            return ret;
+        }
+    } else {
+        free(info);
+        return -1;
+    }
+
+    ts->tv_sec = fence_info[0].timestamp_ns / 1000000000LL;
+    ts->tv_nsec = fence_info[0].timestamp_ns % 1000000000LL;;
+
+    free(fence_info);
+    free(info);
+    return 0;
+}
+#endif
+
 static int
 on_vblank(int fd, uint32_t mask, void *data)
 {
@@ -106,6 +154,26 @@ on_vblank(int fd, uint32_t mask, void *data)
 	struct drm_backend *b = to_drm_backend(output->base.compositor);;
 	unsigned int sec, usec;
 	uint64_t v = 0;
+
+#ifdef MULTI_DISPLAY
+	struct timespec ts;
+
+	if (output->retire_fence_source) {
+		wl_event_source_remove(output->retire_fence_source);
+		output->retire_fence_source = NULL;
+	}
+
+	if (get_fence_timestamp(output->retire_fence_fd, &ts))
+		weston_compositor_read_presentation_clock(output->base.compositor, &ts);
+
+	close(output->retire_fence_fd);
+	output->retire_fence_fd = -1;
+	output->last_vblank.sec = ts.tv_sec;
+	output->last_vblank.usec = ts.tv_nsec / 1000;
+
+	usec = output->last_vblank.usec;
+	sec = output->last_vblank.sec;
+#endif
 
 	read(fd, &v, sizeof(v));
 
@@ -129,7 +197,7 @@ on_vblank(int fd, uint32_t mask, void *data)
 		sec = output->last_vblank.sec;
 		drm_output_update_complete(output, flags, sec, usec);
 	} else {
-		weston_log("%s: Atomic complete pending is not set yet\n");
+		weston_log("%s: Atomic complete pending is not set yet\n", __func__);
 	}
 }
 
@@ -164,6 +232,7 @@ sdm_weston_global_transform_rect(struct weston_view *ev,
 static int
 drm_output_enable_vblank(struct drm_output *output)
 {
+#ifndef MULTI_DISPLAY
      struct wl_event_loop *loop;
 
      output->vblank_ev_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
@@ -174,7 +243,7 @@ drm_output_enable_vblank(struct drm_output *output)
      output->vblank_ev_source =
 		 wl_event_loop_add_fd(loop, output->vblank_ev_fd,
 					WL_EVENT_READABLE, on_vblank, output);
-
+#endif
      return 0;
 }
 
@@ -447,6 +516,17 @@ drm_repaint_flush(struct weston_compositor *compositor, void *repaint_data)
 		if (ret != 0) {
 			weston_log("%s : commit failed err = %d\n", __func__, ret);
 			return -2;
+#ifdef MULTI_DISPLAY
+		} else {
+			if (drm_output->retire_fence_fd > 0) {
+				struct wl_event_loop *loop =
+				wl_display_get_event_loop(drm_output->base.compositor->wl_display);
+
+				drm_output->retire_fence_source = wl_event_loop_add_fd(loop,
+						drm_output->retire_fence_fd, WL_EVENT_READABLE,
+						on_vblank, drm_output);
+			}
+#endif
 		}
 
 		drm_output->atomic_complete_pending = true;
