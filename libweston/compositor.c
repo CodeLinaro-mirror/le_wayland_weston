@@ -1957,7 +1957,8 @@ weston_buffer_reference(struct weston_buffer_reference *ref,
 			wl_resource_queue_event(ref->buffer->resource,
 						WL_BUFFER_RELEASE);
 		}
-		wl_list_remove(&ref->destroy_listener.link);
+		if(ref->destroy_listener.link.prev || ref->destroy_listener.link.next)
+		    wl_list_remove(&ref->destroy_listener.link);
 	}
 
 	if (buffer && buffer != ref->buffer) {

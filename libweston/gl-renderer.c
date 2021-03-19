@@ -2592,7 +2592,8 @@ surface_state_destroy(struct gl_surface_state *gs, struct gl_renderer *gr)
 
 	gs->surface->renderer_state = NULL;
 
-	glDeleteTextures(gs->num_textures, gs->textures);
+	if(gs->num_textures && gs->buffer_ref.buffer)
+	    glDeleteTextures(gs->num_textures, gs->textures);
 
 	for (i = 0; i < gs->num_images; i++)
 		egl_image_unref(gs->images[i]);
