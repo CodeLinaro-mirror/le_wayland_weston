@@ -118,6 +118,39 @@ void SdmLayerManager::destroy(struct wl_listener *listener, void *data)
   delete layer;
 }
 
+uint32_t SdmBufferManager::GetBufferId(int fd, struct weston_buffer *buffer)
+{
+  uint32_t buffer_id;
+
+  std::lock_guard<std::mutex> lock(buffer_lock);
+  auto iter = buffer_ids.find(fd);
+  if (iter == buffer_ids.end()) {
+    buffer_id = ++buffer_id_seed;
+    buffer_ids.emplace(fd, buffer_id);
+    if (buffer) {
+      SdmBuffer *sdm_buf = new SdmBuffer;
+      sdm_buf->destroy_listener.notify = destroy_notify;
+      sdm_buf->buffer_manager = this;
+      sdm_buf->fd = fd;
+      wl_signal_add(&buffer->destroy_signal, &sdm_buf->destroy_listener);
+    }
+  } else {
+    buffer_id = iter->second;
+  }
+
+  return buffer_id;
+}
+
+void SdmBufferManager::destroy_notify(struct wl_listener *listener, void *data)
+{
+  struct SdmBuffer *sdm_buf = reinterpret_cast<struct SdmBuffer *>(
+    container_of(listener, struct SdmBuffer, destroy_listener));
+
+  std::lock_guard<std::mutex> lock(sdm_buf->buffer_manager->buffer_lock);
+  sdm_buf->buffer_manager->buffer_ids.erase(sdm_buf->fd);
+  delete sdm_buf;
+}
+
 int SdmDisplayInterface::GetDrmMasterFd() {
   DRMMaster *master = nullptr;
   int ret = DRMMaster::GetInstance(&master);
@@ -363,6 +396,7 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
   // TODO: (user)  }
 
   layer_buffer->planes[0].fd = layer_geometry->ion_fd;
+  layer_buffer->handle_id = layer_geometry->handle_id;
 
   /* TODO: Below information should be set according to the real user scenario */
   layer_buffer->flags.secure = layer_geometry->flags.secure_present;
@@ -527,6 +561,7 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
   /* set previous frame's fd for Validate() */
   if (output->current) {
     fb_layer->ion_fd = output->current->ion_fd;
+    fb_layer->handle_id = buffer_manager_.GetBufferId(fb_layer->ion_fd, NULL);
   } else {
     fb_layer->ion_fd = -1;
   }
@@ -689,6 +724,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
       layer->ion_fd = gbm_bo_get_fd(bo);
       layer->flags.secure_present = secure_status;
       layer->flags.has_ubwc_buf = ubwc_status;
+      layer->handle_id = buffer_manager_.GetBufferId(layer->ion_fd, sdm_layer->buffer_ref.buffer);
 
       /* Update metadata info according to color space setting in gbm */
       if (!metadata_present)
