@@ -978,8 +978,11 @@ DisplayError SdmDisplay::Commit(struct drm_output *output) {
   GpuTargetlayer = layer_stack_.layers.at(GPUTarget_index);
 
   /* if no need gpu composition, output->next could be NULL*/
-  if (output->next)
+  if (output->next) {
     GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
+    GpuTargetlayer->input_buffer.handle_id =
+            buffer_manager_.GetBufferId(output->next->ion_fd, NULL);
+  }
 
   PreCommit();
 
