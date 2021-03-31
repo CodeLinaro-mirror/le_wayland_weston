@@ -73,6 +73,10 @@ int CreateCore()
     }
     buffer_allocator_ = new SdmDisplayBufferAllocator;
 
+#ifdef MULTI_DISPLAY
+    SetProperty(DISABLE_MULTIRECT_PROP, "1");
+#endif
+
     error = CoreInterface::CreateCore(buffer_allocator_,
                                       &buffer_sync_handler_,
                                       &socket_handler_,
