@@ -1486,10 +1486,6 @@ parse_panel_position(struct desktop *desktop, struct weston_config_section *s)
 		desktop->want_panel = 0;
 	}
 
-	/* We prefer weston wallpaper without panel
-	 * so, disable panel forcefully
-	 */
-	desktop->want_panel = 0;
 	free(position);
 }
 
