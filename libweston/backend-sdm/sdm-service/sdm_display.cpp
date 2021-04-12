@@ -142,10 +142,12 @@ DisplayError SdmDisplay::DestroyDisplay() {
 
 DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
 
+#ifndef MULTI_DISPLAY
     if (vblank_cb_)
       vblank_cb_(display_id_, vsync.timestamp, drm_output_);
     else
       DLOGE("vsync not registered");
+#endif
 
     return kErrorNone;
 }
@@ -778,7 +780,7 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
 
     error = display_intf_->Prepare(&layer_stack_);
     if (error != kErrorNone) {
-        DLOGE("failed during Prepare");
+        DLOGE("failed during Prepare error:%d\n",error);
     }
 
 #if SDM_DISPLAY_DUMP_LAYER_STACK
@@ -797,7 +799,11 @@ DisplayError SdmDisplay::PreCommit()
     return kErrorNone;
 }
 
+#ifndef MULTI_DISPLAY
 DisplayError SdmDisplay::PostCommit()
+#else
+DisplayError SdmDisplay::PostCommit(int *retire_fence_fd)
+#endif
 {
     DisplayError error = kErrorNone;
 
@@ -814,7 +820,11 @@ DisplayError SdmDisplay::PostCommit()
 
     //close release fence fds
     if (layer_stack_.retire_fence_fd > 0) {
+#ifndef MULTI_DISPLAY
       close(layer_stack_.retire_fence_fd);
+#else
+      *retire_fence_fd = layer_stack_.retire_fence_fd;
+#endif
       layer_stack_.retire_fence_fd = -1;
     }
 
@@ -843,7 +853,11 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     PreCommit();
 
     ret = display_intf_->Commit(&layer_stack_);
+#ifndef MULTI_DISPLAY
     PostCommit();
+#else
+    PostCommit(&output->retire_fence_fd);
+#endif
 
     DLOGV("success");
     return ret;
@@ -1353,7 +1367,7 @@ int SdmDisplayProxy::HandleHotplug(bool connected) {
         display_intf_ = &null_disp_;
         return error;
       }
-      
+
       DLOGI("Display Vsync State = %d\n", kStateOn);
       display_intf_->SetDisplayState(kStateOn, false, &release_fence);
       display_intf_->SetVSyncState(true, drm_output_);

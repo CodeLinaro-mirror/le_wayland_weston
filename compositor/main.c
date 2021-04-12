@@ -71,6 +71,8 @@
 #include <linux/limits.h>
 #include <log/log.h>
 #include <stdarg.h>
+#include <execinfo.h>
+#include <stdlib.h>
 
 #include "weston.h"
 #include <libweston/libweston.h>
@@ -93,6 +95,8 @@
 #include "../pipewire/pipewire-plugin.h"
 
 #define LOG_TAG "weston"
+#define BUF_SIZE 256
+#define CALLSTACK_ON_CRASH 0
 
 #define WINDOW_TITLE "Weston Compositor"
 /* flight recorder size (in bytes) */
@@ -779,11 +783,33 @@ usage(int error_code)
 	exit(error_code);
 }
 
+/* print_backtrace function prints the callstack */
+static void print_backtrace()
+{
+        void *array[BUF_SIZE] = {0};
+        char **strings = NULL;
+        int size = 0, itr = 0;
+
+        size = backtrace(array, BUF_SIZE);
+        strings = backtrace_symbols(array, size);
+
+        weston_log("backtrace:\n");
+        if (strings != NULL) {
+                weston_log("Obtained %d stack frames.\n", size);
+                for (itr = 0; itr < size; itr++)
+                        weston_log("%s\n", strings[itr]);
+        }
+        free(strings);
+}
+
 static int on_term_signal(int signal_number, void *data)
 {
 	struct wl_display *display = data;
 
 	weston_log("caught signal %d\n", signal_number);
+#if CALLSTACK_ON_CRASH
+        print_backtrace();
+#endif
 	wl_display_terminate(display);
 
 	return 1;
@@ -3178,6 +3204,18 @@ weston_log_subscribe_to_scopes(struct weston_log_context *log_ctx,
 	}
 }
 
+/* sig_handler funtion prints the PID, UID and fault address and then calls print_backtrace */
+static void sig_handler(int signal_number, siginfo_t *siginfo, void *context)
+{
+        weston_log("caught signal %d\n", signal_number);
+        weston_log("PID: %u UID: %u\n", getpid(), getuid());
+        if(siginfo->si_addr == NULL)
+                weston_log("Fault address: 0x0\n");
+        else
+                weston_log("Fault address: %p\n", siginfo->si_addr);
+        print_backtrace();
+}
+
 WL_EXPORT int
 wet_main(int argc, char *argv[])
 {
@@ -3213,6 +3251,9 @@ wet_main(int argc, char *argv[])
 	struct weston_log_context *log_ctx = NULL;
 	struct weston_log_subscriber *logger = NULL;
 	struct weston_log_subscriber *flight_rec = NULL;
+#if CALLSTACK_ON_CRASH
+        struct sigaction act;
+#endif
 	sigset_t mask;
 
 	bool wait_for_debugger = false;
@@ -3310,6 +3351,15 @@ wet_main(int argc, char *argv[])
 
 	if (!signals[0] || !signals[1] || !signals[2] || !signals[3])
 		goto out_signals;
+#if CALLSTACK_ON_CRASH
+        act.sa_sigaction = &sig_handler;
+        act.sa_flags = SA_SIGINFO | SA_RESETHAND;
+        sigaction(SIGSEGV, &act, NULL);
+        sigaction(SIGFPE, &act, NULL);
+        sigaction(SIGBUS, &act, NULL);
+        sigaction(SIGILL, &act, NULL);
+        sigaction(SIGABRT, &act, NULL);
+#endif
 
 	/* Xwayland uses SIGUSR1 for communicating with weston. Since some
 	   weston plugins may create additional threads, set up any necessary

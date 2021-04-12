@@ -374,6 +374,13 @@ egl_image_unref(struct egl_image *image)
                 gbm_buffer_backend_set_user_data(image->gbmbuf, NULL, NULL);
 
 	gr->destroy_image(gr->egl_display, image->image);
+
+	if (image->link.next == NULL && image->link.prev == NULL) {
+                weston_log("egl image is NULL\n");
+	} else {
+                wl_list_remove(&image->link);
+	}
+
 	free(image);
 
 	return 0;
@@ -2665,9 +2672,8 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
 
        GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:bo created= %p",bo);
 
-       int ret=gbm_perform(GBM_PERFORM_GET_YUV_PLANE_INFO,bo,&buf_lyt);
+       int ret = gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_lyt);
        if(ret == GBM_ERROR_NONE){
-               printf("GET YUV Info success\n");
                gbm_buf->num_planes = buf_lyt.num_planes;
                for(j = 0;j < buf_lyt.num_planes; j++) {
                        gbm_buf->offset[j] = buf_lyt.planes[j].offset;
@@ -2675,9 +2681,9 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
                }
        }
        else
-               weston_log("gl_renderer_import_gbm_buffer::GET YUV Info failed\n");
+               weston_log("gl_renderer_import_gbm_buffer::GET PLANE Info failed\n");
 
-//Fill up the remaining fields with default values
+       //Fill up the remaining fields with default values
        for(;j < MAX_NUM_PLANES; j++){
                gbm_buf->offset[j] = 0;
                gbm_buf->stride[j] = 0;
