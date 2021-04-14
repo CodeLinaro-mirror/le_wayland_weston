@@ -1461,7 +1461,7 @@ static int
 init_drm_early(struct drm_backend *b)
 {
 	b->drm.fd = early_get_drm_master();
-	if (!b->drm.fd) {
+	if (b->drm.fd < 0) {
 		weston_log("failed to get drm master fd\n");
 		return -1;
 	}
@@ -1477,8 +1477,8 @@ init_drm_early(struct drm_backend *b)
 
 	/* use render node to create gbm device */
 	b->render_fd = drmOpenWithType("msm_drm", 0, DRM_NODE_RENDER);
-	if (!b->render_fd) {
-		weston_log("failed to open drm render device\n");
+	if (b->render_fd < 0) {
+		weston_log("failed to open drm render device (%d)\n", b->render_fd);
 		return -1;
 	}
 
