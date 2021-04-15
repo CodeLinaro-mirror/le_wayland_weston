@@ -1414,7 +1414,9 @@ drm_destroy(struct weston_compositor *ec)
 	wl_list_for_each_safe(base, next, &ec->head_list, compositor_link)
 		drm_head_destroy(to_drm_head(base));
 
+#ifdef MULTI_DISPLAY
 	DestroyCore();
+#endif
 
 #ifdef BUILD_DRM_GBM
 	if (b->gbm)
