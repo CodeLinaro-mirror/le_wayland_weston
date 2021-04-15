@@ -1259,6 +1259,8 @@ weston_desktop_xdg_surface_destroy(struct weston_desktop_surface *dsurface,
 	struct weston_desktop_xdg_surface *surface = user_data;
 	struct weston_desktop_xdg_surface_configure *configure, *temp;
 
+    if(user_data == NULL)
+        return;
     if(surface->configured != true && surface->configured != false)
         return;
 
