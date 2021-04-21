@@ -1,5 +1,5 @@
 /*
-*    Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+*    Copyright (c) 2017-2019,2021, The Linux Foundation. All rights reserved.
 *
 *    Redistribution and use in source and binary forms, with or without
 *    modification, are permitted provided that the following conditions are
@@ -96,6 +96,10 @@ gbm_buffer_destroy(struct gbm_buffer *buffer)
 	gbm_bo_destroy(buffer->bo);
 	buffer->bo = NULL;
   }
+
+  // Close shared fd
+  close(buffer->fd);
+  close(buffer->metadata_fd);
 
   free(buffer);
 }
@@ -196,6 +200,8 @@ WL_EXPORT bool is_yuv_format(uint32_t fmt)
 	bool is_yuv = false;
 
 	switch (fmt) {
+		case GBM_FORMAT_YUV420:
+		case GBM_FORMAT_YVU420:
 		case GBM_FORMAT_NV12:
 		case GBM_FORMAT_UYVY:
 		case GBM_FORMAT_YCbCr_420_TP10_UBWC:
