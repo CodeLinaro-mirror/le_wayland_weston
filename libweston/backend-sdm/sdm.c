@@ -1326,19 +1326,9 @@ udev_drm_event(int fd, uint32_t mask, void *data)
 					weston_log("DRM: failed to create head for added connector %d.\n",
 								connector_id);
 			}
-
 			SetDisplayState(display_id, WESTON_DPMS_ON);
 			weston_log("%s: CONNECT done\n", __func__);
 		} else if(udev_event_is_disconnected(b, event)) {
-			weston_log("%s: DISCONNECT event\n", __func__);
-			SetDisplayState(display_id, WESTON_DPMS_OFF);
-			int rc = DestroyDisplay(display_id);
-			if (rc) {
-				weston_log("DestroyDisplay: fail %d \n", rc);
-				udev_device_unref(event);
-				return 0;
-			}
-			display_created = false;
 			weston_log("%s: DISCONNECT done\n", __func__);
 		}
 	}
