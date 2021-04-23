@@ -866,6 +866,61 @@ finish_frame:
 			WP_PRESENTATION_FEEDBACK_INVALID);
 }
 
+/**
+ * Begin a new repaint cycle
+ *
+ * Called by the core compositor at the beginning of a repaint cycle. Creates
+ * a new pending_state structure to own any output state created by individual
+ * output repaint functions until the repaint is flushed or cancelled.
+ */
+static void *
+drm_repaint_begin(struct weston_compositor *compositor)
+{
+	struct drm_backend *b = to_drm_backend(compositor);
+
+	if (weston_log_scope_is_enabled(b->debug)) {
+		char *dbg = weston_compositor_print_scene_graph(compositor);
+		drm_debug(b, "[repaint] Beginning repaint\n");
+		drm_debug(b, "%s", dbg);
+		free(dbg);
+	}
+
+	return NULL;
+}
+
+/**
+ * Flush a repaint set
+ *
+ * Called by the core compositor when a repaint cycle has been completed
+ * and should be flushed. Frees the pending state, transitioning ownership
+ * of the output state from the pending state, to the update itself. When
+ * the update completes (see drm_output_update_complete), the output
+ * state will be freed.
+ */
+static int
+drm_repaint_flush(struct weston_compositor *compositor, void *repaint_data)
+{
+	struct drm_backend *b = to_drm_backend(compositor);
+
+	drm_debug(b, "[repaint] flushed\n");
+
+	return 0;
+}
+
+/**
+ * Cancel a repaint set
+ *
+ * Called by the core compositor when a repaint has finished, so the data
+ * held across the repaint cycle should be discarded.
+ */
+static void
+drm_repaint_cancel(struct weston_compositor *compositor, void *repaint_data)
+{
+	struct drm_backend *b = to_drm_backend(compositor);
+
+	drm_debug(b, "[repaint] cancel\n");
+}
+
 static void
 drm_output_update_msc(struct drm_output *output, unsigned int seq)
 {
@@ -1146,6 +1201,10 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
 		struct weston_surface *es = ev->surface;
 		struct gbm_buffer *gbm_buf = NULL;
 
+		drm_debug(b, "\t\t\t[view] evaluating view %p for output %s (%lu)\n",
+			ev, output->base.name,
+			(unsigned long) output->base.id);
+
 		/* Test whether this buffer can ever go into a plane:
 		 * non-shm, or small enough to be a cursor.
 		 *
@@ -1178,6 +1237,7 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
 
 		/* Skip view that doesn't belong to the output, no need to increase overhead for SDM */
 		if (!(ev->output_mask & (1u << output->base.id))) {
+			drm_debug(b, "\t\t\t\t[view] ignoring view %p (not on our output)\n", ev);
 			if (es->keep_buffer == false)
 				weston_view_move_to_plane(ev, primary);
 			continue;
@@ -1185,6 +1245,8 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
 
 		pixman_region32_copy(&ev->clip, &above_opaque);
 		if (is_completely_covered_view(ev, &above_opaque)) {
+			drm_debug(b, "\t\t\t\t[view] ignoring view %p (occluded on our output)\n", ev);
+
 			if (es->keep_buffer == false)
 				weston_view_move_to_plane(ev, primary);
 			else
@@ -1221,6 +1283,7 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
 		/* Move to primary plane if Strategy set it to GPU composition */
 		if (sdm_layer->composition_type == SDM_COMPOSITION_GPU) {
 			if (!is_virtual_output) {
+				drm_debug(b, "\t\t\t\t[view] view %p will be placed on the renderer[primary plane]\n", ev);
 				weston_view_move_to_plane(ev, next_plane);
 				ev->psf_flags = 0;
 			}
@@ -1229,6 +1292,7 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
 			has_GPU_composition = true;
 		} else {
 			if (!is_virtual_output) {
+				drm_debug(b, "\t\t\t\t[view] view %p will be placed on the overlay plane\n", ev);
 				/* Composed by Display Hardware directly */
 				ev->psf_flags = WP_PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
 				/* Set the view's plane back to NULL so that it is not composed by GPU */
@@ -1261,6 +1325,9 @@ drm_assign_planes(struct weston_output *output_base)
 		(struct drm_backend *)output_base->compositor->backend;
 	struct screen_capture *screen_cap = b->screen_cap;
 	bool has_GPU_composition = false;
+
+	drm_debug(b, "\t[repaint] preparing state for output %s (%lu)\n",
+		  output_base->name, (unsigned long) output_base->id);
 
 	/* If backend is not full ready, do early assign planes */
 	if (!b->sdm_repaint) {
@@ -3253,6 +3320,12 @@ drm_backend_create(struct weston_compositor *compositor,
 
 	b->compositor = compositor;
 	b->use_pixman = config->use_pixman;
+
+	b->debug = weston_compositor_add_log_scope(compositor->weston_log_ctx,
+						   "drm-backend",
+						   "Debug messages from DRM/KMS backend\n",
+						    NULL, NULL, NULL);
+
 	compositor->backend = &b->base;
 
 	/* Framebuffer should be in ARGB format to support mixed mode composition
@@ -3276,6 +3349,9 @@ drm_backend_create(struct weston_compositor *compositor,
 		goto err_launcher;
 	}
 	b->base.destroy = drm_destroy;
+	b->base.repaint_begin = drm_repaint_begin;
+	b->base.repaint_flush = drm_repaint_flush;
+	b->base.repaint_cancel = drm_repaint_cancel;
 	b->base.create_output = drm_output_create;
 
 	/*
@@ -3296,7 +3372,6 @@ drm_backend_create(struct weston_compositor *compositor,
 					"support failed.\n");
 	}
 
-	compositor->backend = &b->base;
 	ret = weston_plugin_api_register(compositor, WESTON_DRM_OUTPUT_API_NAME,
 					&api, sizeof(api));
 
