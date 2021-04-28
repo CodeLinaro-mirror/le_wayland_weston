@@ -46,6 +46,8 @@
 
 #define DEFAULT_NUM_WORKSPACES 1
 #define DEFAULT_WORKSPACE_CHANGE_ANIMATION_LENGTH 200
+#define DEAFULT_NULL_DISPLAY_WIDTH 1920
+#define DEAFULT_NULL_DISPLAY_HEIGHT 1080
 
 struct focus_state {
 	struct desktop_shell *shell;
@@ -2699,6 +2701,9 @@ set_fullscreen(struct shell_surface *shsurf, bool fullscreen,
 		if (shsurf->output) {
 			width = shsurf->output->width;
 			height = shsurf->output->height;
+		} else {
+			width = DEAFULT_NULL_DISPLAY_WIDTH;
+			height = DEAFULT_NULL_DISPLAY_HEIGHT;
 		}
 	} else if (weston_desktop_surface_get_maximized(desktop_surface)) {
 		get_maximized_size(shsurf, &width, &height);
