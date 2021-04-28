@@ -220,7 +220,6 @@ int SetVSyncState(int display_id, bool enable, struct drm_output *output);
 */
 int get_drm_master_fd(void);
 
-#ifdef MULTI_DISPLAY
 uint32_t GetDisplayCount(void);
 
 int GetDisplayInfos(void);
@@ -228,7 +227,6 @@ int GetDisplayInfos(void);
 char* GetConnectorName(uint32_t display_id);
 
 uint32_t GetConnectorId(uint32_t display_id);
-#endif
 
 #ifdef __cplusplus
 }
