@@ -88,6 +88,69 @@ namespace sdm {
 #define SDM_DISPLAY_DEBUG 0
 #define SDM_DISPLAY_DUMP_LAYER_STACK 0
 
+Layer *SdmLayerManager::get_layer(struct sdm_layer *sdm_layer)
+{
+  std::lock_guard<std::mutex> lock(lock_);
+  SdmLayer *layer;
+
+  auto iter = layer_cache_.find(sdm_layer->view);
+  if (iter == layer_cache_.end()) {
+    layer = new SdmLayer;
+    layer->layer_manager_ = this;
+    layer->destroy_listener_.notify = destroy;
+    layer_cache_.emplace(sdm_layer->view, layer);
+    wl_signal_add(&sdm_layer->view->destroy_signal, &layer->destroy_listener_);
+  } else {
+    layer = iter->second;
+  }
+
+  return &layer->layer_;
+}
+
+void SdmLayerManager::destroy(struct wl_listener *listener, void *data)
+{
+  struct SdmLayer *layer = reinterpret_cast<struct SdmLayer *>(
+      container_of(listener, struct SdmLayer, destroy_listener_));
+  struct weston_view *view = reinterpret_cast<struct weston_view*>(data);
+
+  std::lock_guard<std::mutex> lock(layer->layer_manager_->lock_);
+  layer->layer_manager_->layer_cache_.erase(view);
+  delete layer;
+}
+
+uint32_t SdmBufferManager::GetBufferId(int fd, struct weston_buffer *buffer)
+{
+  uint32_t buffer_id;
+
+  std::lock_guard<std::mutex> lock(buffer_lock);
+  auto iter = buffer_ids.find(fd);
+  if (iter == buffer_ids.end()) {
+    buffer_id = ++buffer_id_seed;
+    buffer_ids.emplace(fd, buffer_id);
+    if (buffer) {
+      SdmBuffer *sdm_buf = new SdmBuffer;
+      sdm_buf->destroy_listener.notify = destroy_notify;
+      sdm_buf->buffer_manager = this;
+      sdm_buf->fd = fd;
+      wl_signal_add(&buffer->destroy_signal, &sdm_buf->destroy_listener);
+    }
+  } else {
+    buffer_id = iter->second;
+  }
+
+  return buffer_id;
+}
+
+void SdmBufferManager::destroy_notify(struct wl_listener *listener, void *data)
+{
+  struct SdmBuffer *sdm_buf = reinterpret_cast<struct SdmBuffer *>(
+    container_of(listener, struct SdmBuffer, destroy_listener));
+
+  std::lock_guard<std::mutex> lock(sdm_buf->buffer_manager->buffer_lock);
+  sdm_buf->buffer_manager->buffer_ids.erase(sdm_buf->fd);
+  delete sdm_buf;
+}
+
 int SdmDisplayInterface::GetDrmMasterFd() {
   DRMMaster *master = nullptr;
   int ret = DRMMaster::GetInstance(&master);
@@ -252,20 +315,6 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
   return kErrorNone;
 }
 
-DisplayError SdmDisplay::FreeLayerStack() {
-  for (Layer *layer : layer_stack_.layers) {
-    layer->visible_regions.erase(layer->visible_regions.begin(),
-                                 layer->visible_regions.end());
-    layer->dirty_regions.erase(layer->dirty_regions.begin(),
-                               layer->dirty_regions.end());
-
-    delete layer;
-  }
-  layer_stack_ = {};
-
-  return kErrorNone;
-}
-
 DisplayError SdmDisplay::FreeLayerGeometry(struct LayerGeometry *glayer) {
   if (glayer->dirty_regions.count)
     free(glayer->dirty_regions.rects);
@@ -273,17 +322,6 @@ DisplayError SdmDisplay::FreeLayerGeometry(struct LayerGeometry *glayer) {
     free(glayer->visible_regions.rects);
 
   free(glayer);
-
-  return kErrorNone;
-}
-
-DisplayError SdmDisplay::AllocLayerStackMemory(struct drm_output *output) {
-  uint32_t num_layers = output->view_count;
-
-  for (size_t i = 0; i < output->view_count; i++) {
-    Layer *layer = new Layer();
-    layer_stack_.layers.push_back(layer);
-  }
 
   return kErrorNone;
 }
@@ -358,6 +396,7 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
   // TODO: (user)  }
 
   layer_buffer->planes[0].fd = layer_geometry->ion_fd;
+  layer_buffer->handle_id = layer_geometry->handle_id;
 
   /* TODO: Below information should be set according to the real user scenario */
   layer_buffer->flags.secure = layer_geometry->flags.secure_present;
@@ -432,6 +471,9 @@ DisplayError SdmDisplay::AllocateMemoryForLayerGeometry(struct drm_output *outpu
       return kErrorParameters;
     }
     /* It's permissive the visible/dirty region can be NULL */
+    layer_stack_.layers.at(index)->visible_regions.clear();
+    layer_stack_.layers.at(index)->dirty_regions.clear();
+
     num_visible_rects = glayer->visible_regions.count;
     for (uint32_t j = 0; j < num_visible_rects; j++) {
       LayerRect visible_rect {};
@@ -519,6 +561,7 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
   /* set previous frame's fd for Validate() */
   if (output->current) {
     fb_layer->ion_fd = output->current->ion_fd;
+    fb_layer->handle_id = buffer_manager_.GetBufferId(fb_layer->ion_fd, NULL);
   } else {
     fb_layer->ion_fd = -1;
   }
@@ -681,6 +724,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
       layer->ion_fd = gbm_bo_get_fd(bo);
       layer->flags.secure_present = secure_status;
       layer->flags.has_ubwc_buf = ubwc_status;
+      layer->handle_id = buffer_manager_.GetBufferId(layer->ion_fd, sdm_layer->buffer_ref.buffer);
 
       /* Update metadata info according to color space setting in gbm */
       if (!metadata_present)
@@ -749,8 +793,7 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     return kErrorShutDown;
   }
 
-  FreeLayerStack();
-  AllocLayerStackMemory(output);
+  layer_stack_ = {};
 
 #if SDM_DISPLAY_DEBUG
   DLOGW("gpu_target_index = %d\n", gpu_target_index);
@@ -759,6 +802,8 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
   /* If no view can be handled by SDM, just skip below and prepare fb target directly. */
   if (gpu_target_index > 0) {
     wl_list_for_each_reverse(sdm_layer, &output->sdm_layer_list, link) {
+      layer_stack_.layers.push_back(layer_manager_.get_layer(sdm_layer));
+
       glayer = NULL;
       if(PrepareNormalLayerGeometry(output, &glayer, sdm_layer)) {
         DLOGE("fail to prepare normal layer geometry.");
@@ -778,6 +823,7 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     }
   }
 
+  layer_stack_.layers.push_back(&fb_layer_);
   int err = PrepareFbLayerGeometry(output, &glayer);
   if (err) {
     DLOGE("failed to prepare Layer Geometry Fb target\n");
@@ -932,8 +978,11 @@ DisplayError SdmDisplay::Commit(struct drm_output *output) {
   GpuTargetlayer = layer_stack_.layers.at(GPUTarget_index);
 
   /* if no need gpu composition, output->next could be NULL*/
-  if (output->next)
+  if (output->next) {
     GpuTargetlayer->input_buffer.planes[0].fd = output->next->ion_fd;
+    GpuTargetlayer->input_buffer.handle_id =
+            buffer_manager_.GetBufferId(output->next->ion_fd, NULL);
+  }
 
   PreCommit();
 
@@ -1042,6 +1091,12 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
       break;
     case SDM_BUFFER_FORMAT_YV12:
       format = sdm::kFormatYCrCb420PlanarStride16;
+      break;
+    case SDM_BUFFER_FORMAT_YCbCr_420_P:
+      format = sdm::kFormatYCbCr420Planar;
+      break;
+    case SDM_BUFFER_FORMAT_YCrCb_420_P:
+      format = sdm::kFormatYCrCb420Planar;
       break;
     case SDM_BUFFER_FORMAT_YCrCb_420_SP:
       format = sdm::kFormatYCrCb420SemiPlanar;
@@ -1153,6 +1208,12 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt) {
       break;
     case GBM_FORMAT_BGR888:
       ret = SDM_BUFFER_FORMAT_RGB_888;
+      break;
+    case GBM_FORMAT_YUV420:
+      ret = SDM_BUFFER_FORMAT_YCbCr_420_P;
+      break;
+    case GBM_FORMAT_YVU420:
+      ret = SDM_BUFFER_FORMAT_YCrCb_420_P;
       break;
     case GBM_FORMAT_NV12:
       ret = SDM_BUFFER_FORMAT_YCbCr_420_SP_VENUS;

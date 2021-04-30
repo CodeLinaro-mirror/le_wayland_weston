@@ -44,6 +44,7 @@
 #include <vector>
 #include <iostream>
 #include <thread>
+#include <mutex>
 
 #include "sdm_display_debugger.h"
 #include "sdm_display_interface.h"
@@ -66,6 +67,36 @@ using std::fstream;
 
 enum SdmDisplayIntfType {null_disp, sdm_disp};
 typedef std::map<uint32_t, HWDisplayInfo> SdmDisplaysInfo;
+
+class SdmLayerManager {
+public:
+  Layer *get_layer(struct sdm_layer *layer);
+private:
+  struct SdmLayer {
+    SdmLayerManager *layer_manager_;
+    Layer layer_;
+    struct wl_listener destroy_listener_;
+  };
+  static void destroy(struct wl_listener *listener, void *data);
+  std::map<struct weston_view*, SdmLayer*> layer_cache_;
+  std::mutex lock_;
+};
+
+class SdmBufferManager {
+public:
+  uint32_t GetBufferId(int fd, struct weston_buffer *buffer);
+private:
+  static void destroy_notify(struct wl_listener *listener, void *data);
+  std::map<int, uint32_t> buffer_ids;
+  uint32_t buffer_id_seed = 0;
+  std::mutex buffer_lock;
+private:
+  struct SdmBuffer {
+    struct wl_listener destroy_listener;
+    SdmBufferManager *buffer_manager;
+    int fd;
+  };
+};
 
 class SdmDisplayInterface {
 public:
@@ -144,7 +175,6 @@ protected:
 
 private:
   static const int kBufferDepth = 2;
-  DisplayError FreeLayerStack();
   DisplayError FreeLayerGeometry(struct LayerGeometry *glayer);
   DisplayError AllocateMemoryForLayerGeometry(struct drm_output *output,
                                               uint32_t index,
@@ -152,7 +182,6 @@ private:
   DisplayError AddGeometryLayerToLayerStack(struct drm_output *output,
                                             uint32_t index,
                                             struct LayerGeometry *glayer, bool is_skip);
-  DisplayError AllocLayerStackMemory(struct drm_output *output);
   DisplayError PopulateLayerGeometryOnToLayerStack(struct drm_output *output,
                                                    uint32_t index,
                                                    struct LayerGeometry *glayer, bool is_skip);
@@ -205,6 +234,9 @@ private:
   float min_luminance_ = 0.0;
   int disable_hdr_handling_ = 0;
   bool hdr_supported_ = false;
+  Layer fb_layer_;
+  SdmLayerManager layer_manager_;
+  SdmBufferManager buffer_manager_;
 
   struct drm_output *drm_output_ = NULL;
 };

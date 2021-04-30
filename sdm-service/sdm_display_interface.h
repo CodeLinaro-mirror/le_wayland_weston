@@ -147,6 +147,7 @@ struct LayerGeometry {
   uint32_t               format;
   uint32_t               fb_id;
   uint32_t               ion_fd;
+  uint32_t               handle_id;
   /* Layer information */
   uint32_t               composition; /*GPU, Overlay, HWCursor*/
   struct Rect            src_rect; /* srouce rectangle */
