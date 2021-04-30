@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017, 2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -274,6 +274,8 @@ int EnablePllUpdate(int display_id, int enable);
 int UpdateDisplayPll(int display_id, int ppm);
 
 int HandleHotplug(int display_id, bool connected);
+
+int CreateDummyDisplay(int display_id);
 
 #ifdef __cplusplus
 }

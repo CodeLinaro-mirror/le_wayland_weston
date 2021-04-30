@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017, 2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -2509,23 +2509,40 @@ drm_backend_create(struct weston_compositor *compositor,
     for (key = KEY_F1; key < KEY_F9; key++)
          weston_compositor_add_key_binding(compositor, key, MODIFIER_CTRL | MODIFIER_ALT,
                                            switch_vt_binding, compositor);
+    int rc = 1;
+    if (param->device != NULL && strcmp(param->device,"displaydummy") != 0) {
+        /* begin SDM initialization */
+        rc = CreateCore();
+        rc = GetFirstDisplayType(&display_id);
+        weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
+    } else if (param->device != NULL && strcmp(param->device,"displaydummy") == 0) {
+        display_id = PRIMARY_DISPLAY_ID;
+        rc = CreateDummyDisplay(display_id);
+        if (!rc) {
+            weston_log("CreateDummyDisplay: successful %d \n", rc);
+        } else {
+              weston_log("CreateDummyDisplay: failed %d \n", rc);
+        }
+        if (create_outputs(b, param->connector, drm_device) < 0) {
+            weston_log("failed to create dummy output for %s\n", path);
+        }
+        weston_log("create dummy output successful for %s\n", path);
+    }
 
-    /* begin SDM initialization */
-    int rc = CreateCore();
-    rc = GetFirstDisplayType(&display_id);
-    weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
     if (param->device != NULL && strcmp(param->device,"displayport") == 0) {
         b->external_as_primary = true;
         // override display id
         display_id = EXTERNAL_DISPLAY_ID;
+        weston_log("Override display_id = %d \n", display_id);
     }
 
     if (param->device != NULL && strcmp(param->device,"hdmi") != 0
-        && strcmp(param->device,"displayport") !=0 ) {
+        && strcmp(param->device, "displayport") !=0
+        && strcmp(param->device, "displaydummy") !=0) {
         /* and create default display */
         rc = CreateDisplay(display_id);
         if (!rc) {
-            weston_log("CreateDisplay: successfuless %d \n", rc);
+            weston_log("CreateDisplay: successful %d \n", rc);
         } else {
               weston_log("CreateDisplay: failed %d \n", rc);
               goto err_udev_dev;
