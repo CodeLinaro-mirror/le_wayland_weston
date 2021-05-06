@@ -1107,7 +1107,8 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
 	struct weston_view *view;
 	pixman_region32_t r;
 	bool is_yuv, have_primary_view = false;
-	struct gbm_buffer *buffer;
+	struct gbm_buffer *gbmbuf;
+	struct linux_dmabuf_buffer *dmabuf;
 
 	wl_list_for_each_reverse(view, &compositor->view_list, link) {
 		/* Skip screen capture buffer during GPU composition */
@@ -1135,11 +1136,13 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
 					   view->surface->height);
 			pixman_region32_subtract(&r, &r, &view->surface->opaque);
 
-			/* get gbm buffer info. Only GBM buffer can go through overlay */
-			buffer = gbm_buffer_get(view->surface->buffer_ref.buffer->resource);
+			/* get yuv statement from gbm or dma buffer info */
 			is_yuv = false;
-			if (buffer)
-				is_yuv = is_yuv_format(buffer->format);
+			struct weston_buffer *buffer = view->surface->buffer_ref.buffer;
+			if (gbmbuf = gbm_buffer_get(buffer->resource))
+				is_yuv = is_yuv_format(gbmbuf->format);
+			else if (dmabuf = linux_dmabuf_buffer_get(buffer->resource))
+				is_yuv = is_yuv_format(dmabuf->attributes.format);
 
 			/* only can clear view by meeting all the three conditions:
 			 * 1, have views on primary plane. If none of views composed by gpu,
