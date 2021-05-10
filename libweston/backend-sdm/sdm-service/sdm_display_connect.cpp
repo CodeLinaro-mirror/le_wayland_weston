@@ -49,6 +49,9 @@ SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
 SdmDisplayProxy *display_[kDisplayMax] = {0};
+HWDisplaysInfo hw_displays_info_ = {};
+// ordered by output id
+SdmDisplaysInfo sdm_displays_info_ = {};
 
 static DisplayError
 SetProperty(const char *property_name, const char *value)
@@ -67,6 +70,10 @@ int CreateCore()
         return kErrorNone;
     }
     buffer_allocator_ = new SdmDisplayBufferAllocator;
+
+#ifdef MULTI_DISPLAY
+    SetProperty(DISABLE_MULTIRECT_PROP, "1");
+#endif
 
     error = CoreInterface::CreateCore(buffer_allocator_,
                                       &buffer_sync_handler_,
@@ -431,6 +438,102 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
     #endif
 
     return kErrorNone;
+}
+
+uint32_t GetDisplayCount(void) {
+  uint32_t count = 0;
+
+  count = sdm_displays_info_.size();
+
+  return count;
+}
+
+
+void HandlePrimaryDisplayInfo() {
+  HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
+  sdm_displays_info_.clear();
+  int slot = sdm_displays_info_.size();
+
+  for (iter; iter != hw_displays_info_.end(); ++iter) {
+    if (!iter->second.is_primary)
+      continue;
+    if (iter->second.display_type == sdm::kVirtual)
+      continue;
+    if (!iter->second.is_connected)
+      continue;
+
+    // only one primary display
+    sdm_displays_info_[slot] = iter->second;
+    break;
+  }
+}
+
+void HandleNonPrimaryDisplayInfos(DisplayType type) {
+  HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
+  int slot = sdm_displays_info_.size();
+
+  for (iter; iter != hw_displays_info_.end(); ++iter) {
+    if (iter->second.is_primary)
+      continue;
+    if (iter->second.display_type != type)
+      continue;
+    if (!iter->second.is_connected)
+      continue;
+
+    sdm_displays_info_[slot] = iter->second;
+    slot++;
+  }
+}
+
+int GetDisplayInfos(void) {
+  DisplayError error = kErrorNone;
+
+  error = core_intf_->GetDisplaysStatus(&hw_displays_info_);
+  if (error != kErrorNone) {
+    DLOGE("function GetDisplaysStatus failed. Error = %d", error);
+    return error;
+  }
+
+  // Only create non-virtual display first
+  /* primary display*/
+  HandlePrimaryDisplayInfo();
+  /* pluggable display*/
+  HandleNonPrimaryDisplayInfos(sdm::kPluggable);
+  return 0;
+}
+
+char *GetConnectorName(uint32_t display_id) {
+  char name[100]={};
+  const char *type_name = NULL;
+  auto iter = sdm_displays_info_.find(display_id);
+
+  switch(iter->second.display_type) {
+    case kBuiltIn:
+      type_name = "DSI";
+      break;
+    case kPluggable:
+      type_name = "DP";
+      break;
+    default:
+      type_name = "unKnown";
+      break;
+  }
+
+  snprintf(name, sizeof name, "%s-%d", type_name, display_id);
+
+  return strdup(name);
+}
+
+uint32_t GetConnectorId(uint32_t display_id) {
+  auto iter = sdm_displays_info_.find(display_id);
+
+  return iter->second.display_id;
+}
+
+static HWDisplayInfo GetSdmDisplayInfo(int display_id) {
+  auto iter = sdm_displays_info_.find(display_id);
+
+  return iter->second;
 }
 
 }// namespace sdm

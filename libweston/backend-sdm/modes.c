@@ -36,7 +36,9 @@
 
 #include "sdm-internal.h"
 
+#ifndef MULTI_DISPLAY
 extern int display_id;
+#endif
 
 static const char *const aspect_ratio_as_string[] = {
 	[WESTON_MODE_PIC_AR_NONE] = "",
@@ -168,6 +170,12 @@ drm_output_set_mode(struct weston_output *base,
 	struct drm_mode *current;
 	int width, height, refresh;
 
+#ifdef MULTI_DISPLAY
+	struct drm_head *head = to_drm_head(weston_output_get_first_head(base));
+
+	output->display_id = head->display_id;
+#endif
+
 	if (output->virtual_output)
 		return -1;
 
@@ -180,7 +188,11 @@ drm_output_set_mode(struct weston_output *base,
         display_config.vsync_period_ns = 0;
         display_config.is_yuv          = false;
 
+#ifndef MULTI_DISPLAY
         int rc = GetDisplayConfiguration(display_id, &display_config);
+#else
+        int rc = GetDisplayConfiguration(output->display_id, &display_config);
+#endif
         if (rc != 0) {
             width   = display_config.x_pixels;
             height  = display_config.y_pixels;

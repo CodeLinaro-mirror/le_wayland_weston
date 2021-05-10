@@ -42,7 +42,9 @@
 #include "linux-dmabuf.h"
 #include "presentation-time-server-protocol.h"
 
+#ifndef MULTI_DISPLAY
 extern int display_id;
+#endif
 
 void
 destroy_sdm_layer(struct sdm_layer *layer)
@@ -96,7 +98,7 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 	pixman_region32_init(&overlap);
 
 	output->view_count = 0;
-
+	wl_list_init(&output->sdm_layer_list);
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
 
 		/* If this view doesn't touch our output at all, there's no
@@ -144,7 +146,11 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 
 	output->view_count++;
 
+#ifndef MULTI_DISPLAY
 	int ret = Prepare(display_id, output);
+#else
+	int ret = Prepare(output->display_id, output);
+#endif
 	if (ret != 0) {
 		weston_log("%s: Assigning planes failed\n", __func__);
 		return;
