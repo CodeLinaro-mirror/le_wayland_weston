@@ -76,7 +76,8 @@ class SdmDisplayInterface {
     virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
     virtual DisplayError RegisterCb(int display_id, vblank_cb_t vbcb) = 0;
     virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
-
+    virtual DisplayError SetPanelBrightness(float brightness) = 0;
+    virtual DisplayError GetPanelBrightness(float *brightness) = 0;
     static int GetDrmMasterFd();
 };
 
@@ -97,6 +98,8 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
+    DisplayError SetPanelBrightness(float brightness);
+    DisplayError GetPanelBrightness(float *brightness);
 };
 
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
@@ -119,6 +122,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
+    DisplayError SetPanelBrightness(float brightness);
+    DisplayError GetPanelBrightness(float *brightness);
 
     int OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level);
 
@@ -237,7 +242,12 @@ class SdmDisplayProxy {
       hotplug_cb_ = cbs->hotplug_cb;
       return display_intf_->RegisterCb(display_id, cbs->vblank_cb);
     }
-
+    DisplayError SetPanelBrightness(float brightness) {
+      return display_intf_->SetPanelBrightness(brightness);
+    }
+    DisplayError GetPanelBrightness(float *brightness) {
+      return display_intf_->GetPanelBrightness(brightness);
+    }
     int HandleHotplug(bool connected);
 
     DisplayError OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level);

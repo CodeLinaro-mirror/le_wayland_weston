@@ -407,6 +407,61 @@ drm_output_render(struct drm_output *output, pixman_region32_t *damage)
 				 &c->primary_plane.damage, damage);
 }
 
+/* returns a value between 0-255 range, where higher is brighter */
+static uint32_t
+drm_get_backlight()
+{
+	float brightness = -1.0f;
+	uint32_t level = 0;
+	int ret = 0;
+
+	ret = GetPanelBrightness(PRIMARY_DISPLAY_ID, &brightness);
+	if (ret) {
+		weston_log("%s: failed error=%d\n", __func__, ret);
+		return ret;
+	}
+
+	if (brightness == -1.0f) {
+		level = 0;
+	} else {
+		level = (uint32_t)(254.0f*brightness + 1);
+	}
+
+	weston_log("%s: backlight value:%d brightness:%f \n", __func__, level, brightness);
+	return level;
+}
+
+/* values accepted are between 0-255 range */
+static int
+drm_set_backlight(struct weston_output *output_base, uint32_t value)
+{
+	int ret = 0;
+
+	if (!(0 <= value && value <= 255)) {
+		weston_log("%s: not in supported range, backlight = %d\n", __func__, value);
+		return -1;
+	}
+
+	if (value == drm_get_backlight()) {
+		weston_log("%s: already in same state, backlight = %d\n", __func__, value);
+		return 0;
+	}
+
+	if (value == 0) {
+		ret = SetPanelBrightness(PRIMARY_DISPLAY_ID, -1.0f);
+	} else {
+		ret = SetPanelBrightness(PRIMARY_DISPLAY_ID, (value - 1)/254.0f);
+	}
+
+	if (ret) {
+		weston_log("%s: backlight setting failed error = %d\n", __func__, ret);
+		return ret;
+	}
+
+	weston_log("%s: backlight set to value: %d \n", __func__, value);
+	return ret;
+}
+
 static int
 drm_output_repaint(struct weston_output *output_base,
 		   pixman_region32_t *damage,
@@ -866,6 +921,8 @@ drm_output_enable(struct weston_output *base)
 	output->base.assign_planes = drm_assign_planes;
 	output->base.set_dpms = drm_set_dpms;
 	output->base.switch_mode = drm_output_switch_mode;
+	output->base.set_backlight = drm_set_backlight;
+	output->base.backlight_current = drm_get_backlight();
 	output->base.set_gamma = NULL;
 
 	if (drm_output_enable_vblank(output)) {

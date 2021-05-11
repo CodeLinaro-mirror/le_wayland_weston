@@ -220,6 +220,14 @@ DisplayError SdmDisplay::SetVSyncState(bool VSyncState, struct drm_output *outpu
     return kErrorNone;
 }
 
+DisplayError SdmDisplay::SetPanelBrightness(float brightness) {
+    return display_intf_->SetPanelBrightness(brightness);
+}
+
+DisplayError SdmDisplay::GetPanelBrightness(float *brightness) {
+    return display_intf_->GetPanelBrightness(brightness);
+}
+
 DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
     DisplayError error = kErrorNone;
     DisplayConfigVariableInfo disp_config;
@@ -1281,6 +1289,14 @@ DisplayError SdmNullDisplay::Commit(struct drm_output *output) {
 }
 DisplayError SdmNullDisplay::SetDisplayState(DisplayState state,
 					bool teardown, int *release_fence) {
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::SetPanelBrightness(float brightness) {
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::GetPanelBrightness(float *brightness) {
   return kErrorNone;
 }
 
