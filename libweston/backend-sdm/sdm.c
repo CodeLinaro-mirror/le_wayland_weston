@@ -468,7 +468,6 @@ drm_output_repaint(struct weston_output *output_base,
 		   void *repaint_data)
 {
 	struct drm_output *output = to_drm_output(output_base);
-	int ret;
 
 	if (output->disable_pending || output->destroy_pending)
 		return -1;
@@ -482,17 +481,6 @@ drm_output_repaint(struct weston_output *output_base,
 		return -1;
 	}
 
-#ifndef MULTI_DISPLAY
-	ret = SetDisplayState(display_id, WESTON_DPMS_ON);
-#else
-	ret = SetDisplayState(output->display_id, WESTON_DPMS_ON);
-#endif
-	if (ret) {
-		weston_log("%s: SDM DPMS ON failed error=%d\n", __func__, ret);
-		return ret;
-	}
-
-	output->dpms = WESTON_DPMS_ON;
 	return 0;
 }
 
@@ -690,6 +678,18 @@ static void
 drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 {
 	struct drm_output *output = to_drm_output(output_base);
+	int ret;
+
+	weston_log("%s: SDM DPMS level = %d\n", __func__, level);
+#ifndef MULTI_DISPLAY
+	ret = SetDisplayState(display_id, level);
+#else
+	ret = SetDisplayState(output->display_id, level);
+#endif
+	if (ret) {
+		weston_log("%s: SDM DPMS ON failed error = %d\n", __func__, ret);
+		return ret;
+	}
 
 	output->dpms = level;
 	/* As we throw everything away when disabling, just send us back through
