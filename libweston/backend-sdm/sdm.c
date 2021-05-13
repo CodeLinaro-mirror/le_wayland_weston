@@ -79,12 +79,11 @@ static const char default_seat[] = "seat0";
 
 #ifndef MULTI_DISPLAY
 int display_id = -1;
-#else
+#endif
 enum {
     PRIMARY_DISPLAY_ID,
     EXTERNAL_DISPLAY_ID
 };
-#endif
 
 static void
 vblank_handler(int display_id, int64_t timestamp, void *data)
