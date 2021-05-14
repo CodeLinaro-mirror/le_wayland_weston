@@ -63,7 +63,7 @@ weston_spring_update(struct weston_spring *spring, const struct timespec *time)
 	 * This handles the case where time moves backwards or forwards in
 	 * large jumps.
 	 */
-	if (timespec_sub_to_msec(time, &spring->timestamp) > 1000) {
+	if (fabs(timespec_sub_to_msec(time, &spring->timestamp)) > 1000) {
 		weston_log("unexpectedly large timestamp jump "
 			   "(from %" PRId64 " to %" PRId64 ")\n",
 			   timespec_to_msec(&spring->timestamp),
