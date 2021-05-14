@@ -49,11 +49,9 @@ SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
 SdmDisplayProxy *display_[kDisplayMax] = {0};
-#ifdef MULTI_DISPLAY
 HWDisplaysInfo hw_displays_info_ = {};
 // ordered by output id
 SdmDisplaysInfo sdm_displays_info_ = {};
-#endif
 
 static DisplayError
 SetProperty(const char *property_name, const char *value)
@@ -442,7 +440,6 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
     return kErrorNone;
 }
 
-#ifdef MULTI_DISPLAY
 uint32_t GetDisplayCount(void) {
   uint32_t count = 0;
 
@@ -538,7 +535,6 @@ static HWDisplayInfo GetSdmDisplayInfo(int display_id) {
 
   return iter->second;
 }
-#endif
 
 }// namespace sdm
 #ifdef __cplusplus
