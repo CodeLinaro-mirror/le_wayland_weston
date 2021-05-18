@@ -1,3 +1,17 @@
+install_headers(
+	'cairo-util.h',
+	'fd-util.h',
+	'file-util.h',
+	'helpers.h',
+	'image-loader.h',
+	'os-compatibility.h',
+	'platform.h',
+	'string-helpers.h',
+	'timespec-util.h',
+	'weston-egl-ext.h',
+	'xalloc.h'
+)
+
 srcs_libshared = [
 	'config-parser.c',
 	'option-parser.c',
