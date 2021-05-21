@@ -48,6 +48,11 @@ deps_drm = [
 	dep_backlight
 ]
 
+if get_option('enable-early-boot')
+	config_h.set('ENABLE_EARLY_BOOT', '1')
+	deps_drm += dependency('threads')
+endif
+
 if get_option('renderer-gl')
 	dep_gbm = dependency('gbm', required: false)
 	if not dep_gbm.found()
