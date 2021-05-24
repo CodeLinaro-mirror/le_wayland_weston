@@ -3817,6 +3817,12 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 				  const uint32_t *drm_formats,
 				  unsigned drm_formats_count)
 {
+	static bool firstCreateWin = true;
+	if (firstCreateWin)
+	{
+		weston_place_marker("G - first create window start");
+	}
+
 	EGLSurface egl_surface = EGL_NO_SURFACE;
 	EGLConfig egl_config;
 
@@ -3846,6 +3852,12 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 		egl_surface = eglCreateWindowSurface(gr->egl_display,
 						     egl_config,
 						     window_for_legacy, attribs);
+
+	if (firstCreateWin)
+	{
+		weston_place_marker("G - first create window end");
+		firstCreateWin = false;
+	}
 
 	return egl_surface;
 }
@@ -4173,6 +4185,12 @@ gl_renderer_display_create(struct weston_compositor *ec,
 	EGLint major, minor;
 	int supports = 0;
 
+	static bool firstCreateDisplay = true;
+	if (firstCreateDisplay)
+	{
+		weston_place_marker("G - setup egl start");
+	}
+
 	if (platform) {
 		supports = gl_renderer_supports(
 			ec, platform_to_extension(platform));
@@ -4257,6 +4275,11 @@ gl_renderer_display_create(struct weston_compositor *ec,
 			weston_log("failed to choose EGL config\n");
 			goto fail_terminate;
 		}
+	}
+	if (firstCreateDisplay)
+	{
+		weston_place_marker("G - setup egl end");
+		firstCreateDisplay = false;
 	}
 
 	ec->capabilities |= WESTON_CAP_ROTATION_ANY;
