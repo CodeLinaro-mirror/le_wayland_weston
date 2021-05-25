@@ -807,11 +807,8 @@ DisplayError SdmDisplay::PreCommit()
     return kErrorNone;
 }
 
-#ifndef MULTI_DISPLAY
-DisplayError SdmDisplay::PostCommit()
-#else
+
 DisplayError SdmDisplay::PostCommit(int *retire_fence_fd)
-#endif
 {
     DisplayError error = kErrorNone;
 
@@ -862,11 +859,8 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     PreCommit();
 
     ret = display_intf_->Commit(&layer_stack_);
-#ifndef MULTI_DISPLAY
-    PostCommit();
-#else
+
     PostCommit(&output->retire_fence_fd);
-#endif
 
     DLOGV("success");
     return ret;
