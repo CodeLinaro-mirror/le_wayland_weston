@@ -38,6 +38,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <errno.h>
+#include <linux/input.h>
 
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
@@ -2193,6 +2194,32 @@ notify_key(struct weston_seat *seat, const struct timespec *time, uint32_t key,
 	struct weston_keyboard *keyboard = weston_seat_get_keyboard(seat);
 	struct weston_keyboard_grab *grab = keyboard->grab;
 	uint32_t *k, *end;
+
+	/* When power button is pressed for one time, weston receives two events
+	for key KEY_POWER as below:-
+	1. WL_KEYBOARD_KEY_STATE_RELEASED
+	2. WL_KEYBOARD_KEY_STATE_PRESSED
+	We are acting only on one event WL_KEYBOARD_KEY_STATE_PRESSED, and changing display
+	state. We are ignoring WL_KEYBOARD_KEY_STATE_RELEASED event.
+	*/
+
+	static bool display_on = true;
+	if (state == WL_KEYBOARD_KEY_STATE_PRESSED && key == KEY_POWER && display_on) {
+		weston_compositor_sleep(compositor);
+		display_on = false;
+		weston_log("Display OFF \n");
+		return;
+	} else if (state == WL_KEYBOARD_KEY_STATE_PRESSED && key == KEY_POWER && !display_on) {
+		weston_compositor_wake(compositor);
+		weston_compositor_schedule_repaint(compositor);
+		display_on = true;
+		weston_log("Display ON \n");
+		return;
+	}
+	if (key == KEY_POWER) {
+		// ignore WL_KEYBOARD_KEY_STATE_RELEASED event.
+		return;
+	}
 
 	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		weston_compositor_idle_inhibit(compositor);
