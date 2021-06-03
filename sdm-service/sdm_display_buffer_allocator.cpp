@@ -371,15 +371,6 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     gbm_bo_destroy(bo);
     return kErrorParameters;
   }
-  /*This is special for NV12 ubwc format, offset[0] is not 0 which get from gbm
-    if the buffer have ubwc flag*/
-  if (format == GBM_FORMAT_NV12) {
-    stride[0] = buf_layout.planes[0].v_increment;
-    offset[0] = 0;
-
-    stride[1] = stride[0];//buf_layout.planes[1].v_increment;
-    offset[1] = stride[0]*alignedHeight;
-  }
 
   gbm_bo_destroy(bo);
 
