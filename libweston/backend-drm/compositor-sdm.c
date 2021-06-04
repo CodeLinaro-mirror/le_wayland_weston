@@ -722,6 +722,9 @@ output_repaint(struct weston_output *output_base,
 	if (output->destroy_pending || output->disable_pending)
 		return -1;
 
+	if (output_base->disable_planes)
+		output_base->need_gpu_composition = true;
+
 	if (!is_virtual_output && !output->next && output_base->need_gpu_composition) {
 		drm_output_render(output, damage);
 	}
