@@ -38,6 +38,15 @@ dep_toytoolkit = declare_dependency(
 
 simple_clients = [
 	{
+		'name': 'qti-extn-test',
+		'sources': [
+			'weston-qti-extn-test.c',
+			weston_qti_extn_client_protocol_h,
+			weston_qti_extn_protocol_c,
+		],
+		'dep_objs': [ dep_wayland_client, dep_libshared ]
+	},
+	{
 		'name': 'gbmbuf',
 		'sources': [
 			'simple-gbmbuf.c',
