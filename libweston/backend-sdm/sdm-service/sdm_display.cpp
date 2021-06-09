@@ -825,12 +825,8 @@ DisplayError SdmDisplay::PostCommit(int *retire_fence_fd)
 
     //close release fence fds
     if (layer_stack_.retire_fence_fd > 0) {
-#ifndef MULTI_DISPLAY
-      close(layer_stack_.retire_fence_fd);
-#else
       *retire_fence_fd = previous_retire_fence_fd_;
       previous_retire_fence_fd_ = layer_stack_.retire_fence_fd;
-#endif
       layer_stack_.retire_fence_fd = -1;
     }
 

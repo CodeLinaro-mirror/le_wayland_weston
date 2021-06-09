@@ -126,6 +126,8 @@ vblank_handler(int display_id, int64_t timestamp, void *data)
 	if(output->retire_fence_fd > 0)
 	{
 		int error = sync_wait(output->retire_fence_fd, FENCE_TIMEOUT);
+		close(output->retire_fence_fd);
+		output->retire_fence_fd = -1;
 		if (error < 0)
 		{
 			weston_log("Error: retire fence timed out!");
