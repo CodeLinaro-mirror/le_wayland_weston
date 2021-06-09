@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -588,15 +588,6 @@ finish_init(struct drm_backend *b)
 	int fd;
 	bool handoff = false;
 	int ret = 0;
-
-	fd = weston_launcher_open(b->compositor->launcher,
-			b->drm.filename, O_RDWR);
-	if (fd < 0) {
-		/* Probably permissions error */
-		weston_log("couldn't open %s, skipping\n",
-				b->drm.filename);
-		return -1;
-	}
 
 	if (b->use_pixman) {
 		if (pixman_renderer_init(b->compositor) < 0) {
@@ -1461,7 +1452,7 @@ static int
 init_drm_early(struct drm_backend *b)
 {
 	b->drm.fd = early_get_drm_master();
-	if (!b->drm.fd) {
+	if (b->drm.fd < 0) {
 		weston_log("failed to get drm master fd\n");
 		return -1;
 	}
@@ -1477,34 +1468,10 @@ init_drm_early(struct drm_backend *b)
 
 	/* use render node to create gbm device */
 	b->render_fd = drmOpenWithType("msm_drm", 0, DRM_NODE_RENDER);
-	if (!b->render_fd) {
-		weston_log("failed to open drm render device\n");
+	if (b->render_fd < 0) {
+		weston_log("failed to open drm render device (%d)\n", b->render_fd);
 		return -1;
 	}
-
-	return 0;
-}
-
-static int
-init_drm(struct drm_backend *b, struct udev_device *device)
-{
-	const char *filename, *sysnum;
-	uint64_t cap;
-	int fd, ret;
-	clockid_t clk_id;
-
-	sysnum = udev_device_get_sysnum(device);
-	if (sysnum)
-		b->drm.id = atoi(sysnum);
-	if (!sysnum || b->drm.id < 0) {
-		weston_log("cannot get device sysnum\n");
-		return -1;
-	}
-
-	filename = udev_device_get_devnode(device);
-	weston_log("using %s\n", filename);
-
-	b->drm.filename = strdup(filename);
 
 	return 0;
 }
@@ -2867,62 +2834,6 @@ switch_vt_binding(struct weston_keyboard *keyboard, uint32_t time,
 	weston_launcher_activate_vt(compositor->launcher, key - KEY_F1 + 1);
 }
 
-/*
- * Find primary GPU
- * Some systems may have multiple DRM devices attached to a single seat. This
- * function loops over all devices and tries to find a PCI device with the
- * boot_vga sysfs attribute set to 1.
- * If no such device is found, the first DRM device reported by udev is used.
- */
-static struct udev_device*
-find_primary_gpu(struct drm_backend *b, const char *seat)
-{
-	struct udev_enumerate *e;
-	struct udev_list_entry *entry;
-	const char *path, *device_seat, *id;
-	struct udev_device *device, *drm_device, *pci;
-
-	e = udev_enumerate_new(b->udev);
-	udev_enumerate_add_match_subsystem(e, "drm");
-	udev_enumerate_add_match_sysname(e, "card[0-9]*");
-
-	udev_enumerate_scan_devices(e);
-	drm_device = NULL;
-	udev_list_entry_foreach(entry, udev_enumerate_get_list_entry(e)) {
-		path = udev_list_entry_get_name(entry);
-		device = udev_device_new_from_syspath(b->udev, path);
-		if (!device)
-			continue;
-		device_seat = udev_device_get_property_value(device, "ID_SEAT");
-		if (!device_seat)
-			device_seat = default_seat;
-		if (strcmp(device_seat, seat)) {
-			udev_device_unref(device);
-			continue;
-		}
-
-		pci = udev_device_get_parent_with_subsystem_devtype(device,
-						"pci", NULL);
-		if (pci) {
-			id = udev_device_get_sysattr_value(pci, "boot_vga");
-			if (id && !strcmp(id, "1")) {
-				if (drm_device)
-					udev_device_unref(drm_device);
-				drm_device = device;
-				break;
-			}
-		}
-
-		if (!drm_device)
-			drm_device = device;
-		else
-			udev_device_unref(device);
-	}
-
-	udev_enumerate_unref(e);
-	return drm_device;
-}
-
 #ifdef BUILD_VAAPI_RECORDER
 static void
 recorder_destroy(struct drm_output *output)
@@ -3158,7 +3069,6 @@ static void full_init_main(void *arg){
 	struct full_init_param *param =
 			(struct full_init_param *)arg;
 	struct drm_backend *b = param->b;
-	struct udev_device *drm_device;
 	struct wl_event_loop *loop;
 	uint32_t key;
 	struct udev_para *para = NULL;
@@ -3190,19 +3100,8 @@ static void full_init_main(void *arg){
 	b->session_listener.notify = session_notify;
 	wl_signal_add(&compositor->session_signal, &b->session_listener);
 
-	drm_device = find_primary_gpu(b, seat_id);
-	if (drm_device == NULL) {
-		weston_log("no drm device found\n");
-		goto err_udev;
-	}
-
-	if (init_drm(b, drm_device) < 0) {
-		weston_log("failed to initialize kms\n");
-		goto err_udev_dev;
-	}
-
 	if(init_sdm() < 0)
-		goto err_udev_dev;
+		goto err_udev;
 
 	if(drm_backend_create_sdm_heads(b))
 		goto err_sdm_core;
@@ -3247,8 +3146,6 @@ static void full_init_main(void *arg){
 		weston_log("failed to enable udev-monitor receiving\n");
 		goto err_udev_drm_source;
 	}
-
-	udev_device_unref(drm_device);
 
 	weston_compositor_add_debug_binding(compositor, KEY_Q,
 			recorder_binding, b);
@@ -3321,8 +3218,6 @@ err_udev_monitor:
 	udev_monitor_unref(b->udev_monitor);
 err_sdm_core:
 	sdm_service->DestroyCore();
-err_udev_dev:
-	udev_device_unref(drm_device);
 err_udev:
 	udev_unref(b->udev);
 err_base:
