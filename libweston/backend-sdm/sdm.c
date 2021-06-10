@@ -2054,3 +2054,15 @@ weston_backend_init(struct weston_compositor *compositor,
 
 	return 0;
 }
+
+void NotifyOnRefresh(struct drm_output *drm_output) {
+  if (drm_output->retire_fence_fd > 0) {
+    struct wl_event_loop *loop =
+    wl_display_get_event_loop(drm_output->base.compositor->wl_display);
+
+    drm_output->retire_fence_source = wl_event_loop_add_fd(loop,
+        drm_output->retire_fence_fd, WL_EVENT_READABLE,
+        on_vblank, drm_output);
+  }
+  drm_output->atomic_complete_pending = true;
+}
