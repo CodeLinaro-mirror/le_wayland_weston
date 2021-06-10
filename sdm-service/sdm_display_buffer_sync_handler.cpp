@@ -27,6 +27,10 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include <errno.h>
+#include <sync/sync.h>
+#include <string.h>
+
 #include "sdm_display_debugger.h"
 #include "sdm_display_buffer_sync_handler.h"
 
@@ -35,11 +39,18 @@
 namespace sdm {
 
 SdmDisplayBufferSyncHandler::SdmDisplayBufferSyncHandler() {
-  DLOGW("Not supported.");
 }
 
 DisplayError SdmDisplayBufferSyncHandler::SyncWait(int fd) {
-  DLOGV("Not supported.");
+  int error = 0;
+
+  if (fd >= 0) {
+    error = sync_wait(fd, 1000);
+    if (error < 0) {
+      DLOGE("sync_wait error errno = %d, desc = %s", errno,  strerror(errno));
+      return kErrorTimeOut;
+    }
+  }
 
   return kErrorNone;
 }
@@ -47,15 +58,38 @@ DisplayError SdmDisplayBufferSyncHandler::SyncWait(int fd) {
 DisplayError SdmDisplayBufferSyncHandler::SyncMerge(int fd1,
                                                     int fd2,
                                                     int *merged_fd) {
-  DLOGW("Not supported.");
+  DisplayError error = kErrorNone;
 
-  return kErrorNone;
+  // Merge the two fences.  In the case where one of the fences is not a
+  // valid fence (e.g. NO_FENCE) merge the one valid fence with itself so
+  // that a new fence with the given name is created.
+  // TODO(user): "SyncMerge"string should be replaced with user-defined string to represent
+  // why it is merged.
+  if (fd1 >= 0 && fd2 >= 0) {
+    *merged_fd = sync_merge("SyncMerge", fd1, fd2);
+  } else if (fd1 >= 0) {
+    *merged_fd = sync_merge("SyncMerge", fd1, fd1);
+  } else if (fd2 >= 0) {
+    *merged_fd = sync_merge("SyncMerge", fd2, fd2);
+  } else {
+    *merged_fd = -1;
+    return kErrorNone;
+  }
+
+  if (*merged_fd == -1) {
+    DLOGE("Sync merge error! fd1 %d fd2 %d", fd1, fd2);
+    error = kErrorFileDescriptor;
+  }
+
+  return error;
 }
 
 bool SdmDisplayBufferSyncHandler::IsSyncSignaled(int fd) {
-  DLOGW("Not supported.");
-
-  return true;
+  if (sync_wait(fd, 0) < 0) {
+    return false;
+  } else {
+    return true;
+  }
 }
 
 }  // namespace sdm
