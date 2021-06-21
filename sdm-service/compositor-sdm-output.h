@@ -89,6 +89,42 @@ extern "C" {
 }
 #endif
 
+/**
+ * A small wrapper to print information into the 'drm-backend' debug scope.
+ *
+ * The following conventions are used to print variables:
+ *
+ *  - fixed uint32_t values, including Weston object IDs such as weston_output
+ *    IDs, DRM object IDs such as CRTCs or properties, and GBM/DRM formats:
+ *      "%lu (0x%lx)" (unsigned long) value, (unsigned long) value
+ *
+ *  - fixed uint64_t values, such as DRM property values (including object IDs
+ *    when used as a value):
+ *      "%llu (0x%llx)" (unsigned long long) value, (unsigned long long) value
+ *
+ *  - non-fixed-width signed int:
+ *      "%d" value
+ *
+ *  - non-fixed-width unsigned int:
+ *      "%u (0x%x)" value, value
+ *
+ *  - non-fixed-width unsigned long:
+ *      "%lu (0x%lx)" value, value
+ *
+ * Either the integer or hexadecimal forms may be omitted if it is known that
+ * one representation is not useful (e.g. width/height in hex are rarely what
+ * you want).
+ *
+ * This is to avoid implicit widening or narrowing when we use fixed-size
+ * types: uint32_t can be resolved by either unsigned int or unsigned long
+ * on a 32-bit system but only unsigned int on a 64-bit system, with uint64_t
+ * being unsigned long long on a 32-bit system and unsigned long on a 64-bit
+ * system. To avoid confusing side effects, we explicitly cast to the widest
+ * possible type and use a matching format specifier.
+ */
+#define drm_debug(b, ...) \
+	weston_log_scope_printf((b)->debug, __VA_ARGS__)
+
 struct drm_backend {
   struct weston_backend base;
   struct weston_compositor *compositor;
@@ -131,6 +167,8 @@ struct drm_backend {
 
   /* Screen capture data */
   struct screen_capture *screen_cap;
+
+  struct weston_log_scope *debug;
 };
 
 struct drm_edid {
