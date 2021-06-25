@@ -8,6 +8,7 @@ install_data(
 	[
 		'weston-debug.xml',
 		'weston-direct-display.xml',
+		'weston-qti-extn.xml',
 	],
 	install_dir: join_paths(dir_data, dir_protocol_libweston)
 )
@@ -35,6 +36,7 @@ generated_protocols = [
 	[ 'weston-touch-calibration', 'internal' ],
 	[ 'weston-direct-display', 'internal' ],
 	[ 'gbm-buffer-backend', 'internal' ],
+	[ 'weston-qti-extn', 'internal' ],
 	[ 'xdg-output', 'v1' ],
 	[ 'xdg-shell', 'v6' ],
 	[ 'xdg-shell', 'stable' ],

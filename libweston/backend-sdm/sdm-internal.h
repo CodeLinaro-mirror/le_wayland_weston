@@ -347,9 +347,9 @@ struct drm_output {
 	enum dpms_enum dpms; //tracks dpms level of output
 #ifdef MULTI_DISPLAY
 	int display_id; // to support multiple displays.
-	int retire_fence_fd;
 	struct wl_event_source *retire_fence_source;
 #endif
+	int retire_fence_fd;
 };
 
 static inline struct drm_head *
