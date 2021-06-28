@@ -165,11 +165,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError PrePrepare(struct drm_output *output);
     DisplayError PostPrepare(struct drm_output *output);
     DisplayError PreCommit();
-#ifndef MULTI_DISPLAY
-    DisplayError PostCommit();
-#else
+
     DisplayError PostCommit(int *retire_fence_fd);
-#endif
     LayerBufferFormat GetSDMFormat(uint32_t src_fmt,
                                    struct LayerGeometryFlags flags);
     LayerBlending GetSDMBlending(uint32_t source);

@@ -43,6 +43,7 @@
 #include <assert.h>
 #include <sys/mman.h>
 #include <time.h>
+#include <poll.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -76,6 +77,7 @@
 
 
 static const char default_seat[] = "seat0";
+#define FENCE_TIMEOUT 50
 
 #ifndef MULTI_DISPLAY
 int display_id = -1;
@@ -85,14 +87,53 @@ enum {
     EXTERNAL_DISPLAY_ID
 };
 
+static int sync_wait(int fd, int timeout)
+{
+    struct pollfd fds;
+    int ret;
+
+    if (fd < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    fds.fd = fd;
+    fds.events = POLLIN;
+
+    do {
+        ret = poll(&fds, 1, timeout);
+        if (ret > 0) {
+            if (fds.revents & (POLLERR | POLLNVAL)) {
+                errno = EINVAL;
+                return -1;
+            }
+            return 0;
+        } else if (ret == 0) {
+            errno = ETIME;
+            return -1;
+        }
+    } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
+
+    return ret;
+}
+
 static void
 vblank_handler(int display_id, int64_t timestamp, void *data)
 {
 	struct drm_output *output = (struct drm_output *) data;
 	uint64_t v = 1;
 
-	if (!output->atomic_complete_pending)
-	    return;
+	if(output->retire_fence_fd > 0)
+	{
+		int error = sync_wait(output->retire_fence_fd, FENCE_TIMEOUT);
+		close(output->retire_fence_fd);
+		output->retire_fence_fd = -1;
+		if (error < 0)
+		{
+			weston_log("Error: retire fence timed out!");
+			return;
+		}
+	}
 
 	output->last_vblank.usec = timestamp/1000;
 	output->last_vblank.sec = output->last_vblank.usec/1000;
@@ -456,6 +497,7 @@ drm_set_backlight(struct weston_output *output_base, uint32_t value)
 		weston_log("%s: backlight setting failed error = %d\n", __func__, ret);
 		return ret;
 	}
+	output_base->backlight_current = drm_get_backlight();
 
 	weston_log("%s: backlight set to value: %d \n", __func__, value);
 	return ret;
@@ -1934,6 +1976,9 @@ drm_backend_create(struct weston_compositor *compositor,
 			weston_log("Error: gbm buffer backend setup failed\n");
 
 	}
+
+	if (weston_qti_extn_setup(compositor) < 0)
+		weston_log("Error: weston_qti_extn_setup failed\n");
 
 	if (compositor->capabilities & WESTON_CAP_EXPLICIT_SYNC) {
 		if (linux_explicit_synchronization_setup(compositor) < 0)
