@@ -25,7 +25,8 @@ deps_sdm = [
 	dep_libdrm,
 	dep_gbm,
 	dep_libdisplaydebug,
-	dep_libweston_private
+	dep_libweston_private,
+	dep_libsync
 ]
 deps_sdm += dependency('threads')
 
