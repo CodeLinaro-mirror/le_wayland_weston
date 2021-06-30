@@ -84,6 +84,7 @@ struct linux_dmabuf_buffer;
 struct weston_recorder;
 struct weston_pointer_constraint;
 struct ro_anonymous_file;
+struct gbm_buffer;
 
 enum weston_keyboard_modifier {
 	MODIFIER_CTRL = (1 << 0),

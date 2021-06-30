@@ -217,3 +217,10 @@ option(
 	value: false,
 	description: 'Generate documentation'
 )
+
+option(
+	'enable-early-boot',
+	type: 'boolean',
+	value: true,
+	description: 'Early boot weston'
+)

@@ -155,6 +155,7 @@ dep_threads = dependency('threads')
 dep_gbm = dependency('gbm', required: false)
 dep_libdrmutils = cxx.find_library('drmutils')
 dep_libsdedrm = cxx.find_library('sdedrm')
+dep_libsync = cc.find_library('sync')
 
 subdir('include')
 subdir('protocol')
