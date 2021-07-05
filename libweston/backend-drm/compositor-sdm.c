@@ -2800,6 +2800,8 @@ drm_destroy(struct weston_compositor *ec)
 	udev_input_destroy(&b->input);
 
 	wl_event_source_remove(b->udev_drm_source);
+	weston_compositor_log_scope_destroy(b->debug);
+	b->debug = NULL;
 	weston_compositor_shutdown(ec);
 	//TODO(user): Need to destroy the display device here
 	wl_list_for_each_safe(base, next, &ec->head_list, compositor_link) {
