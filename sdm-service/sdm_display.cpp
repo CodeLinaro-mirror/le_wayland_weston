@@ -648,15 +648,16 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     //check whether the buffer resource is created by linux dma buf
     if ((dmabuf = linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource))) {
       struct dmabuf_attributes *attributes = &dmabuf->attributes;
-      struct gbm_import_fd_data gbm_dmabuf = {
-        .fd     = attributes->fd[0],
-        .width  = attributes->width,
-        .height = attributes->height,
-        .stride = attributes->stride[0],
-        .format = attributes->format
+      struct gbm_import_fd_modifier_data gbm_dmabuf = {
+        .width   = attributes->width,
+        .height  = attributes->height,
+        .format  = attributes->format,
+        .num_fds = 1,
+        .modifier = attributes->modifier[0]
       };
-      bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
       bo_fd = attributes->fd[0];
+      gbm_dmabuf.fds[0] = attributes->fd[0];
+      bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD_MODIFIER, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
     } else if ((gbm_buf = gbm_buffer_get(es->buffer_ref.buffer->resource))) {
       struct gbm_buf_info gbm_bufinfo = {
         .fd           = gbm_buf->fd,
