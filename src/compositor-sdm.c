@@ -1955,6 +1955,7 @@ create_output_for_connector(struct drm_backend *b, int x, int y, struct udev_dev
 
     SetDisplayState(display_id, WESTON_DPMS_ON);
     b->output = output;
+    c->repaint_msec = millihz_to_nsec(refresh)/1000000;
     return 0;
 
 err_output:
