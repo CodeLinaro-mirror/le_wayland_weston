@@ -628,6 +628,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
   struct linux_dmabuf_buffer *dmabuf;
   struct gbm_buffer *gbm_buf;
   pixman_region32_t r;
+  int bo_fd = -1;
 
   *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
                     (zalloc(sizeof *layer));
@@ -655,6 +656,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
         .format = attributes->format
       };
       bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
+      bo_fd = attributes->fd[0];
     } else if ((gbm_buf = gbm_buffer_get(es->buffer_ref.buffer->resource))) {
       struct gbm_buf_info gbm_bufinfo = {
         .fd           = gbm_buf->fd,
@@ -666,10 +668,16 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
       bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
                          &gbm_bufinfo,
                          GBM_BO_USE_SCANOUT);
+      bo_fd = gbm_buf->fd;
     } else {
+      /*Assume the unknown buffer resource as gbm buffer to get the fd value*/
+      void* temp_buf = wl_resource_get_user_data(es->buffer_ref.buffer->resource);
       bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
-                         wl_resource_get_user_data(es->buffer_ref.buffer->resource),
+                         temp_buf,
                          GBM_BO_USE_SCANOUT);
+      struct gbm_buf_info *temp_gbm_buf = reinterpret_cast<struct gbm_buf_info*>(temp_buf);
+      if (temp_gbm_buf)
+        bo_fd = temp_gbm_buf->fd;
     }
 
     if (bo == NULL)
@@ -716,12 +724,17 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
       }
       gbm_perform(GBM_PERFORM_GET_UBWC_STATUS, bo, &ubwc_status);
 
-      // Override buffer width/height to reflect aligned width and aligned height.
+      /* Override buffer width/height to reflect aligned width and aligned height */
       layer->width = alignedWidth;
       layer->height = alignedHeight;
       layer->unaligned_width = width;
       layer->unaligned_height = height;
-      layer->ion_fd = gbm_bo_get_fd(bo);
+      /*
+       * Since layer->ion_fd will be used as key of buffer map, avoid duplicate fd by
+       * gbm_bo_get_fd() here. Instead, reserve the fd at bo creation and assign it
+       * to layer->ion_fd.
+       */
+      layer->ion_fd = bo_fd;
       layer->flags.secure_present = secure_status;
       layer->flags.has_ubwc_buf = ubwc_status;
       layer->handle_id = buffer_manager_.GetBufferId(layer->ion_fd, sdm_layer->buffer_ref.buffer);

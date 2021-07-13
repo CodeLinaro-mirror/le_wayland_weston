@@ -191,6 +191,10 @@ drm_fb_destroy_callback(struct gbm_bo *bo, void *data)
 
 	weston_buffer_reference(&fb->buffer_ref, NULL);
 
+	if (fb->ion_fd > -1) {
+		close(fb->ion_fd);
+	}
+
 	free(data);
 }
 
@@ -299,7 +303,7 @@ drm_fb_get_from_bo(struct drm_output *output, struct gbm_bo *bo,
 	fb->bo = bo;
 
 	fb->ion_fd = gbm_bo_get_fd(bo);
-	if (!fb->ion_fd) {
+	if (fb->ion_fd < 0) {
 		free(fb);
 		return NULL;
 	}

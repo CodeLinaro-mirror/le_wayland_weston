@@ -440,6 +440,10 @@ static int early_get_drm_fb_id(int drm_fd, struct gbm_bo *bo, uint32_t *fb_id) {
     return ret;
   }
 
+  if (layout.fd > -1) {
+    close(layout.fd);
+  }
+
   return 0;
 }
 
