@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017, 2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -272,7 +272,7 @@ drm_fb_get_from_bo(struct gbm_bo *bo,
     fb->ion_fd = gbm_bo_get_fd(bo);
     ret = -1;
 
-    if (format && !backend->no_addfb2) {
+    if (format && !backend->no_addfb2 && !backend->dummy_display) {
         handles[0] = fb->handle;
         pitches[0] = fb->stride;
         offsets[0] = 0;
@@ -286,16 +286,16 @@ drm_fb_get_from_bo(struct gbm_bo *bo,
         }
     }
 
-    if (ret)
+    if (!backend->dummy_display) {
+        if (ret)
         ret = drmModeAddFB(backend->drm.fd, width, height, 24, 32,
                    fb->stride, fb->handle, &fb->fb_id);
-
-    if (ret) {
-        weston_log("failed to create kms fb: %m\n");
-        goto err_free;
+        if (ret) {
+            weston_log("failed to create kms fb: %m\n");
+            goto err_free;
+        }
+        gbm_bo_set_user_data(bo, fb, drm_fb_destroy_callback);
     }
-
-    gbm_bo_set_user_data(bo, fb, drm_fb_destroy_callback);
 
     return fb;
 
@@ -2483,10 +2483,27 @@ drm_backend_create(struct weston_compositor *compositor,
         goto err_udev;
     }
     path = udev_device_get_syspath(drm_device);
+    if (param->device != NULL && strcmp(param->device,"displaydummy") == 0) {
+        b->dummy_display = true;
+    } else {
+        b->dummy_display = false;
+    }
 
-    if (init_drm(b, drm_device) < 0) {
-        weston_log("failed to initialize kms\n");
-        goto err_udev_dev;
+    if (!b->dummy_display) {
+        if (drm_device == NULL) {
+            weston_log("no drm device found\n");
+            goto err_udev;
+        }
+        path = udev_device_get_syspath(drm_device);
+
+        if (init_drm(b, drm_device) < 0) {
+            weston_log("failed to initialize kms\n");
+            goto err_udev_dev;
+        }
+    } else {
+       int fd = open("/dev/ion",O_RDWR);
+       b->drm.fd = fd;
+       b->drm.filename = strdup("/dev/ion");
     }
 
     if (b->use_pixman) {
@@ -2509,23 +2526,40 @@ drm_backend_create(struct weston_compositor *compositor,
     for (key = KEY_F1; key < KEY_F9; key++)
          weston_compositor_add_key_binding(compositor, key, MODIFIER_CTRL | MODIFIER_ALT,
                                            switch_vt_binding, compositor);
+    int rc = 1;
+    if (!b->dummy_display) {
+        /* begin SDM initialization */
+        rc = CreateCore();
+        rc = GetFirstDisplayType(&display_id);
+        weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
+    } else if (b->dummy_display) {
+        display_id = PRIMARY_DISPLAY_ID;
+        rc = CreateDummyDisplay(display_id);
+        if (!rc) {
+            weston_log("CreateDummyDisplay: successful %d \n", rc);
+        } else {
+              weston_log("CreateDummyDisplay: failed %d \n", rc);
+        }
+        if (create_outputs(b, param->connector, drm_device) < 0) {
+            weston_log("failed to create dummy output for %s\n", path);
+        }
+        weston_log("create dummy output successful for %s\n", path);
+    }
 
-    /* begin SDM initialization */
-    int rc = CreateCore();
-    rc = GetFirstDisplayType(&display_id);
-    weston_log("GetFirstDisplayType: display_id = %d \n", display_id);
     if (param->device != NULL && strcmp(param->device,"displayport") == 0) {
         b->external_as_primary = true;
         // override display id
         display_id = EXTERNAL_DISPLAY_ID;
+        weston_log("Override display_id = %d \n", display_id);
     }
 
     if (param->device != NULL && strcmp(param->device,"hdmi") != 0
-        && strcmp(param->device,"displayport") !=0 ) {
+        && strcmp(param->device, "displayport") !=0
+        && !b->dummy_display) {
         /* and create default display */
         rc = CreateDisplay(display_id);
         if (!rc) {
-            weston_log("CreateDisplay: successfuless %d \n", rc);
+            weston_log("CreateDisplay: successful %d \n", rc);
         } else {
               weston_log("CreateDisplay: failed %d \n", rc);
               goto err_udev_dev;
