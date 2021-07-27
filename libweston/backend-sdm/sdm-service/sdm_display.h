@@ -188,6 +188,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     int GetVisibleRegion(struct drm_output *output, struct weston_view *ev,
                          pixman_region32_t *aboved_opaque, struct RectArray *visible);
     bool IsTransparentGbmFormat(uint32_t format);
+    void HandlePanelDead();
+    void RefreshWithCachedLayerstack();
     CoreInterface *core_intf_ = NULL;
     SdmDisplayBufferAllocator *buffer_allocator_;
     SdmDisplayBufferSyncHandler buffer_sync_handler_;
@@ -205,6 +207,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     float max_average_luminance_ = 0.0;
     float min_luminance_ = 0.0;
     int previous_retire_fence_fd_ = -1;
+    LayerStack prev_layer_stack_;
+    bool esd_reset_panel_ = false;
 };
 
 class SdmDisplayProxy {
