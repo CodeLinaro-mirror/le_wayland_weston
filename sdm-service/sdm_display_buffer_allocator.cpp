@@ -158,6 +158,9 @@ DisplayError SdmDisplayBufferAllocator::FreeBuffer(BufferInfo *buffer_info) {
   }
   if (err == kErrorNone) {
     AllocatedBufferInfo *alloc_buffer_info = &buffer_info->alloc_buffer_info;
+    if (alloc_buffer_info->fd > -1) {
+      close(alloc_buffer_info->fd);
+    }
     alloc_buffer_info->fd = -1;
     alloc_buffer_info->stride = 0;
     alloc_buffer_info->size = 0;
@@ -370,15 +373,6 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     DLOGE("Get aligned height fail");
     gbm_bo_destroy(bo);
     return kErrorParameters;
-  }
-  /*This is special for NV12 ubwc format, offset[0] is not 0 which get from gbm
-    if the buffer have ubwc flag*/
-  if (format == GBM_FORMAT_NV12) {
-    stride[0] = buf_layout.planes[0].v_increment;
-    offset[0] = 0;
-
-    stride[1] = stride[0];//buf_layout.planes[1].v_increment;
-    offset[1] = stride[0]*alignedHeight;
   }
 
   gbm_bo_destroy(bo);

@@ -30,6 +30,7 @@
 #ifndef __SDM_DISPLAY_BUFFER_ALLOCATOR_H__
 #define __SDM_DISPLAY_BUFFER_ALLOCATOR_H__
 
+#include <unistd.h>
 #include <core/buffer_allocator.h>
 #include <gbm.h>
 #include <gbm_priv.h>
