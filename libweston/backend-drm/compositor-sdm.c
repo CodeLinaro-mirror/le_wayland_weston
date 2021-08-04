@@ -3150,7 +3150,8 @@ static void full_init_main(void *arg){
 		 * until first output repaint is done
 		 */
 		pthread_mutex_lock(&full_init_mutex);
-		pthread_cond_wait(&full_init_cond, &full_init_mutex);
+		if (b->first_repaint)
+			pthread_cond_wait(&full_init_cond, &full_init_mutex);
 		pthread_mutex_unlock(&full_init_mutex);
 	}
 	weston_log("begin full init\n");
