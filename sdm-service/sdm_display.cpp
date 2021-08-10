@@ -1126,6 +1126,12 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
     case SDM_BUFFER_FORMAT_CbYCrY_422_I:
       format = sdm::kFormatCbYCrY422H2V1Packed;
       break;
+    case SDM_BUFFER_FORMAT_YCbCr_420_P010_VENUS:
+      format = sdm::kFormatYCbCr420P010Venus;
+      break;
+    case SDM_BUFFER_FORMAT_P010:
+      format = sdm::kFormatYCbCr420P010;
+      break;
 //  case SDM_BUFFER_FORMAT_CrYCbY_422_I:
 //    format = sdm::kFormatCrYCbY422H2V1Packed;
 //    break;
@@ -1251,6 +1257,12 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt) {
       break;
     case GBM_FORMAT_YCbCr_420_P010_UBWC:
       ret = SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC;
+      break;
+    case GBM_FORMAT_YCbCr_420_P010_VENUS:
+      ret = SDM_BUFFER_FORMAT_YCbCr_420_P010_VENUS;
+      break;
+    case GBM_FORMAT_P010:
+      ret = SDM_BUFFER_FORMAT_P010;
       break;
     default:
       DLOGE("Unsupported GBM format %s\n", FourccToString(fmt));

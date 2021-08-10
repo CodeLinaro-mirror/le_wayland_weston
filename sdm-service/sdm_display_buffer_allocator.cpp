@@ -96,6 +96,12 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format) {
     case GBM_FORMAT_YCbCr_420_P010_UBWC:
       layer_buffer_format = kFormatYCbCr420P010Ubwc;
       break;
+    case GBM_FORMAT_YCbCr_420_P010_VENUS:
+      layer_buffer_format = kFormatYCbCr420P010Venus;
+      break;
+    case GBM_FORMAT_P010:
+      layer_buffer_format = kFormatYCbCr420P010;
+      break;
     default:
       layer_buffer_format = kFormatInvalid;
       break;
@@ -270,6 +276,12 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format,
     break;
   case kFormatYCbCr420P010Ubwc:
     *target = GBM_FORMAT_YCbCr_420_P010_UBWC;
+    break;
+  case kFormatYCbCr420P010:
+    *target = GBM_FORMAT_P010;
+    break;
+  case kFormatYCbCr420P010Venus:
+    *target = GBM_FORMAT_YCbCr_420_P010_VENUS;
     break;
   default:
     DLOGE("Unsupported format = 0x%x", format);
