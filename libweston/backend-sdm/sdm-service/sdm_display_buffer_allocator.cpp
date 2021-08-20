@@ -87,7 +87,7 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format, uint32_t ubwc_status) {
    return layer_buffer_format;
 }
 
-DisplayError SdmDisplayBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) {
+int SdmDisplayBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) {
   const BufferConfig &buffer_config = buffer_info->buffer_config;
   AllocatedBufferInfo *alloc_buffer_info = &buffer_info->alloc_buffer_info;
   uint32_t width = buffer_config.width;
@@ -135,8 +135,8 @@ DisplayError SdmDisplayBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) 
   return kErrorNone;
 }
 
-DisplayError SdmDisplayBufferAllocator::FreeBuffer(BufferInfo *buffer_info) {
-  DisplayError err = kErrorNone;
+int SdmDisplayBufferAllocator::FreeBuffer(BufferInfo *buffer_info) {
+  int err = kErrorNone;
   struct gbm_bo *bo = reinterpret_cast<struct gbm_bo *>(buffer_info->private_data);
   if (bo)
       gbm_bo_destroy(bo);
@@ -237,10 +237,10 @@ void SdmDisplayBufferAllocator::GetGbmDeviceHandle(void **userdata) {
   *userdata = (void *) gbm_;
 }
 
-DisplayError SdmDisplayBufferAllocator::GetAllocatedBufferInfo(const BufferConfig \
-                                                               &buffer_config,
-                                                               AllocatedBufferInfo \
-                                                               *allocated_buffer_info) {
+int SdmDisplayBufferAllocator::GetAllocatedBufferInfo(const BufferConfig \
+                                                      &buffer_config,
+                                                      AllocatedBufferInfo \
+                                                      *allocated_buffer_info) {
   /* This API does not fill or provide stride to the caller in AllocatedBufferInfo structure */
   uint64_t usageFlags = 0;
   uint32_t gbmFormat = 0;
@@ -330,7 +330,7 @@ bool SdmDisplayBufferAllocator::IsVideoFormatUBWC(uint32_t fmt, uint32_t ubwc_st
   return is_videofmt_ubwc;
 }
 
-DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInfo &buf_info,
+int SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInfo &buf_info,
                                                  uint32_t stride[4], uint32_t offset[4],
                                                  uint32_t *num_planes) {
     struct gbm_bo *bo;
