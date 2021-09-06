@@ -210,6 +210,32 @@ bool SetDisplayState(int display_id, int power_mode);
 */
 int SetVSyncState(int display_id, bool enable, struct drm_output *output);
 
+/*! @brief Method to set panel brightness..
+
+    @details Client shall use this method to set panel brightness.
+
+    @param[in] display_id \link int \endlink
+    @param[in] brightness \link float \endlink
+
+    @return \link int \endlink
+
+    @sa
+*/
+int SetPanelBrightness(int display_id, float brightness);
+
+/*! @brief Method to get panel brightness
+
+    @details Client shall use this method to get panel brightness.
+
+    @param[in] display_id \link int \endlink
+    @param[in] enable \link bool \endlink
+
+    @return \link int \endlink
+
+    @sa
+*/
+int GetPanelBrightness(int display_id, float *brightness);
+
 /*! @brief Method for obtaining master fd.
 
     @details client to obtaining master fd.
@@ -220,7 +246,6 @@ int SetVSyncState(int display_id, bool enable, struct drm_output *output);
 */
 int get_drm_master_fd(void);
 
-#ifdef MULTI_DISPLAY
 uint32_t GetDisplayCount(void);
 
 int GetDisplayInfos(void);
@@ -228,7 +253,6 @@ int GetDisplayInfos(void);
 char* GetConnectorName(uint32_t display_id);
 
 uint32_t GetConnectorId(uint32_t display_id);
-#endif
 
 #ifdef __cplusplus
 }

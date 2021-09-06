@@ -98,7 +98,7 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 	pixman_region32_init(&overlap);
 
 	output->view_count = 0;
-
+	wl_list_init(&output->sdm_layer_list);
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
 
 		/* If this view doesn't touch our output at all, there's no

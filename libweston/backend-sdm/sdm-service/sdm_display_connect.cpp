@@ -49,11 +49,9 @@ SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
 SdmDisplayProxy *display_[kDisplayMax] = {0};
-#ifdef MULTI_DISPLAY
 HWDisplaysInfo hw_displays_info_ = {};
 // ordered by output id
 SdmDisplaysInfo sdm_displays_info_ = {};
-#endif
 
 static DisplayError
 SetProperty(const char *property_name, const char *value)
@@ -442,7 +440,38 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
     return kErrorNone;
 }
 
-#ifdef MULTI_DISPLAY
+int SetPanelBrightness(int display_id, float brightness)
+{
+    if (display_id >= kDisplayMax || display_id < 0) {
+        DLOGE("Display id(%d) out of range.", display_id);
+        return kErrorParameters;
+    }
+
+    if (!display_[display_id]) {
+        DLOGE("function failed. Display(%d) not created yet.",
+              display_id);
+        return kErrorParameters;
+    }
+
+    return display_[display_id]->SetPanelBrightness(brightness);
+}
+
+int GetPanelBrightness(int display_id, float *brightness)
+{
+    if (display_id >= kDisplayMax || display_id < 0) {
+        DLOGE("Display id(%d) out of range.", display_id);
+        return kErrorParameters;
+    }
+
+    if (!display_[display_id]) {
+        DLOGE("function failed. Display(%d) not created yet.",
+              display_id);
+        return kErrorParameters;
+    }
+
+    return display_[display_id]->GetPanelBrightness(brightness);
+}
+
 uint32_t GetDisplayCount(void) {
   uint32_t count = 0;
 
@@ -454,6 +483,7 @@ uint32_t GetDisplayCount(void) {
 
 void HandlePrimaryDisplayInfo() {
   HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
+  sdm_displays_info_.clear();
   int slot = sdm_displays_info_.size();
 
   for (iter; iter != hw_displays_info_.end(); ++iter) {
@@ -481,6 +511,7 @@ void HandleNonPrimaryDisplayInfos(DisplayType type) {
       continue;
     if (!iter->second.is_connected)
       continue;
+
     sdm_displays_info_[slot] = iter->second;
     slot++;
   }
@@ -521,6 +552,7 @@ char *GetConnectorName(uint32_t display_id) {
   }
 
   snprintf(name, sizeof name, "%s-%d", type_name, display_id);
+
   return strdup(name);
 }
 
@@ -535,7 +567,6 @@ static HWDisplayInfo GetSdmDisplayInfo(int display_id) {
 
   return iter->second;
 }
-#endif
 
 }// namespace sdm
 #ifdef __cplusplus
