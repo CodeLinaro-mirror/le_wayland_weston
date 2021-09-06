@@ -43,6 +43,7 @@
 #include <assert.h>
 #include <sys/mman.h>
 #include <time.h>
+#include <poll.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -76,15 +77,45 @@
 
 
 static const char default_seat[] = "seat0";
+#define FENCE_TIMEOUT 50
 
 #ifndef MULTI_DISPLAY
 int display_id = -1;
-#else
+#endif
 enum {
     PRIMARY_DISPLAY_ID,
     EXTERNAL_DISPLAY_ID
 };
-#endif
+
+static int sync_wait(int fd, int timeout)
+{
+    struct pollfd fds;
+    int ret;
+
+    if (fd < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    fds.fd = fd;
+    fds.events = POLLIN;
+
+    do {
+        ret = poll(&fds, 1, timeout);
+        if (ret > 0) {
+            if (fds.revents & (POLLERR | POLLNVAL)) {
+                errno = EINVAL;
+                return -1;
+            }
+            return 0;
+        } else if (ret == 0) {
+            errno = ETIME;
+            return -1;
+        }
+    } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
+
+    return ret;
+}
 
 static void
 vblank_handler(int display_id, int64_t timestamp, void *data)
@@ -92,8 +123,17 @@ vblank_handler(int display_id, int64_t timestamp, void *data)
 	struct drm_output *output = (struct drm_output *) data;
 	uint64_t v = 1;
 
-	if (!output->atomic_complete_pending)
-	    return;
+	if(output->retire_fence_fd > 0)
+	{
+		int error = sync_wait(output->retire_fence_fd, FENCE_TIMEOUT);
+		close(output->retire_fence_fd);
+		output->retire_fence_fd = -1;
+		if (error < 0)
+		{
+			weston_log("Error: retire fence timed out!");
+			return;
+		}
+	}
 
 	output->last_vblank.usec = timestamp/1000;
 	output->last_vblank.sec = output->last_vblank.usec/1000;
@@ -407,13 +447,68 @@ drm_output_render(struct drm_output *output, pixman_region32_t *damage)
 				 &c->primary_plane.damage, damage);
 }
 
+/* returns a value between 0-255 range, where higher is brighter */
+static uint32_t
+drm_get_backlight()
+{
+	float brightness = -1.0f;
+	uint32_t level = 0;
+	int ret = 0;
+
+	ret = GetPanelBrightness(PRIMARY_DISPLAY_ID, &brightness);
+	if (ret) {
+		weston_log("%s: failed error=%d\n", __func__, ret);
+		return ret;
+	}
+
+	if (brightness == -1.0f) {
+		level = 0;
+	} else {
+		level = (uint32_t)(254.0f*brightness + 1);
+	}
+
+	weston_log("%s: backlight value:%d brightness:%f \n", __func__, level, brightness);
+	return level;
+}
+
+/* values accepted are between 0-255 range */
+static int
+drm_set_backlight(struct weston_output *output_base, uint32_t value)
+{
+	int ret = 0;
+
+	if (!(0 <= value && value <= 255)) {
+		weston_log("%s: not in supported range, backlight = %d\n", __func__, value);
+		return -1;
+	}
+
+	if (value == drm_get_backlight()) {
+		weston_log("%s: already in same state, backlight = %d\n", __func__, value);
+		return 0;
+	}
+
+	if (value == 0) {
+		ret = SetPanelBrightness(PRIMARY_DISPLAY_ID, -1.0f);
+	} else {
+		ret = SetPanelBrightness(PRIMARY_DISPLAY_ID, (value - 1)/254.0f);
+	}
+
+	if (ret) {
+		weston_log("%s: backlight setting failed error = %d\n", __func__, ret);
+		return ret;
+	}
+	output_base->backlight_current = drm_get_backlight();
+
+	weston_log("%s: backlight set to value: %d \n", __func__, value);
+	return ret;
+}
+
 static int
 drm_output_repaint(struct weston_output *output_base,
 		   pixman_region32_t *damage,
 		   void *repaint_data)
 {
 	struct drm_output *output = to_drm_output(output_base);
-	int ret;
 
 	if (output->disable_pending || output->destroy_pending)
 		return -1;
@@ -427,17 +522,6 @@ drm_output_repaint(struct weston_output *output_base,
 		return -1;
 	}
 
-#ifndef MULTI_DISPLAY
-	ret = SetDisplayState(display_id, WESTON_DPMS_ON);
-#else
-	ret = SetDisplayState(output->display_id, WESTON_DPMS_ON);
-#endif
-	if (ret) {
-		weston_log("%s: SDM DPMS ON failed error=%d\n", __func__, ret);
-		return ret;
-	}
-
-	output->dpms = WESTON_DPMS_ON;
 	return 0;
 }
 
@@ -635,6 +719,18 @@ static void
 drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 {
 	struct drm_output *output = to_drm_output(output_base);
+	int ret;
+
+	weston_log("%s: SDM DPMS level = %d\n", __func__, level);
+#ifndef MULTI_DISPLAY
+	ret = SetDisplayState(display_id, level);
+#else
+	ret = SetDisplayState(output->display_id, level);
+#endif
+	if (ret) {
+		weston_log("%s: SDM DPMS ON failed error = %d\n", __func__, ret);
+		return ret;
+	}
 
 	output->dpms = level;
 	/* As we throw everything away when disabling, just send us back through
@@ -866,6 +962,8 @@ drm_output_enable(struct weston_output *base)
 	output->base.assign_planes = drm_assign_planes;
 	output->base.set_dpms = drm_set_dpms;
 	output->base.switch_mode = drm_output_switch_mode;
+	output->base.set_backlight = drm_set_backlight;
+	output->base.backlight_current = drm_get_backlight();
 	output->base.set_gamma = NULL;
 
 	if (drm_output_enable_vblank(output)) {
@@ -1878,6 +1976,9 @@ drm_backend_create(struct weston_compositor *compositor,
 			weston_log("Error: gbm buffer backend setup failed\n");
 
 	}
+
+	if (weston_qti_extn_setup(compositor) < 0)
+		weston_log("Error: weston_qti_extn_setup failed\n");
 
 	if (compositor->capabilities & WESTON_CAP_EXPLICIT_SYNC) {
 		if (linux_explicit_synchronization_setup(compositor) < 0)

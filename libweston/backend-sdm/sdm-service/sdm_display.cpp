@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017, 2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -218,6 +218,14 @@ DisplayError SdmDisplay::SetVSyncState(bool VSyncState, struct drm_output *outpu
     }
 
     return kErrorNone;
+}
+
+DisplayError SdmDisplay::SetPanelBrightness(float brightness) {
+    return display_intf_->SetPanelBrightness(brightness);
+}
+
+DisplayError SdmDisplay::GetPanelBrightness(float *brightness) {
+    return display_intf_->GetPanelBrightness(brightness);
 }
 
 DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *display_config) {
@@ -799,11 +807,8 @@ DisplayError SdmDisplay::PreCommit()
     return kErrorNone;
 }
 
-#ifndef MULTI_DISPLAY
-DisplayError SdmDisplay::PostCommit()
-#else
+
 DisplayError SdmDisplay::PostCommit(int *retire_fence_fd)
-#endif
 {
     DisplayError error = kErrorNone;
 
@@ -820,11 +825,8 @@ DisplayError SdmDisplay::PostCommit(int *retire_fence_fd)
 
     //close release fence fds
     if (layer_stack_.retire_fence_fd > 0) {
-#ifndef MULTI_DISPLAY
-      close(layer_stack_.retire_fence_fd);
-#else
-      *retire_fence_fd = layer_stack_.retire_fence_fd;
-#endif
+      *retire_fence_fd = previous_retire_fence_fd_;
+      previous_retire_fence_fd_ = layer_stack_.retire_fence_fd;
       layer_stack_.retire_fence_fd = -1;
     }
 
@@ -853,11 +855,8 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     PreCommit();
 
     ret = display_intf_->Commit(&layer_stack_);
-#ifndef MULTI_DISPLAY
-    PostCommit();
-#else
+
     PostCommit(&output->retire_fence_fd);
-#endif
 
     DLOGV("success");
     return ret;
@@ -1281,6 +1280,14 @@ DisplayError SdmNullDisplay::Commit(struct drm_output *output) {
 }
 DisplayError SdmNullDisplay::SetDisplayState(DisplayState state,
 					bool teardown, int *release_fence) {
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::SetPanelBrightness(float brightness) {
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::GetPanelBrightness(float *brightness) {
   return kErrorNone;
 }
 
