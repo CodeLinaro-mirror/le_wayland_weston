@@ -151,9 +151,11 @@ dep_gbm = dependency('gbm')
 
 
 dep_gbm = cc.find_library('gbm')
-dep_libsdmcore = cc.find_library('sdmcore')
-dep_libsdmutils = cc.find_library('sdmutils')
-dep_libdrmutils = cc.find_library('drmutils')
+if get_option('backend-sdm')
+	dep_libsdmcore = cc.find_library('sdmcore')
+	dep_libsdmutils = cc.find_library('sdmutils')
+	dep_libdrmutils = cc.find_library('drmutils')
+endif
 dep_log = cc.find_library('liblog', required : true)
 
 subdir('include')
