@@ -201,6 +201,9 @@ check_desktop_ready(struct window *window)
 	if (!desktop->painted && is_desktop_painted(desktop)) {
 		desktop->painted = 1;
 
+#if defined(BUILD_DRM_COMPOSITOR)
+		usleep(200000);
+#endif
 		weston_desktop_shell_desktop_ready(desktop->shell);
 	}
 }
