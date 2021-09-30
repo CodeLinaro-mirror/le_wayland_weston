@@ -414,18 +414,6 @@ static int early_get_drm_fb_id(int drm_fd, struct gbm_bo *bo, uint32_t *fb_id) {
     return ret;
   }
 
-  /*
-  * This is special for NV12 ubwc format, offset[0]
-  * is not 0 which get from gbm if the buffer have
-  * ubwc flag
-  */
-  if (layout.drm_format == GBM_FORMAT_NV12 && ubwc_status) {
-    layout.stride[0] = buf_layout.planes[0].v_increment;
-    layout.offset[0] = 0;
-    layout.stride[1] = layout.stride[0];
-    layout.offset[1] = layout.stride[0] * alignedHeight;
-  }
-
   DRMMaster *master = nullptr;
   DRMMaster::GetInstance(&master);
 
@@ -438,6 +426,10 @@ static int early_get_drm_fb_id(int drm_fd, struct gbm_bo *bo, uint32_t *fb_id) {
   if (ret) {
     weston_log("CreateFbId failed: %m\n");
     return ret;
+  }
+
+  if (layout.fd > -1) {
+    close(layout.fd);
   }
 
   return 0;
