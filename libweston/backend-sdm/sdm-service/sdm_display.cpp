@@ -72,8 +72,9 @@
 #include "sdm-internal.h"
 
 #define __CLASS__ "SdmDisplay"
-
+extern "C" void NotifyOnRefresh(struct drm_output *);
 struct drm_output *drm_output_;
+struct drm_output *prev_output_;
 vblank_cb_t vblank_cb_;
 
 namespace sdm {
@@ -198,8 +199,78 @@ DisplayError SdmDisplay::HistogramEvent(int /* fd */, uint32_t /* blob_fd */) {
   return kErrorNone;
 }
 
+void SdmDisplay::RefreshWithCachedLayerstack()
+{
+    DisplayError error = kErrorNone;
+    layer_stack_ = prev_layer_stack_;
+    error = display_intf_->Prepare(&layer_stack_);
+    if (error != kErrorNone) {
+        DLOGE("Prepare failed with error %d", error);
+        return;
+    }
+
+    error = display_intf_->Commit(&layer_stack_);
+    if (error != kErrorNone) {
+        DLOGE("Commit failed with error %d", error);
+        return;
+    } else{
+        PostCommit(&prev_output_->retire_fence_fd);
+        NotifyOnRefresh(prev_output_);
+    }
+}
+
+void SdmDisplay::HandlePanelDead()
+{
+    //TODO(user): extend for multi display if needed. currently handle for primary display.
+    if (display_type_ != kPrimary) {
+      DLOGE("Current display is not primary");
+      return;
+    }
+
+    esd_reset_panel_ = true;
+    int release_fence = -1;
+    DisplayError error = kErrorNone;
+
+    DisplayState last_display_state = {};
+    error = display_intf_->GetDisplayState(&last_display_state);
+    if (error != kErrorNone) {
+        DLOGE("Failed to get last display state with error %d", error);
+        return;
+    }
+
+    error = SetDisplayState(kStateOff, true, &release_fence);
+    if (error != kErrorNone) {
+        DLOGE("Failed to power off the display with error %d", error);
+        return;
+    }
+
+    error = SetDisplayState(last_display_state, false, &release_fence);
+    if (error != kErrorNone) {
+        DLOGE("Failed to SetDisplayState with error %d", error);
+        return;
+    }
+
+    error = display_intf_->SetVSyncState(true);
+    if (error != kErrorNone) {
+        DLOGE("Failed to SetVSyncState  with error %d", error);
+        return;
+    }
+
+    RefreshWithCachedLayerstack();
+    esd_reset_panel_ = false;
+}
+
 DisplayError SdmDisplay::HandleEvent(DisplayEvent event) {
-  return kErrorNone;
+    switch (event) {
+        case kPanelDeadEvent:
+            HandlePanelDead();
+            break;
+        default:
+            DLOGW("Unknown event: %d", event);
+            break;
+    }
+
+    return kErrorNone;
 }
 
 DisplayError SdmDisplay::SetVSyncState(bool VSyncState, struct drm_output *output) {
@@ -772,6 +843,11 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
 DisplayError SdmDisplay::Prepare(struct drm_output *output)
 {
     DisplayError error = kErrorNone;
+
+    if (esd_reset_panel_) {
+      return kErrorNotSupported;
+    }
+
 #if SDM_DISPLAY_DUMP_LAYER_STACK
     char dump_buffer[8192] = {0};
 #endif
@@ -812,6 +888,7 @@ DisplayError SdmDisplay::PostCommit(int *retire_fence_fd)
 {
     DisplayError error = kErrorNone;
 
+    prev_layer_stack_ = layer_stack_;
     //Iterate through the layer buffer and close release fences
     for (uint32_t i = 0; i < layer_stack_.layers.size(); i++) {
         Layer *layer = layer_stack_.layers.at(i);
@@ -838,6 +915,10 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     DTRACE_SCOPED();
     DisplayError ret = kErrorNone;
 
+    if (esd_reset_panel_) {
+      return kErrorNotSupported;
+    }
+
     uint32_t layer_count = layer_stack_.layers.size();
     uint32_t GPUTarget_index = layer_count-1;
     Layer *GpuTargetlayer;
@@ -853,7 +934,7 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     DLOGI("commiting ion fd = %d", output->next_fb->ion_fd);
 
     PreCommit();
-
+    prev_output_ = output;
     ret = display_intf_->Commit(&layer_stack_);
 
     PostCommit(&output->retire_fence_fd);
