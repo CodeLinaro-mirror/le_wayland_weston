@@ -440,6 +440,38 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
     return kErrorNone;
 }
 
+int SetPanelBrightness(int display_id, float brightness)
+{
+    if (display_id >= kDisplayMax || display_id < 0) {
+        DLOGE("Display id(%d) out of range.", display_id);
+        return kErrorParameters;
+    }
+
+    if (!display_[display_id]) {
+        DLOGE("function failed. Display(%d) not created yet.",
+              display_id);
+        return kErrorParameters;
+    }
+
+    return display_[display_id]->SetPanelBrightness(brightness);
+}
+
+int GetPanelBrightness(int display_id, float *brightness)
+{
+    if (display_id >= kDisplayMax || display_id < 0) {
+        DLOGE("Display id(%d) out of range.", display_id);
+        return kErrorParameters;
+    }
+
+    if (!display_[display_id]) {
+        DLOGE("function failed. Display(%d) not created yet.",
+              display_id);
+        return kErrorParameters;
+    }
+
+    return display_[display_id]->GetPanelBrightness(brightness);
+}
+
 uint32_t GetDisplayCount(void) {
   uint32_t count = 0;
 
