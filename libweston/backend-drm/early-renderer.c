@@ -127,6 +127,9 @@ early_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	struct gbm_buffer *gbmbuf;
 
 	weston_log("early renderer attach\n");
+	if (!buffer)
+		return;
+
 	shm_buffer = wl_shm_buffer_get(buffer->resource);
 	if (shm_buffer) {
 		buffer->shm_buffer = shm_buffer;
