@@ -628,6 +628,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
   struct linux_dmabuf_buffer *dmabuf;
   struct gbm_buffer *gbm_buf;
   pixman_region32_t r;
+  int bo_fd = -1;
 
   *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
                     (zalloc(sizeof *layer));
@@ -647,14 +648,16 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     //check whether the buffer resource is created by linux dma buf
     if ((dmabuf = linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource))) {
       struct dmabuf_attributes *attributes = &dmabuf->attributes;
-      struct gbm_import_fd_data gbm_dmabuf = {
-        .fd     = attributes->fd[0],
-        .width  = attributes->width,
-        .height = attributes->height,
-        .stride = attributes->stride[0],
-        .format = attributes->format
+      struct gbm_import_fd_modifier_data gbm_dmabuf = {
+        .width   = attributes->width,
+        .height  = attributes->height,
+        .format  = attributes->format,
+        .num_fds = 1,
+        .modifier = attributes->modifier[0]
       };
-      bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
+      bo_fd = attributes->fd[0];
+      gbm_dmabuf.fds[0] = attributes->fd[0];
+      bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD_MODIFIER, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
     } else if ((gbm_buf = gbm_buffer_get(es->buffer_ref.buffer->resource))) {
       struct gbm_buf_info gbm_bufinfo = {
         .fd           = gbm_buf->fd,
@@ -666,10 +669,16 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
       bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
                          &gbm_bufinfo,
                          GBM_BO_USE_SCANOUT);
+      bo_fd = gbm_buf->fd;
     } else {
+      /*Assume the unknown buffer resource as gbm buffer to get the fd value*/
+      void* temp_buf = wl_resource_get_user_data(es->buffer_ref.buffer->resource);
       bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
-                         wl_resource_get_user_data(es->buffer_ref.buffer->resource),
+                         temp_buf,
                          GBM_BO_USE_SCANOUT);
+      struct gbm_buf_info *temp_gbm_buf = reinterpret_cast<struct gbm_buf_info*>(temp_buf);
+      if (temp_gbm_buf)
+        bo_fd = temp_gbm_buf->fd;
     }
 
     if (bo == NULL)
@@ -716,12 +725,17 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
       }
       gbm_perform(GBM_PERFORM_GET_UBWC_STATUS, bo, &ubwc_status);
 
-      // Override buffer width/height to reflect aligned width and aligned height.
+      /* Override buffer width/height to reflect aligned width and aligned height */
       layer->width = alignedWidth;
       layer->height = alignedHeight;
       layer->unaligned_width = width;
       layer->unaligned_height = height;
-      layer->ion_fd = gbm_bo_get_fd(bo);
+      /*
+       * Since layer->ion_fd will be used as key of buffer map, avoid duplicate fd by
+       * gbm_bo_get_fd() here. Instead, reserve the fd at bo creation and assign it
+       * to layer->ion_fd.
+       */
+      layer->ion_fd = bo_fd;
       layer->flags.secure_present = secure_status;
       layer->flags.has_ubwc_buf = ubwc_status;
       layer->handle_id = buffer_manager_.GetBufferId(layer->ion_fd, sdm_layer->buffer_ref.buffer);
@@ -1113,6 +1127,12 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
     case SDM_BUFFER_FORMAT_CbYCrY_422_I:
       format = sdm::kFormatCbYCrY422H2V1Packed;
       break;
+    case SDM_BUFFER_FORMAT_YCbCr_420_P010_VENUS:
+      format = sdm::kFormatYCbCr420P010Venus;
+      break;
+    case SDM_BUFFER_FORMAT_P010:
+      format = sdm::kFormatYCbCr420P010;
+      break;
 //  case SDM_BUFFER_FORMAT_CrYCbY_422_I:
 //    format = sdm::kFormatCrYCbY422H2V1Packed;
 //    break;
@@ -1238,6 +1258,12 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt) {
       break;
     case GBM_FORMAT_YCbCr_420_P010_UBWC:
       ret = SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC;
+      break;
+    case GBM_FORMAT_YCbCr_420_P010_VENUS:
+      ret = SDM_BUFFER_FORMAT_YCbCr_420_P010_VENUS;
+      break;
+    case GBM_FORMAT_P010:
+      ret = SDM_BUFFER_FORMAT_P010;
       break;
     default:
       DLOGE("Unsupported GBM format %s\n", FourccToString(fmt));

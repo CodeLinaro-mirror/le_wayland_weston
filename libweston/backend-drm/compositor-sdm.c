@@ -191,6 +191,10 @@ drm_fb_destroy_callback(struct gbm_bo *bo, void *data)
 
 	weston_buffer_reference(&fb->buffer_ref, NULL);
 
+	if (fb->ion_fd > -1) {
+		close(fb->ion_fd);
+	}
+
 	free(data);
 }
 
@@ -299,7 +303,7 @@ drm_fb_get_from_bo(struct drm_output *output, struct gbm_bo *bo,
 	fb->bo = bo;
 
 	fb->ion_fd = gbm_bo_get_fd(bo);
-	if (!fb->ion_fd) {
+	if (fb->ion_fd < 0) {
 		free(fb);
 		return NULL;
 	}
@@ -721,6 +725,9 @@ output_repaint(struct weston_output *output_base,
 
 	if (output->destroy_pending || output->disable_pending)
 		return -1;
+
+	if (output_base->disable_planes)
+		output_base->need_gpu_composition = true;
 
 	if (!is_virtual_output && !output->next && output_base->need_gpu_composition) {
 		drm_output_render(output, damage);
@@ -2797,6 +2804,8 @@ drm_destroy(struct weston_compositor *ec)
 	udev_input_destroy(&b->input);
 
 	wl_event_source_remove(b->udev_drm_source);
+	weston_compositor_log_scope_destroy(b->debug);
+	b->debug = NULL;
 	weston_compositor_shutdown(ec);
 	//TODO(user): Need to destroy the display device here
 	wl_list_for_each_safe(base, next, &ec->head_list, compositor_link) {

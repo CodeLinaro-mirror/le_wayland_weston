@@ -80,6 +80,7 @@
 extern "C" {
 #endif
 #include <libweston/libweston.h>
+#include <libweston/weston-log.h>
 #include "libweston-internal.h"
 #include "backend.h"
 #include "linux-dmabuf.h"

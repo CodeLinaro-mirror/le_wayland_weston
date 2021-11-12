@@ -96,6 +96,12 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format) {
     case GBM_FORMAT_YCbCr_420_P010_UBWC:
       layer_buffer_format = kFormatYCbCr420P010Ubwc;
       break;
+    case GBM_FORMAT_YCbCr_420_P010_VENUS:
+      layer_buffer_format = kFormatYCbCr420P010Venus;
+      break;
+    case GBM_FORMAT_P010:
+      layer_buffer_format = kFormatYCbCr420P010;
+      break;
     default:
       layer_buffer_format = kFormatInvalid;
       break;
@@ -158,6 +164,9 @@ DisplayError SdmDisplayBufferAllocator::FreeBuffer(BufferInfo *buffer_info) {
   }
   if (err == kErrorNone) {
     AllocatedBufferInfo *alloc_buffer_info = &buffer_info->alloc_buffer_info;
+    if (alloc_buffer_info->fd > -1) {
+      close(alloc_buffer_info->fd);
+    }
     alloc_buffer_info->fd = -1;
     alloc_buffer_info->stride = 0;
     alloc_buffer_info->size = 0;
@@ -268,6 +277,12 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format,
   case kFormatYCbCr420P010Ubwc:
     *target = GBM_FORMAT_YCbCr_420_P010_UBWC;
     break;
+  case kFormatYCbCr420P010:
+    *target = GBM_FORMAT_P010;
+    break;
+  case kFormatYCbCr420P010Venus:
+    *target = GBM_FORMAT_YCbCr_420_P010_VENUS;
+    break;
   default:
     DLOGE("Unsupported format = 0x%x", format);
     return -1;
@@ -370,15 +385,6 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     DLOGE("Get aligned height fail");
     gbm_bo_destroy(bo);
     return kErrorParameters;
-  }
-  /*This is special for NV12 ubwc format, offset[0] is not 0 which get from gbm
-    if the buffer have ubwc flag*/
-  if (format == GBM_FORMAT_NV12) {
-    stride[0] = buf_layout.planes[0].v_increment;
-    offset[0] = 0;
-
-    stride[1] = stride[0];//buf_layout.planes[1].v_increment;
-    offset[1] = stride[0]*alignedHeight;
   }
 
   gbm_bo_destroy(bo);

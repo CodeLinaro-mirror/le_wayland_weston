@@ -81,6 +81,8 @@ struct early_plane {
   bool is_yuv; /* whether the hw pipe supports YUV format */
   bool block_sec_ui = false;
   bool is_virtual = false; /* True if pipe is virtual pipe in smart sma */
+  /* index of possible crtcs, allow all pipelines to be usable on all displays by default */
+  std::bitset<32> hw_block_mask = std::bitset<32>().set();
   display_id cur_display_id; /* the assigned display id in this round */
   display_id pre_display_id; /* the assigned display id in last round */
 };
@@ -139,6 +141,7 @@ int early_drm_get_planes() {
       early_plane.is_virtual = true;
     early_plane.pipe_id = pipe_obj.first;
     early_plane.block_sec_ui = pipe_obj.second.block_sec_ui;
+    early_plane.hw_block_mask = pipe_obj.second.hw_block_mask;
     early_plane.cur_display_id = DISPMax;
     early_plane.pre_display_id = DISPMax;
     if (pipe_obj.second.type == DRMPlaneType::VIG)
@@ -414,18 +417,6 @@ static int early_get_drm_fb_id(int drm_fd, struct gbm_bo *bo, uint32_t *fb_id) {
     return ret;
   }
 
-  /*
-  * This is special for NV12 ubwc format, offset[0]
-  * is not 0 which get from gbm if the buffer have
-  * ubwc flag
-  */
-  if (layout.drm_format == GBM_FORMAT_NV12 && ubwc_status) {
-    layout.stride[0] = buf_layout.planes[0].v_increment;
-    layout.offset[0] = 0;
-    layout.stride[1] = layout.stride[0];
-    layout.offset[1] = layout.stride[0] * alignedHeight;
-  }
-
   DRMMaster *master = nullptr;
   DRMMaster::GetInstance(&master);
 
@@ -438,6 +429,10 @@ static int early_get_drm_fb_id(int drm_fd, struct gbm_bo *bo, uint32_t *fb_id) {
   if (ret) {
     weston_log("CreateFbId failed: %m\n");
     return ret;
+  }
+
+  if (layout.fd > -1) {
+    close(layout.fd);
   }
 
   return 0;
@@ -511,13 +506,15 @@ int early_layer_prepare(struct early_layer *layer, struct drm_output *output) {
   return 0;
 }
 
-static uint32_t early_search_pipe(display_id disp_id, bool vig_required, bool is_secure) {
+static uint32_t early_search_pipe(display_id disp_id, bool vig_required, bool is_secure, int hw_block_id) {
   std::vector<struct early_plane>::iterator itr = plane_list.begin();
   std::vector<struct early_plane>::iterator itr_backup = plane_list.end();
 
   for (; itr != plane_list.end(); itr++) {
     //if (!(itr->output_mask & (1 << disp_id)))
     //	continue;
+    if (!itr->hw_block_mask.test(hw_block_id))
+      continue;
     /* don't consider virtual pipe in early stage */
     if (itr->is_virtual || (itr->block_sec_ui && is_secure))
       continue;
@@ -720,7 +717,7 @@ static void early_reset_planes(display_id disp_id) {
 }
 
 int early_prepare(struct drm_output *output) {
-  struct early_layer *layer, *next_layer;
+  struct early_layer *layer;
   struct early_display *early_disp =
     (struct early_display *)output->early_display_intf;
   struct Rect src_rect, dst_rect;
@@ -729,13 +726,13 @@ int early_prepare(struct drm_output *output) {
   /* true if yuv or scale required*/
   bool vig_required;
 
-  wl_list_for_each_safe(layer, next_layer, &output->early_layer_list, link) {
+  wl_list_for_each_reverse(layer, &output->early_layer_list, link) {
     early_compute_src_dst_rect(output, layer->view, &src_rect, &dst_rect);
     vig_required = layer->yuv_required || (src_rect.right - src_rect.left) !=
       (dst_rect.right - dst_rect.left) || (src_rect.top - src_rect.bottom) !=
       (dst_rect.top - dst_rect.bottom);
     layer->pipe_id = early_search_pipe(display_id(output->display_id),
-                                       vig_required, layer->secure);
+                                   vig_required, layer->secure, early_disp->hw_block_id);
     if (layer->pipe_id) {
       /*
       * Early display does not support GPU composition.
