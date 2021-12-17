@@ -48,7 +48,7 @@
 * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
@@ -93,6 +93,7 @@
 #include "gbm-buffer-backend.h"
 #include "gbm-buffer-backend-server-protocol.h"
 #include "screen-capture.h"
+#include "screen-capture-server-protocol.h"
 #include "../sdm-service/sdm_display_connect.h"
 #include "../sdm-service/compositor-sdm-output.h"
 #include "../drm-service/drm_display.h"
@@ -788,31 +789,93 @@ output_repaint(struct weston_output *output_base,
 	return 0;
 }
 
+static void cap_fence_cb(int fd, uint32_t mask, void *data)
+{
+	struct screen_capture *screen_cap = data;
+	struct screen_capture_buffer *cap_buf;
+	struct drm_output *output;
+	struct drm_backend *b;
+
+	if (data == NULL) {
+		weston_log("capture has been exit\n");
+		if (fd > -1)
+			close(fd);
+		return;
+	}
+
+	b = to_drm_backend(screen_cap->compositor);
+
+	cap_buf = screen_cap->current;
+	output = screen_cap->main_output;
+
+	weston_buffer_reference(&cap_buf->buf_ref, NULL);
+
+	wl_event_source_remove(cap_buf->cap_fence_source);
+
+	close(cap_buf->release_fence_fd);
+	cap_buf->release_fence_fd = -1;
+	cap_buf->cap_fence_source = NULL;
+
+	if (screen_cap->destroy_pending || screen_cap->output_destroy_pending) {
+		gbm_bo_destroy(cap_buf->bo);
+		free(cap_buf);
+	} else {
+		wl_list_insert(screen_cap->free_buf_list.prev, &cap_buf->link);
+	}
+
+	screen_cap->current = NULL;
+	if ((screen_cap->destroy_pending || screen_cap->output_destroy_pending) &&
+		!screen_cap->next)
+		/* next is the last buffer pending to release, so if no next, screen_cap
+		 * can be destroyed
+		 */
+		screen_capture_post_exit(screen_cap);
+	else {
+		screen_cap->current = screen_cap->next;
+		screen_cap->next = NULL;
+	}
+
+	drm_debug(b, "\t\t\t[capture] by cwb for output %s\n", output->base.name);
+}
+
 static void
 do_screen_capture(struct screen_capture *screen_cap,
 		pixman_region32_t *damage)
 {
 	struct screen_capture_buffer *cap_buf = screen_cap->next;
-
-	/*
-	 * Decrease the attached refcnt after increasing composition refcnt to
-	 * avoid releasing buffer in advance
-	 */
-	weston_buffer_reference(&screen_cap->buf_ref, cap_buf->buffer);
-	weston_buffer_reference(&cap_buf->buf_ref, NULL);
+	struct drm_output *output = screen_cap->main_output;
+	struct drm_backend *b = to_drm_backend(screen_cap->compositor);
 
 	if (screen_cap->fallback_gpu) {
 		screen_cap->compositor->renderer->capture_screen(screen_cap->virtual_output,
 														 cap_buf->buffer, damage);
 
 		/* Release the buffer once GPU composition is completed */
-		weston_buffer_reference(&screen_cap->buf_ref, NULL);
+		weston_buffer_reference(&cap_buf->buf_ref, NULL);
 
-		free(cap_buf);
+		wl_list_insert(screen_cap->free_buf_list.prev, &cap_buf->link);
 		screen_cap->next = NULL;
 		screen_cap->view = NULL;
+
+		drm_debug(b, "\t\t\t[capture] by gpu for output %s\n", output->base.name);
 	} else {
-		output_repaint(screen_cap->virtual_output, damage, true);
+		if (output->cap_buffer->release_fence_fd > 0) {
+			struct wl_event_loop *loop =
+					wl_display_get_event_loop(output->base.compositor->wl_display);
+
+			screen_cap->next->cap_fence_source = wl_event_loop_add_fd(loop,
+					output->cap_buffer->release_fence_fd , WL_EVENT_READABLE,
+					cap_fence_cb, screen_cap);
+			drm_debug(b, "\t\t\t[capture] cwb release fence fd %d\n",
+				output->cap_buffer->release_fence_fd);
+		} else {
+			weston_log("invalid release fence fd\n");
+		}
+
+		if (screen_cap->current == NULL) {
+			screen_cap->current = screen_cap->next;
+			screen_cap->next = NULL;
+		}
 	}
 }
 
@@ -835,9 +898,12 @@ drm_output_repaint(struct weston_output *output_base,
 
 	output_repaint(output_base, damage, false);
 
-	/* Do output repaint for virtual output. */
-	if (is_capture_ready(screen_cap, output_base) && screen_cap->next)
+	/* Do screen capture for current output. */
+	if (is_capture_ready(screen_cap, output_base) && screen_cap->next &&
+		(screen_cap->fallback_gpu || screen_cap->main_output->cap_buffer)) {
 		do_screen_capture(screen_cap, damage);
+		screen_cap->main_output->cap_buffer = NULL;
+	}
 
 	return 0;
 }
@@ -1356,15 +1422,10 @@ drm_assign_planes(struct weston_output *output_base)
 		return;
 	}
 
-	/* Do assign planes for normal output */
-	has_GPU_composition = assign_planes(output_base, false);
-	output_base->need_gpu_composition = has_GPU_composition;
-
 	/*
-	 * Do assign planes for virtual output. If GPU composition already happens,
-	 * no need to check if display WB2 composition can work again as the HW pipe
-	 * resource is already stressed.
-	 * If the last attached buffer has not been consumed yet, skip this commit
+	 * Do assign planes with capture buffer to check if WB could work with current output or not.
+	 * if WB is not avaiable, fallback to GPU
+	 * If the last two attached buffer has not been consumed yet, skip this commit
 	 * until it's consumed to guarantee each client buffer has content update.
 	 */
 	if (is_capture_ready(screen_cap, output_base) &&
@@ -1374,21 +1435,27 @@ drm_assign_planes(struct weston_output *output_base)
 		screen_cap->next = container_of(screen_cap->attached_buf_list.next,
 									struct screen_capture_buffer, link);
 		wl_list_remove(&screen_cap->next->link);
+		wl_list_init(&screen_cap->next->link);
 
-		if (!has_GPU_composition) {
-			struct screen_capture_buffer *cap_buf = NULL;
-			struct drm_output *virtual_output = (struct drm_output *)screen_cap->virtual_output;
 
-			/* Some settings of mirror output may be changed here, need to update them
-			 * to virtual output as they will be used by SDM and GPU composition. */
-			prepare_virtual_output(virtual_output, output_base);
+		struct drm_output *output = (struct drm_output *)output_base;
 
-			/* TODO: Update output buffer */
-			screen_cap->fallback_gpu = assign_planes(virtual_output, true);
-		} else {
-			screen_cap->fallback_gpu = true;
+		if (!screen_cap->force_gpu && screen_cap->next->type !=
+			SCREEN_CAPTURE_TYPE_GPU_OUT) {
+			output->cap_buffer = screen_cap->next;
 		}
+
+		has_GPU_composition = assign_planes(output_base, false);
+		screen_cap->fallback_gpu = output->cap_fallback_gpu;
+
+		if (!screen_cap->force_gpu && screen_cap->fallback_gpu)
+			screen_cap->force_gpu = true;
+	} else {
+		/* Do assign planes for normal output */
+		has_GPU_composition = assign_planes(output_base, false);
 	}
+
+	output_base->need_gpu_composition = has_GPU_composition;
 
 	return;
 }
@@ -2510,6 +2577,8 @@ drm_output_enable(struct weston_output *base)
 	output->prev_layer_none_commit = true;
 	output->layer_none_commit = true;
 	output->retire_fence_fd = -1;
+	output->cap_fallback_gpu = false;
+	output->cap_buffer = NULL;
 
 	return 0;
 

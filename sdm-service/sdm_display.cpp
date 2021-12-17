@@ -25,6 +25,12 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following
+* license:
+*
+* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 /*
  * Copyright © 2008-2011 Kristian Høgsberg
@@ -87,6 +93,7 @@ namespace sdm {
 
 #define SDM_DISPLAY_DEBUG 0
 #define SDM_DISPLAY_DUMP_LAYER_STACK 0
+#define CAPTURE_DSPP_OUT 1
 
 Layer *SdmLayerManager::get_layer(struct sdm_layer *sdm_layer)
 {
@@ -371,6 +378,40 @@ static bool NeedUpdateColorMetaData(struct LayerGeometry *layer_geometry) {
     need_update = true;
 
   return need_update;
+}
+
+DisplayError SdmDisplay::PopulateOutbufferOnToLayerStack(struct drm_output *output) {
+  LayerBuffer *layer_buffer = &output_buffer_;
+  uint32_t format;
+  struct LayerGeometryFlags flags;
+  int num_planes = 0;
+  struct gbm_bo *bo = output->cap_buffer->bo;
+
+  flags.has_ubwc_buf = output->cap_buffer->is_ubwc;
+
+  format = GetMappedFormatFromGbm(output->cap_buffer->format);
+
+  output_buffer_.format = GetSDMFormat(format, flags);//sdm::kFormatRGBA8888;
+  gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_WIDTH, bo, &output_buffer_.width);
+  gbm_perform(GBM_PERFORM_GET_BO_ALIGNED_HEIGHT, bo, &output_buffer_.height);
+  output_buffer_.unaligned_width = gbm_bo_get_width(bo);
+  output_buffer_.unaligned_height = gbm_bo_get_height(bo);
+
+  num_planes = gbm_bo_get_plane_count(bo);
+
+  for (int i = 0; i < num_planes; i++) {
+    layer_buffer->planes[i].fd = output->cap_buffer->buffer_fd;
+    layer_buffer->planes[i].offset = gbm_bo_get_offset(bo, i);
+    layer_buffer->planes[i].stride = gbm_bo_get_stride(bo);
+  }
+
+  layer_buffer->handle_id = buffer_manager_.GetBufferId(output->cap_buffer->buffer_fd,
+    output->cap_buffer->buffer);
+  layer_stack_.output_buffer = &output_buffer_;
+  if (output->cap_buffer->type == CAPTURE_DSPP_OUT)
+    layer_stack_.flags.post_processed_output = true;
+
+  return kErrorNone;
 }
 
 DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *output,
@@ -860,6 +901,8 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
     FreeLayerGeometry(glayer);
   }
 
+  if (output->cap_buffer)
+    PopulateOutbufferOnToLayerStack(output);
   return error;
 }
 
@@ -956,6 +999,27 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output) {
   else
     output->layer_none_commit = false;
   //DumpInterface::GetDump(dump_buffer, sizeof(dump_buffer));
+
+  if (output->cap_buffer) {
+    /* check if CWB is avaiable or not by return value of Prepare() */
+    if (error == kErrorNoAppLayers) {
+      output->cap_fallback_gpu = true;
+      layer_stack_.output_buffer = NULL;
+    } else if (error != kErrorNone) {
+      output->cap_fallback_gpu = true;
+      layer_stack_.output_buffer = NULL;
+      /*
+       * do Prepare() again to unblock display because the fail maybe caused
+       * by CWB.
+       */
+      error = display_intf_->Prepare(&layer_stack_);
+    } else {
+      output->cap_fallback_gpu = false;
+    }
+  } else {
+    output->cap_fallback_gpu = true;
+  }
+
   error = PostPrepare(output);
   if (error != kErrorNone)
     DLOGE("function failed Error= %d\n", error);
@@ -1010,6 +1074,12 @@ DisplayError SdmDisplay::Commit(struct drm_output *output) {
 
   ret = display_intf_->Commit(&layer_stack_);
   PostCommit(&output->retire_fence_fd);
+
+  if (output->cap_buffer && !(output->cap_fallback_gpu)) {
+    output->cap_buffer->release_fence_fd = layer_stack_.output_buffer->release_fence_fd;
+    layer_stack_.output_buffer->release_fence_fd = -1;
+    layer_stack_.output_buffer = NULL;
+  }
 
   return ret;
 }

@@ -25,6 +25,12 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following
+* license:
+*
+* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifndef __SDM_DISPLAY_H__
@@ -185,6 +191,7 @@ private:
   DisplayError PopulateLayerGeometryOnToLayerStack(struct drm_output *output,
                                                    uint32_t index,
                                                    struct LayerGeometry *glayer, bool is_skip);
+  DisplayError PopulateOutbufferOnToLayerStack(struct drm_output *output);
   int PrepareNormalLayerGeometry(struct drm_output *output,
                                  struct LayerGeometry **glayer,
                                  struct sdm_layer *sdm_layer);
@@ -235,6 +242,7 @@ private:
   int disable_hdr_handling_ = 0;
   bool hdr_supported_ = false;
   Layer fb_layer_;
+  LayerBuffer output_buffer_ = {};
   SdmLayerManager layer_manager_;
   SdmBufferManager buffer_manager_;
 

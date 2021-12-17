@@ -28,6 +28,12 @@
     WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
     OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
     IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+    Changes from Qualcomm Innovation Center are provided under the following
+    license:
+
+    Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+    SPDX-License-Identifier: BSD-3-Clause-Clear
   </copyright>
 
   <interface name="screen_capture" version="1">
@@ -121,6 +127,31 @@
         Upon receiving this event, the client should stop capture.
       </description>
     </event>
+
+    <enum name="type">
+      <description summary="capture out type">
+        Description of a particular data path of capture content.
+
+        The WB module support to write back buffer after layer mixer or dspp. But if
+        WB is not available for this output, the buffer content is still drawed by GPU.
+
+        If set gpu_out, that means to force GPU to capture content.
+      </description>
+      <entry name="mixer_out" value="0" summary="layer mixer out"/>
+      <entry name="dspp_out" value="1" summary="dspp out"/>
+      <entry name="gpu_out" value="2" summary="gpu out"/>
+    </enum>
+
+    <request name="frame">
+      <description summary="capture one frame">
+        Will capture one frame of specified output to the buffer. The output has been fixed
+        in request create_screen. The buffer is ready to read by client when receive the
+        wl_buffer release event.
+      </description>
+      <arg name="buffer" type="object" interface="wl_buffer"/>
+      <arg name="type" type="uint" enum="type"/>
+    </request>
+
   </interface>
 
 </protocol>
