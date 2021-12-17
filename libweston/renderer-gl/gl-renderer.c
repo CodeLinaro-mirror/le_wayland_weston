@@ -3124,8 +3124,13 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 
 	buffer->width = gbmbuf->width;
 	buffer->height = gbmbuf->height;
+	/*
+	 * To be aligned with dmabuf buffers, since gbmbuf buffers also
+	 * have the origin at top-left, invert the Y_INVERT flag to get
+	 * the image right.
+	 */
 	buffer->y_inverted =
-        !!(gbmbuf->flags & ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT);
+		!(gbmbuf->flags & ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT);
 
 	for (i = 0; i < gs->num_images; i++)
 		egl_image_unref(gs->images[i]);
