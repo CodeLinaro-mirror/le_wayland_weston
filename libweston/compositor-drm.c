@@ -216,6 +216,7 @@ struct drm_output {
 	int pipe; /* index of CRTC in resource array / bitmasks */
 	uint32_t connector_id;
 	drmModeCrtcPtr original_crtc;
+	drmModeCrtcPtr restore_crtc;
 	struct drm_edid edid;
 	drmModePropertyPtr dpms_prop;
 
@@ -3055,13 +3056,27 @@ update_outputs(struct drm_backend *b, struct udev_device *drm_device)
 			}
 		}
 
-		if (!disconnected)
+		if (!disconnected) {
+			drmModeCrtcPtr tempcrtc;
+			if (output->restore_crtc) {
+				tempcrtc = output->restore_crtc;
+				weston_log("enabling port %s\n", output->base.name);
+				drmModeSetCrtc(b->drm.fd, tempcrtc->crtc_id, tempcrtc->buffer_id,
+				       tempcrtc->x, tempcrtc->y,
+				       &output->connector_id, 1, &tempcrtc->mode);
+			}
 			continue;
+		}
 
 #ifndef COMPILE_WITH_DRM
 		weston_log("connector %d disconnected\n", output->connector_id);
 		drm_output_destroy(&output->base);
 #endif
+		weston_log("Disabling port %s\n", output->base.name);
+		output->restore_crtc = drmModeGetCrtc(b->drm.fd, output->crtc_id);
+		drmModeSetCrtc(b->drm.fd, output->crtc_id,
+			0, 0, 0, 0, 0, NULL);
+
 	}
 
 	wl_list_for_each_safe(output, next, &b->compositor->pending_output_list,
@@ -3082,6 +3097,10 @@ update_outputs(struct drm_backend *b, struct udev_device *drm_device)
 		weston_log("connector %d disconnected\n", output->connector_id);
 		drm_output_destroy(&output->base);
 #endif
+		weston_log("Disabling port %s\n", output->base.name);
+		output->restore_crtc = drmModeGetCrtc(b->drm.fd, output->crtc_id);
+		drmModeSetCrtc(b->drm.fd, output->crtc_id,
+			0, 0, 0, 0, 0, NULL);
 	}
 
 	free(connected);
@@ -3098,10 +3117,12 @@ udev_event_is_hotplug(struct drm_backend *b, struct udev_device *device)
 	if (!sysnum || atoi(sysnum) != b->drm.id)
 		return 0;
 
-	val = udev_device_get_property_value(device, "HOTPLUG");
+	val = udev_device_get_property_value(device, "name");
+	weston_log("udev evt name(%s)\n", val);
 	if (!val)
 		return 0;
-	return strcmp(val, "1") == 0;
+
+	return ((strcmp(val, "DP-1") == 0) || (strcmp(val, "HDMI-A-1") == 0));
 }
 
 static int
