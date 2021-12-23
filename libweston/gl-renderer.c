@@ -320,6 +320,12 @@ egl_image_unref(struct egl_image *image)
 		gbm_buffer_backend_set_user_data(image->gbmbuf, NULL, NULL);
 
 	gr->destroy_image(gr->egl_display, image->image);
+	if (image->link.next == NULL && image->link.prev == NULL) {
+	    weston_log("egl image is NULL\n");
+	} else {
+	    wl_list_remove(&image->link);
+	}
+
 	free(image);
 
 	return 0;
