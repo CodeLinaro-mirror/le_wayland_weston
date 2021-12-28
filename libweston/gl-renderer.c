@@ -320,6 +320,12 @@ egl_image_unref(struct egl_image *image)
 		gbm_buffer_backend_set_user_data(image->gbmbuf, NULL, NULL);
 
 	gr->destroy_image(gr->egl_display, image->image);
+	if (image->link.next == NULL && image->link.prev == NULL) {
+	    weston_log("egl image is NULL\n");
+	} else {
+	    wl_list_remove(&image->link);
+	}
+
 	free(image);
 
 	return 0;
@@ -2592,8 +2598,7 @@ surface_state_destroy(struct gl_surface_state *gs, struct gl_renderer *gr)
 
 	gs->surface->renderer_state = NULL;
 
-	if(gs->num_textures && gs->buffer_ref.buffer)
-	    glDeleteTextures(gs->num_textures, gs->textures);
+	glDeleteTextures(gs->num_textures, gs->textures);
 
 	for (i = 0; i < gs->num_images; i++)
 		egl_image_unref(gs->images[i]);
