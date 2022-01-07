@@ -497,7 +497,7 @@ shell_configuration(struct desktop_shell *shell)
 	shell->win_close_animation_type = get_animation_type(s);
 	free(s);
 	weston_config_section_get_string(section,
-					 "startup-animation", &s, "fade");
+					 "startup-animation", &s, "none");
 	shell->startup_animation_type = get_animation_type(s);
 	free(s);
 	if (shell->startup_animation_type == ANIMATION_ZOOM)
