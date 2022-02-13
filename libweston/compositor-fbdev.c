@@ -132,7 +132,7 @@ static int64_t last_vsync_ns = -1;
 
 static struct gl_renderer_interface *gl_renderer;
 static const char default_seat[] = "seat0";
-static void surface_acquire_buffer(struct fbdev_output *output);
+static int surface_acquire_buffer(struct fbdev_output *output);
 static void surface_release_buffer(struct fbdev_output *output);
 static void surface_create(struct fbdev_output *output, struct fbdev_backend *backend);
 static void create_buff_alloc_device(int fb_fd, struct fbdev_backend * backend);
@@ -276,7 +276,10 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 
 	} else {
 		ec->renderer->repaint_output(base, damage);
-		surface_acquire_buffer(output);
+		if (surface_acquire_buffer(output) < 0) {
+			weston_log("Acquire Buffer Failed. Repaint Unsuccessful!\n");
+			return -1;
+		}
 	}
 	/* Update the damage region. */
 		pixman_region32_subtract(&ec->primary_plane.damage,
@@ -1206,13 +1209,18 @@ weston_backend_init(struct weston_compositor *compositor,
 	return 0;
 }
 
-static void
+static int
 surface_acquire_buffer(struct fbdev_output *output)
 {
 #ifdef USE_GBM
 	output->buf_alloc.last_bo = output->buf_alloc.current_bo;
 	output->buf_alloc.current_bo = gbm_surface_lock_front_buffer(output->buf_alloc.surface);
+	if (!output->buf_alloc.current_bo) {
+		weston_log("Failed to acquire front buffer\n");
+		return -1;
+	}
 #endif
+	return 0;
 }
 
 static void
