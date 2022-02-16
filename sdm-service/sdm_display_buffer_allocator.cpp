@@ -96,6 +96,12 @@ LayerBufferFormat GetLayerBufferFormat(uint32_t format) {
     case GBM_FORMAT_YCbCr_420_P010_UBWC:
       layer_buffer_format = kFormatYCbCr420P010Ubwc;
       break;
+    case GBM_FORMAT_YCbCr_420_P010_VENUS:
+      layer_buffer_format = kFormatYCbCr420P010Venus;
+      break;
+    case GBM_FORMAT_P010:
+      layer_buffer_format = kFormatYCbCr420P010;
+      break;
     default:
       layer_buffer_format = kFormatInvalid;
       break;
@@ -271,6 +277,12 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format,
   case kFormatYCbCr420P010Ubwc:
     *target = GBM_FORMAT_YCbCr_420_P010_UBWC;
     break;
+  case kFormatYCbCr420P010:
+    *target = GBM_FORMAT_P010;
+    break;
+  case kFormatYCbCr420P010Venus:
+    *target = GBM_FORMAT_YCbCr_420_P010_VENUS;
+    break;
   default:
     DLOGE("Unsupported format = 0x%x", format);
     return -1;
@@ -339,8 +351,20 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
   uint32_t format = GBM_FORMAT_ARGB8888;
   uint64_t flags = 0;
   generic_buf_layout_t buf_layout;
+  *num_planes = 1;
+  offset[0] = 0;
+  stride[0] = 0;
 
   SetBufferInfo(buf_info.format, &format, &flags);
+
+  /* GFX has limitation for 3bpp format buffer size, if use aligned width as gbm bo width, the
+   * new aligned width is increased, then the stride will bigger than correct stride, so
+   * calculate it separately, not use gbm to get it from GFX
+   */
+  if ((format == GBM_FORMAT_BGR888) || (format == GBM_FORMAT_RGB888)) {
+    stride[0] = buf_info.aligned_width * 3;
+    return kErrorNone;
+  }
 
   import_fd_data.fd = buf_info.fd;
   import_fd_data.format = format;

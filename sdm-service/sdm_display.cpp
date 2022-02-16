@@ -642,21 +642,29 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
   layer->height = es->height;
   layer->fb_id = -1;
   layer->format = SDM_BUFFER_FORMAT_RGBX_8888;
+  layer->transform = SDM_TRANSFORM_NORMAL;
 
   if (!sdm_layer->is_skip) {
     struct gbm_bo *bo;
     //check whether the buffer resource is created by linux dma buf
     if ((dmabuf = linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource))) {
       struct dmabuf_attributes *attributes = &dmabuf->attributes;
-      struct gbm_import_fd_data gbm_dmabuf = {
-        .fd     = attributes->fd[0],
-        .width  = attributes->width,
-        .height = attributes->height,
-        .stride = attributes->stride[0],
-        .format = attributes->format
+      struct gbm_import_fd_modifier_data gbm_dmabuf = {
+        .width   = attributes->width,
+        .height  = attributes->height,
+        .format  = attributes->format,
+        .num_fds = 1,
+        .modifier = attributes->modifier[0]
       };
-      bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
       bo_fd = attributes->fd[0];
+      gbm_dmabuf.fds[0] = attributes->fd[0];
+      bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_FD_MODIFIER, &gbm_dmabuf, GBM_BO_USE_SCANOUT);
+      /*
+       * Let the layer V-flipped if the weston_buffer is NOT y_inverted, to
+       * make layer orientation the same between overlay and gpu composition path.
+       */
+      if(!es->buffer_ref.buffer->y_inverted)
+        layer->transform = SDM_TRANSFORM_FLIP_V;
     } else if ((gbm_buf = gbm_buffer_get(es->buffer_ref.buffer->resource))) {
       struct gbm_buf_info gbm_bufinfo = {
         .fd           = gbm_buf->fd,
@@ -669,8 +677,11 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
                          &gbm_bufinfo,
                          GBM_BO_USE_SCANOUT);
       bo_fd = gbm_buf->fd;
+
+      if(!es->buffer_ref.buffer->y_inverted)
+        layer->transform = SDM_TRANSFORM_FLIP_V;
     } else {
-      /*Assume the unknown buffer resource as gbm buffer to get the fd value*/
+      /* Assume the unknown buffer resource as gbm buffer to get the fd value */
       void* temp_buf = wl_resource_get_user_data(es->buffer_ref.buffer->resource);
       bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_GBM_BUF_TYPE,
                          temp_buf,
@@ -769,8 +780,6 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
   if (ComputeDirtyRegion(ev, &layer->dirty_regions))
     return -1;
 
-  /* Set no transform for view since bounding box already been applied by transform */
-  layer->transform = SDM_TRANSFORM_NORMAL;
   /* Get global alpha */
   layer->plane_alpha = GetGlobalAlpha(ev);
 
@@ -1126,6 +1135,12 @@ LayerBufferFormat SdmDisplay::GetSDMFormat(uint32_t src_fmt, struct LayerGeometr
     case SDM_BUFFER_FORMAT_CbYCrY_422_I:
       format = sdm::kFormatCbYCrY422H2V1Packed;
       break;
+    case SDM_BUFFER_FORMAT_YCbCr_420_P010_VENUS:
+      format = sdm::kFormatYCbCr420P010Venus;
+      break;
+    case SDM_BUFFER_FORMAT_P010:
+      format = sdm::kFormatYCbCr420P010;
+      break;
 //  case SDM_BUFFER_FORMAT_CrYCbY_422_I:
 //    format = sdm::kFormatCrYCbY422H2V1Packed;
 //    break;
@@ -1251,6 +1266,12 @@ uint32_t SdmDisplay::GetMappedFormatFromGbm(uint32_t fmt) {
       break;
     case GBM_FORMAT_YCbCr_420_P010_UBWC:
       ret = SDM_BUFFER_FORMAT_YCbCr_420_P010_UBWC;
+      break;
+    case GBM_FORMAT_YCbCr_420_P010_VENUS:
+      ret = SDM_BUFFER_FORMAT_YCbCr_420_P010_VENUS;
+      break;
+    case GBM_FORMAT_P010:
+      ret = SDM_BUFFER_FORMAT_P010;
       break;
     default:
       DLOGE("Unsupported GBM format %s\n", FourccToString(fmt));
