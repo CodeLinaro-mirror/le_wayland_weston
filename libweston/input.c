@@ -2221,10 +2221,13 @@ notify_key(struct weston_seat *seat, const struct timespec *time, uint32_t key,
 		return;
 	}
 
-	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-		weston_compositor_idle_inhibit(compositor);
-	} else {
-		weston_compositor_idle_release(compositor);
+	if ((key != KEY_VOLUMEDOWN) && (key != KEY_VOLUMEUP) && (key != KEY_BRIGHTNESSDOWN) &&
+		(key != KEY_BRIGHTNESSUP) ) {
+		if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+			weston_compositor_idle_inhibit(compositor);
+		} else {
+			weston_compositor_idle_release(compositor);
+		}
 	}
 
 	end = keyboard->keys.data + keyboard->keys.size;
