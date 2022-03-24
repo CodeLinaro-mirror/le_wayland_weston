@@ -28,6 +28,42 @@
  * SOFTWARE.
  */
 
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #include "config.h"
 
 #include <errno.h>
@@ -196,6 +232,12 @@ static int
 on_vblank(int fd, uint32_t mask, void *data)
 {
 	struct drm_output *output = (struct drm_output *) data;
+	/* During the initial modeset, we can disable CRTCs which we don't
+	 * actually handle during normal operation; this will give us events
+	 * for unknown outputs. Ignore them. */
+	if (!output || !output->base.enabled)
+		return -1;
+
 	struct drm_backend *b = to_drm_backend(output->base.compositor);;
 	unsigned int sec, usec;
 	uint64_t v = 0;
@@ -226,12 +268,6 @@ on_vblank(int fd, uint32_t mask, void *data)
 			 WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
 			 WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
 
-	/* During the initial modeset, we can disable CRTCs which we don't
-	 * actually handle during normal operation; this will give us events
-	 * for unknown outputs. Ignore them. */
-	if (!output || !output->base.enabled)
-		return;
-
 	if (output->atomic_complete_pending) {
 		drm_output_update_msc(output, output->last_vblank.frame);
 		output->atomic_complete_pending = false;
@@ -244,6 +280,7 @@ on_vblank(int fd, uint32_t mask, void *data)
 	} else {
 		weston_log("%s: Atomic complete pending is not set yet\n", __func__);
 	}
+	return 0;
 }
 
 void
@@ -1926,6 +1963,11 @@ drm_backend_create(struct weston_compositor *compositor,
 		wl_event_loop_add_fd(loop,
 				     udev_monitor_get_fd(b->udev_monitor),
 				     WL_EVENT_READABLE, udev_drm_event, b);
+	if (b->udev_drm_source == NULL) {
+		weston_log("failed to add wl event loop\n");
+		udev_monitor_unref(b->udev_monitor);
+		goto err_drm_source;
+	}
 
 	if (udev_monitor_enable_receiving(b->udev_monitor) < 0) {
 		weston_log("failed to enable udev-monitor receiving\n");

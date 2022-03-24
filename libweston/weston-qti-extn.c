@@ -76,9 +76,7 @@ void set_brightness(struct wl_client *client, struct wl_resource *resource,
 
   struct weston_output *output;
   wl_list_for_each(output, &compositor->output_list, link) {
-    if (output) {
-      output->set_backlight(output, brightness_value);
-    }
+     output->set_backlight(output, brightness_value);
   }
 }
 
