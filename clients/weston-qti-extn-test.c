@@ -107,7 +107,7 @@ long int get_integer_input() {
   }
 
   memset(buffer, 0, MAX_DIGITS);
-  char *bufferptr = fgets(buffer, 10, stdin);
+  char *bufferptr = fgets(buffer, MAX_DIGITS, stdin);
   if (bufferptr == NULL) {
     return integerinput;
   }
