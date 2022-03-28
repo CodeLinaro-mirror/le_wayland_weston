@@ -103,6 +103,7 @@
 #include <pthread.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <cutils/properties.h>
 
 #include "sdm-service/sdm_display.h"
 #include "sdm-service/uevent.h"
@@ -132,6 +133,7 @@ namespace sdm {
 
 #define MAX_PROP_STR_SIZE 64
 #define SDM_NULL_DISPLAY_RESOLUTON_PROP_NAME "weston.sdm.default.resolution"
+#define SDM_ENABLE_SKIP_PREPARE "vendor.display.enable_skip_prepare"
 
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf,
                                          SdmDisplayBufferAllocator *buffer_allocator) {
@@ -158,6 +160,13 @@ const char * SdmDisplay::FourccToString(uint32_t fourcc)
 
 DisplayError SdmDisplay::CreateDisplay() {
     DisplayError error = kErrorNone;
+
+    char property[PROPERTY_VALUE_MAX];
+    property_get(SDM_ENABLE_SKIP_PREPARE, property, "0");
+    if (!(strncmp(property, "0", PROPERTY_VALUE_MAX)) ||
+        !(strncmp(property, "false", PROPERTY_VALUE_MAX))) {
+        disable_skip_prepare_ = 1;
+    }
 
     error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
 
@@ -389,6 +398,7 @@ int SdmDisplay::OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level) {
 }
 
 DisplayError SdmDisplay::FreeLayerStack() {
+    prev_layer_stack_ = layer_stack_;
     for (Layer *layer : layer_stack_.layers) {
 
          layer->visible_regions.erase(layer->visible_regions.begin(),
@@ -887,6 +897,84 @@ static void GetLayerStackDump(void *layerStack, char *buffer, uint32_t length) {
 }
 #endif
 
+bool SdmDisplay::CanSkipPrepare() {
+    if (disable_skip_prepare_) {
+        return false;
+    }
+
+    int prev_layer_count = prev_layer_stack_.layers.size();
+    int curr_layer_count = layer_stack_.layers.size();
+    if (prev_layer_count != curr_layer_count) {
+        return false;
+    }
+
+    if ((prev_layer_stack_.flags.skip_present != layer_stack_.flags.skip_present) ||
+        (prev_layer_stack_.flags.video_present != layer_stack_.flags.video_present) ||
+        (prev_layer_stack_.flags.hdr_present != layer_stack_.flags.hdr_present) ||
+        (prev_layer_stack_.flags.secure_present != layer_stack_.flags.secure_present)) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < curr_layer_count; i++) {
+        Layer *curr_layer = layer_stack_.layers.at(i);
+        Layer *prev_layer = prev_layer_stack_.layers.at(i);
+        LayerBuffer curr_buffer = curr_layer->input_buffer;
+        LayerBuffer prev_buffer = prev_layer->input_buffer;
+        if ((curr_layer->visible_regions.size() != prev_layer->visible_regions.size()) ||
+            (curr_layer->dirty_regions.size() != prev_layer->dirty_regions.size())) {
+            return false;
+        }
+
+        if ((curr_layer->blending != prev_layer->blending) ||
+            (curr_layer->transform != prev_layer->transform) ||
+            (curr_layer->plane_alpha != prev_layer->plane_alpha) ||
+            (curr_layer->flags.skip != prev_layer->flags.skip) ||
+            (curr_layer->frame_rate != prev_layer->frame_rate)) {
+            return false;
+        }
+
+        if ((curr_layer->src_rect != prev_layer->src_rect) ||
+            (curr_layer->dst_rect != prev_layer->dst_rect )) {
+            return false;
+        }
+
+        if ((curr_layer->solid_fill_color != prev_layer->solid_fill_color) ||
+            (curr_layer->solid_fill_info.bit_depth != prev_layer->solid_fill_info.bit_depth) ||
+            (curr_layer->solid_fill_info.red != prev_layer->solid_fill_info.red) ||
+            (curr_layer->solid_fill_info.green != prev_layer->solid_fill_info.green) ||
+            (curr_layer->solid_fill_info.blue != prev_layer->solid_fill_info.blue) ||
+            (curr_layer->solid_fill_info.alpha != prev_layer->solid_fill_info.alpha)) {
+            return false;
+        }
+
+        if ((curr_buffer.width != prev_buffer.width) ||
+            (curr_buffer.height != prev_buffer.height) ||
+            (curr_buffer.unaligned_width != prev_buffer.unaligned_width) ||
+            (curr_buffer.unaligned_height != prev_buffer.unaligned_height) ||
+            (curr_buffer.size != prev_buffer.size) ||
+            (curr_buffer.format != prev_buffer.format)) {
+            return false;
+        }
+
+        if ((curr_buffer.flags.secure != prev_buffer.flags.secure) ||
+            (curr_buffer.flags.video != prev_buffer.flags.video) ||
+            (curr_buffer.flags.hdr != prev_buffer.flags.hdr) ||
+            (curr_buffer.color_metadata.colorPrimaries !=
+                prev_buffer.color_metadata.colorPrimaries) ||
+            (curr_buffer.color_metadata.transfer != prev_buffer.color_metadata.transfer)) {
+            return false;
+        }
+    }
+
+    /*
+        TODO: Add checks for following metadata regarding layers:
+        1. LUT3D
+        2. Color Transform Matrix
+        3. Layer Update Mask
+    */
+    return true;
+}
+
 DisplayError SdmDisplay::Prepare(struct drm_output *output)
 {
     DisplayError error = kErrorNone;
@@ -909,9 +997,11 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
     GetLayerStackDump(&layer_stack_, dump_buffer, sizeof(dump_buffer));
 #endif
 
-    error = display_intf_->Prepare(&layer_stack_);
-    if (error != kErrorNone) {
-        DLOGE("failed during Prepare error:%d\n",error);
+    if (!CanSkipPrepare()) {
+        error = display_intf_->Prepare(&layer_stack_);
+        if (error != kErrorNone) {
+            DLOGE("failed during Prepare");
+        }
     }
 
 #if SDM_DISPLAY_DUMP_LAYER_STACK
