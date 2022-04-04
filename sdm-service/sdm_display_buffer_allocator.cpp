@@ -351,8 +351,20 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
   uint32_t format = GBM_FORMAT_ARGB8888;
   uint64_t flags = 0;
   generic_buf_layout_t buf_layout;
+  *num_planes = 1;
+  offset[0] = 0;
+  stride[0] = 0;
 
   SetBufferInfo(buf_info.format, &format, &flags);
+
+  /* GFX has limitation for 3bpp format buffer size, if use aligned width as gbm bo width, the
+   * new aligned width is increased, then the stride will bigger than correct stride, so
+   * calculate it separately, not use gbm to get it from GFX
+   */
+  if ((format == GBM_FORMAT_BGR888) || (format == GBM_FORMAT_RGB888)) {
+    stride[0] = buf_info.aligned_width * 3;
+    return kErrorNone;
+  }
 
   import_fd_data.fd = buf_info.fd;
   import_fd_data.format = format;
