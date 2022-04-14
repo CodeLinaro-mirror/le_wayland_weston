@@ -28,6 +28,42 @@
  * SOFTWARE.
  */
 
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #include "config.h"
 
 #include <stdint.h>
@@ -506,8 +542,8 @@ drm_fb_get_from_view(struct drm_output *output, struct weston_view *ev)
 	struct weston_buffer *buffer = ev->surface->buffer_ref.buffer;
 	bool is_opaque = weston_view_is_opaque(ev, &ev->transform.boundingbox);
 	struct linux_dmabuf_buffer *dmabuf;
-	struct drm_fb *fb;
-	struct gbm_bo *bo;
+	struct drm_fb *fb = NULL;
+	struct gbm_bo *bo = NULL;
 	struct gbm_buffer *gbmbuf;
 
 	if (ev->alpha != 1.0f)
@@ -560,7 +596,7 @@ drm_fb_get_from_view(struct drm_output *output, struct weston_view *ev)
 	}
 
 	fb = drm_fb_get_from_bo(bo, b, is_opaque, BUFFER_CLIENT);
-	if (!fb) {
+	if (!fb || !fb->format) {
 		gbm_bo_destroy(bo);
 		return NULL;
 	}
