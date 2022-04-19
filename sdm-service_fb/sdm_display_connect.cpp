@@ -170,9 +170,15 @@ int Commit(int display_id, int fd)
 
 int DestroyDisplay(int display_id)
 {
-	display_->DestroyDisplay();
-	delete display_;
-	display_ = NULL;
+    if (!display_) {
+        DLOGW("Display(%d) was already destroyed.", display_id);
+        return kErrorNone;
+    }
+
+    display_->DestroyDisplay();
+    delete display_;
+    display_ = NULL;
+
     return kErrorNone;
 }
 

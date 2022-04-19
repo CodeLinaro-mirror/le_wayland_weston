@@ -130,7 +130,7 @@ static int64_t last_vsync_ns = -1;
 
 static struct gl_renderer_interface *gl_renderer;
 static const char default_seat[] = "seat0";
-static void surface_acquire_buffer(struct fbdev_output *output);
+static int surface_acquire_buffer(struct fbdev_output *output);
 static void surface_release_buffer(struct fbdev_output *output);
 static void surface_create(struct fbdev_output *output, struct fbdev_backend *backend);
 static void create_buff_alloc_device(int fb_fd, struct fbdev_backend * backend);
@@ -274,7 +274,10 @@ fbdev_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 
 	} else {
 		ec->renderer->repaint_output(base, damage);
-		surface_acquire_buffer(output);
+		if (surface_acquire_buffer(output) < 0) {
+			weston_log("Acquire Buffer Failed. Repaint Unsuccessful!\n");
+			return -1;
+		}
 	}
 	/* Update the damage region. */
 		pixman_region32_subtract(&ec->primary_plane.damage,
@@ -476,7 +479,7 @@ fbdev_frame_buffer_open(struct fbdev_output *output, const char *fb_dev,
 	/* Open the frame buffer device. */
 	fd = open(fb_dev, O_RDWR | O_CLOEXEC);
 	if (fd < 0) {
-		weston_log("Failed to open frame buffer device ‘%s’: %s\n",
+		weston_log("Failed to open frame buffer device '%s': %s\n",
 		           fb_dev, strerror(errno));
 		return -1;
 	}
@@ -655,7 +658,7 @@ fbdev_output_enable(struct weston_output *base)
 
 	loop = wl_display_get_event_loop(backend->compositor->wl_display);
 
-	weston_log("fbdev output %d×%d px\n",
+	weston_log("fbdev output %dx%d px\n",
 	           output->mode.width, output->mode.height);
 	weston_log_continue(STAMP_SPACE "guessing %d Hz and 96 dpi\n",
 	                    output->mode.refresh / 1000);
@@ -1197,13 +1200,18 @@ weston_backend_init(struct weston_compositor *compositor,
 	return 0;
 }
 
-static void
+static int
 surface_acquire_buffer(struct fbdev_output *output)
 {
 #ifdef USE_GBM
 	output->buf_alloc.last_bo = output->buf_alloc.current_bo;
 	output->buf_alloc.current_bo = gbm_surface_lock_front_buffer(output->buf_alloc.surface);
+	if (!output->buf_alloc.current_bo) {
+		weston_log("Failed to acquire front buffer\n");
+		return -1;
+	}
 #endif
+	return 0;
 }
 
 static void
@@ -1299,16 +1307,26 @@ fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 static void
 switch_display(int old_disp_id, int new_disp_id,
 			struct weston_output * output,
-			struct fbdev_backend *backend, const char * new_node)
+			struct fbdev_backend *backend, const char * new_node, int is_new)
 {
-	DestroyDisplay(PRIMARY_DISPLAY_ID);
-	CreateDisplay(SECONDARY_DISPLAY_ID);
-	display_id = SECONDARY_DISPLAY_ID;
-	if (init_egl(backend) < 0) {
-		weston_log("failed to initialize egl \n");
+	DestroyDisplay(old_disp_id);
+	CreateDisplay(new_disp_id);
+	weston_log("switch display (%d)->(%d) is_new(%d)\n", old_disp_id, new_disp_id, is_new);
+	display_id = new_disp_id;
+
+	if (is_new) {
+		if (init_egl(backend) < 0) {
+			weston_log("failed to initialize egl\n");
+		}
+		weston_log("create output(%s)\n",new_node);
+		fbdev_output_create(backend, new_node);
+	} else {
+		weston_log("update output\n");
+		fbdev_output_update(output, new_node);
+		fbdev_output_enable(output);
 	}
-	fbdev_output_create(backend, SECONDARY_DISPLAY_NODE);
-	/*turn on vsync for new display*/
+
+	/*turn on vsync for ext display*/
 	SetVSyncState(true);
 	RegisterVSyncCb(display_id, vsync_handler);
 }
@@ -1318,19 +1336,25 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 {
 	struct fbdev_backend *b = data;
 	struct udev_device *dev;
-
+	static bool first_time = true;
 	dev = udev_monitor_receive_device(b->udev_monitor);
+	bool connected = ReadHDMISysfs();
 	if (udev_event_is_hotplug(b, dev)) {
-		if(b->secondary_connected) {
-			return 1;
-		}
-		bool connected = ReadHDMISysfs();
-		if (connected) {
+		if (!first_time && !connected) {
 			switch_display(SECONDARY_DISPLAY_ID, PRIMARY_DISPLAY_ID,
-						&b->output->base, b, PRIMARY_DISPLAY_NODE);
+						&b->output->base, b, PRIMARY_DISPLAY_NODE, false);
+			weston_compositor_schedule_repaint(b->compositor);
+			b->secondary_connected = false;
+			weston_log("HDMI is disconnected\n");
+		}
+
+		if (connected) {
+			switch_display(PRIMARY_DISPLAY_ID, SECONDARY_DISPLAY_ID,
+						&b->output->base, b, SECONDARY_DISPLAY_NODE, first_time);
 			weston_compositor_schedule_repaint(b->compositor);
 			b->secondary_connected = true;
-			weston_log("HDMI is connected \n");
+			first_time = false;
+			weston_log("HDMI is connected\n");
 		}
 	}
 	udev_device_unref(dev);

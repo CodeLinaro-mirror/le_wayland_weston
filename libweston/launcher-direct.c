@@ -303,7 +303,9 @@ launcher_direct_destroy(struct weston_launcher *launcher_base)
 	struct launcher_direct *launcher = wl_container_of(launcher_base, launcher, base);
 
 	launcher_direct_restore(&launcher->base);
-	wl_event_source_remove(launcher->vt_source);
+
+	if(launcher->vt_source)
+		wl_event_source_remove(launcher->vt_source);
 
 	if (launcher->tty >= 0)
 		close(launcher->tty);
