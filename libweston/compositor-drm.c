@@ -903,7 +903,7 @@ drm_output_repaint(struct weston_output *output_base,
 	if (drmModePageFlip(backend->drm.fd, output->crtc_id,
 			    output->fb_pending->fb_id,
 			    DRM_MODE_PAGE_FLIP_EVENT, output) < 0) {
-		weston_log("queueing pageflip failed: %m\n");
+		weston_log("queueing pageflip failed(%d): %m\n", output->crtc_id);
 		goto err_pageflip;
 	}
 
@@ -2846,6 +2846,7 @@ create_output_for_connector(struct drm_backend *b,
 					   connector->connector_type);
 
 	output->original_crtc = drmModeGetCrtc(b->drm.fd, output->crtc_id);
+	output->restore_crtc = NULL;
 
 	output->base.enable = drm_output_enable;
 	output->base.destroy = drm_output_destroy;
@@ -2992,6 +2993,60 @@ create_outputs(struct drm_backend *b, struct udev_device *drm_device)
 	return 0;
 }
 
+static int drm_output_plugout(struct weston_output *base)
+{
+	struct drm_output *output = to_drm_output(base);
+	struct drm_backend *b = to_drm_backend(base->compositor);
+	drmModeCrtcPtr tempcrtc;
+	int ret;
+
+	if (!output->restore_crtc) {
+		output->disable_pending = 1;
+		output->restore_crtc = drmModeGetCrtc(b->drm.fd, output->crtc_id);
+		tempcrtc = output->restore_crtc;
+
+		ret = drmModeSetCrtc(b->drm.fd, output->crtc_id,
+				0, 0, 0, 0, 0, NULL);
+		if (ret) {
+			weston_log("plugin restore err crtc(%d) buf_id(%d) ret(%d)\n",
+				tempcrtc->crtc_id, tempcrtc->buffer_id, ret);
+			return ret;
+		}
+
+		drm_set_dpms(base, WESTON_DPMS_OFF);
+	}
+
+	return 0;
+}
+
+static int drm_output_plugin(struct weston_output *base)
+{
+	struct drm_output *output = to_drm_output(base);
+	struct drm_backend *b = to_drm_backend(base->compositor);
+	drmModeCrtcPtr tempcrtc;
+	int ret;
+
+	if (output->restore_crtc && (output->dpms != WESTON_DPMS_ON)) {
+		tempcrtc = output->restore_crtc;
+
+		drm_set_dpms(base, WESTON_DPMS_ON);
+
+		ret = drmModeSetCrtc(b->drm.fd, tempcrtc->crtc_id, tempcrtc->buffer_id,
+			tempcrtc->x, tempcrtc->y,
+			&output->connector_id, 1, &tempcrtc->mode);
+		if (ret) {
+			weston_log("plugin restore err crtc(%d) buf_id(%d) ret(%d)\n",
+				tempcrtc->crtc_id, tempcrtc->buffer_id, ret);
+			return ret;
+		}
+
+		output->restore_crtc = NULL;
+		output->disable_pending = 0;
+	}
+
+	return 0;
+}
+
 static void
 update_outputs(struct drm_backend *b, struct udev_device *drm_device)
 {
@@ -3057,14 +3112,8 @@ update_outputs(struct drm_backend *b, struct udev_device *drm_device)
 		}
 
 		if (!disconnected) {
-			drmModeCrtcPtr tempcrtc;
-			if (output->restore_crtc) {
-				tempcrtc = output->restore_crtc;
-				weston_log("enabling port %s\n", output->base.name);
-				drmModeSetCrtc(b->drm.fd, tempcrtc->crtc_id, tempcrtc->buffer_id,
-				       tempcrtc->x, tempcrtc->y,
-				       &output->connector_id, 1, &tempcrtc->mode);
-			}
+			weston_log("enabling port(%s), crtc(%d)\n", output->base.name, output->crtc_id);
+			drm_output_plugin(&output->base);
 			continue;
 		}
 
@@ -3072,11 +3121,8 @@ update_outputs(struct drm_backend *b, struct udev_device *drm_device)
 		weston_log("connector %d disconnected\n", output->connector_id);
 		drm_output_destroy(&output->base);
 #endif
-		weston_log("Disabling port %s\n", output->base.name);
-		output->restore_crtc = drmModeGetCrtc(b->drm.fd, output->crtc_id);
-		drmModeSetCrtc(b->drm.fd, output->crtc_id,
-			0, 0, 0, 0, 0, NULL);
-
+		weston_log("disabling port(%s), crtc(%d)\n", output->base.name, output->crtc_id);
+		drm_output_plugout(&output->base);
 	}
 
 	wl_list_for_each_safe(output, next, &b->compositor->pending_output_list,
@@ -3097,10 +3143,8 @@ update_outputs(struct drm_backend *b, struct udev_device *drm_device)
 		weston_log("connector %d disconnected\n", output->connector_id);
 		drm_output_destroy(&output->base);
 #endif
-		weston_log("Disabling port %s\n", output->base.name);
-		output->restore_crtc = drmModeGetCrtc(b->drm.fd, output->crtc_id);
-		drmModeSetCrtc(b->drm.fd, output->crtc_id,
-			0, 0, 0, 0, 0, NULL);
+		weston_log("disabling pending port(%s), crtc(%d)\n", output->base.name, output->crtc_id);
+		drm_output_plugout(&output->base);
 	}
 
 	free(connected);
