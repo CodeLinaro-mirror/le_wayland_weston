@@ -3326,6 +3326,8 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 		{ WESTON_OPTION_STRING, "flight-rec-scopes", 'f', &flight_rec_scopes },
 	};
 
+	weston_place_marker("W - weston main begin");
+
 	wl_list_init(&wet.layoutput_list);
 
 	os_fd_set_cloexec(fileno(stdin));

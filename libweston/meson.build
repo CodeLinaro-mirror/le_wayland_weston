@@ -199,7 +199,7 @@ lib_session_helper = static_library(
 	srcs_session_helper,
 	include_directories: common_inc,
 	dependencies: deps_session_helper,
-	install: false
+	install: true
 )
 dep_session_helper = declare_dependency(link_with: lib_session_helper)
 
@@ -216,7 +216,7 @@ lib_libinput_backend = static_library(
 		dependency('libudev', version: '>= 136')
 	],
 	include_directories: common_inc,
-	install: false
+	install: true
 )
 dep_libinput_backend = declare_dependency(
 	link_with: lib_libinput_backend,
@@ -246,6 +246,15 @@ if get_option('deprecated-weston-launch')
 
 	meson.add_install_script('echo', 'REMINDER: You are installing weston-launch, please make it setuid-root.')
 endif
+
+install_headers(
+	'backend.h',
+	'libinput-seat.h',
+	'libweston-internal.h',
+	'linux-dmabuf.h',
+	'color.h',
+	subdir: dir_include_libweston_private_install
+)
 
 subdir('color-lcms')
 subdir('renderer-gl')

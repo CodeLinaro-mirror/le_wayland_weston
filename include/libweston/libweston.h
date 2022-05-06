@@ -68,6 +68,11 @@ struct weston_point2d_device_normalized {
 	double y;
 };
 
+struct surface_color {
+	bool is_pended;
+	float red, blue, green, alpha;
+};
+
 struct weston_surface;
 struct weston_buffer;
 struct shell_surface;
@@ -373,6 +378,8 @@ struct weston_output {
 
 	bool enabled; /**< is in the output_list, not pending list */
 	int scale;
+	/* Indicate current repainting need gpu do compositon. */
+	bool need_gpu_composition;
 
 	struct weston_color_profile *color_profile;
 	struct weston_color_transform *from_sRGB_to_output;
@@ -1369,6 +1376,9 @@ struct weston_view {
 	uint32_t psf_flags;
 
 	bool is_mapped;
+
+	/* Indicate if this view is completely covered by above opaque regions. */
+	bool is_completely_covered;
 };
 
 struct weston_surface_state {
@@ -1538,6 +1548,7 @@ struct weston_surface {
 
 	/* An list of per seat pointer constraints. */
 	struct wl_list pointer_constraints;
+	struct surface_color surf_color;
 
 	/* zwp_surface_synchronization_v1 resource for this surface */
 	struct wl_resource *synchronization_resource;
@@ -1905,6 +1916,9 @@ weston_log(const char *fmt, ...)
 int
 weston_log_continue(const char *fmt, ...)
 	__attribute__ ((format (printf, 1, 2)));
+
+void
+weston_place_marker(const char *name);
 
 enum weston_screenshooter_outcome {
 	WESTON_SCREENSHOOTER_SUCCESS,

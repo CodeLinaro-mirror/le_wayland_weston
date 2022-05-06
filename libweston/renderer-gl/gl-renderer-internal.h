@@ -112,6 +112,9 @@ struct gl_renderer {
 	EGLContext egl_context;
 	EGLConfig egl_config;
 
+	/* gbm device handle*/
+	struct gbm_device *gbm_hdle;
+
 	EGLSurface dummy_surface;
 
 	uint32_t gl_version;

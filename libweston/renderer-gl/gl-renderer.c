@@ -61,6 +61,8 @@
 #include "shared/weston-drm-fourcc.h"
 #include "shared/weston-egl-ext.h"
 
+#include "gbm_priv.h"
+
 #define BUFFER_DAMAGE_COUNT 2
 
 enum gl_border_status {
@@ -119,6 +121,7 @@ struct egl_image {
 	struct gl_renderer *renderer;
 	EGLImageKHR image;
 	int refcount;
+	bool is_secure; // whether image is protected
 };
 
 enum import_type {
@@ -1134,15 +1137,142 @@ out:
 }
 
 static void
+gl_renderer_surface_set_color(struct weston_surface *surface,
+		 float red, float green, float blue, float alpha);
+
+/* clear_paint_node: It composes onto GPU composed layer a clear transparent
+					 bounding box of the size same as that of overlay layer
+					 to allow overlay plane to be visible through the GPU
+					 composed layer.
+   Inputs:
+					 struct weston_paint_node *pnode	  : weston paint node
+					 pixman_region32_t	*damage
+   Output:
+					 GPU composed layer pnode->surface will have a clear
+					 transparent bounding box with alpha = 0 and all
+					 3 color channels also equal to 0.
+
+ * For more details of changing from weston_view to weston_paint_node, refers to
+   https://gitlab.freedesktop.org/wayland/weston/-/commit/da0f7ea4a7539e3d4fcd21d87303412a060aa6c8
+*/
+static void
+clear_paint_node(struct weston_paint_node *pnode,
+	   pixman_region32_t *damage) /* in global coordinates */
+{
+	struct gl_renderer *gr = get_renderer(pnode->surface->compositor);
+	struct gl_surface_state *gs = get_surface_state(pnode->surface);
+	/* repaint bounding region in global coordinates: */
+	pixman_region32_t repaint;
+	/* non-opaque region in surface coordinates: */
+	pixman_region32_t surface_blend;
+	GLint filter;
+	enum gl_shader_texture_variant shader_variant;
+	int pitch, height;
+	enum buffer_type buffer_type;
+
+	if (gs->shader_variant == SHADER_VARIANT_NONE && !gs->direct_display)
+		return;
+
+	/* gl_renderer_surface_set_color() called below will reset the surface_state,
+	 * so we save the original ones here. */
+	shader_variant = gs->shader_variant;
+	buffer_type =  gs->buffer_type;
+	pitch = gs->pitch;
+	height = gs->height;
+
+	pixman_region32_init(&repaint);
+	pixman_region32_intersect(&repaint, &pnode->view->transform.boundingbox, damage);
+	pixman_region32_subtract(&repaint, &repaint, &pnode->view->clip);
+
+	if (!pixman_region32_not_empty(&repaint))
+		goto out_clear_paint_node;
+
+	glDisable(GL_BLEND);
+	gl_renderer_surface_set_color(pnode->surface, 0.0f, 0.0f, 0.0f, 0.0f);
+
+	if (pnode->view->transform.enabled || pnode->output->zoom.active ||
+	    pnode->output->current_scale != pnode->surface->buffer_viewport.buffer.scale)
+		filter = GL_LINEAR;
+	else
+		filter = GL_NEAREST;
+
+	struct gl_shader_config sconf;
+	if (!gl_shader_config_init_for_paint_node(&sconf, pnode, filter))
+		goto out_clear_paint_node;
+	maybe_censor_override(&sconf, pnode->output, pnode->view);
+
+	struct gl_shader_config alt = sconf;
+
+	pixman_region32_init_rect(&surface_blend, 0, 0,
+				pnode->surface->width, pnode->surface->height);
+	repaint_region(gr, pnode->view, pnode->output, &repaint, &surface_blend, &alt);
+
+	pixman_region32_fini(&surface_blend);
+
+	/* restore gs setting */
+	gs->shader_variant = shader_variant;
+	gs->buffer_type = buffer_type;
+	gs->pitch = pitch;
+	gs->height = height;
+
+out_clear_paint_node:
+	pixman_region32_fini(&repaint);
+}
+
+static void
+draw_paint_node_overlay(struct weston_paint_node *pnode, pixman_region32_t *damage,
+				bool have_primary_view)
+{
+	pixman_region32_t r;
+
+	/* The invisible layer could be marked as SDE by strategy, which means both gpu
+	 * and MDP could ignore this kind of view, no hardware pipe for it. But the buffer
+	 * could be NULL in this case, add this judgement to avoid crash.
+	 */
+	if (pnode->surface->buffer_ref.buffer == NULL) {
+	/* TODO: check why it's happen since invisible layers should be handled
+	 * by view->is_completely_covered.
+	 */
+		return;
+	}
+	/* this view is composed directly by overlay */
+	/* compute whether this view has blending */
+	pixman_region32_init_rect(&r, 0, 0, pnode->surface->width,
+			pnode->surface->height);
+	pixman_region32_subtract(&r, &r, &pnode->surface->opaque);
+
+	/* only can clear view by meeting all the three conditions:
+	 * 1, have views on primary plane. If none of views composed by gpu,
+	 * don't clear framebuffer becuase it had been cleared before.
+	 * 2, the whole surface region is opaque.
+	 * 3, global alpha value is 1.
+	 */
+	if (have_primary_view && !pixman_region32_not_empty(&r) &&
+			(pnode->view->alpha == 1)) {
+	/* clear framebuffer with transparent pixels where this layer would be*/
+		clear_paint_node(pnode, damage);
+	}
+	pixman_region32_fini(&r);
+}
+
+static void
 repaint_views(struct weston_output *output, pixman_region32_t *damage)
 {
 	struct weston_compositor *compositor = output->compositor;
 	struct weston_paint_node *pnode;
+	bool have_primary_view = false;
+	struct linux_dmabuf_buffer *dmabuf;
 
 	wl_list_for_each_reverse(pnode, &output->paint_node_z_order_list,
 				 z_order_link) {
-		if (pnode->view->plane == &compositor->primary_plane)
+		if (pnode->view->is_completely_covered)
+			continue;
+		if (pnode->view->plane == &compositor->primary_plane) {
+			have_primary_view = true;
 			draw_paint_node(pnode, damage);
+		} else {
+			draw_paint_node_overlay(pnode, damage, have_primary_view);
+		}
 	}
 }
 
@@ -1647,6 +1777,12 @@ gl_renderer_repaint_output(struct weston_output *output,
 
 	go->begin_render_sync = create_render_sync(gr);
 
+	/* Clear all unknown regions */
+	if (output->need_gpu_composition) {
+		glClearColor(0,0,0,0);
+		glClear(GL_COLOR_BUFFER_BIT);
+	}
+
 	/* Calculate the global GL matrix */
 	go->output_matrix = output->matrix;
 	weston_matrix_translate(&go->output_matrix,
@@ -2139,6 +2275,37 @@ unsupported:
 	}
 }
 
+static bool
+surface_buffer_is_secure(struct weston_surface *es, struct gbm_device *gbm_dev)
+{
+	struct gbm_bo* gbm_bo_ptr;
+	int secure_status, result;
+	bool is_secure_buffer = false;
+
+	gbm_bo_ptr = gbm_bo_import(
+			gbm_dev,
+			GBM_BO_IMPORT_GBM_BUF_TYPE,
+			wl_resource_get_user_data(es->buffer_ref.buffer->resource),
+			GBM_BO_USE_SCANOUT);
+	if (NULL == gbm_bo_ptr) {
+		weston_log("GBM_BO_IMPORT_GBM_BUF_TYPE failed\n");
+	} else {
+		result = gbm_perform(
+				GBM_PERFORM_GET_METADATA,
+				gbm_bo_ptr,
+				GBM_METADATA_GET_SECURE_BUF_STAT,
+				&secure_status);
+		if (GBM_ERROR_NONE == result) {
+			is_secure_buffer = (bool)secure_status;
+		} else {
+			weston_log("GBM_METADATA_GET_SECURE_BUF_STAT failed: %d\n", result);
+		}
+		gbm_bo_destroy(gbm_bo_ptr);
+	}
+
+	return is_secure_buffer;
+}
+
 static void
 gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 		       uint32_t format)
@@ -2146,9 +2313,10 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 	struct weston_compositor *ec = es->compositor;
 	struct gl_renderer *gr = get_renderer(ec);
 	struct gl_surface_state *gs = get_surface_state(es);
-	EGLint attribs[5];
+	EGLint attribs[7];
 	GLenum target;
 	int i, num_planes;
+	bool is_secure_buffer;
 
 	buffer->legacy_buffer = (struct wl_buffer *)buffer->resource;
 	gr->query_buffer(gr->egl_display, buffer->legacy_buffer,
@@ -2196,12 +2364,20 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 	gs->num_images = num_planes;
 	target = gl_shader_texture_variant_get_target(gs->shader_variant);
 	ensure_textures(gs, target, num_planes);
+
+	is_secure_buffer = surface_buffer_is_secure(es, gr->gbm_hdle);
+
 	for (i = 0; i < num_planes; i++) {
-		attribs[0] = EGL_WAYLAND_PLANE_WL;
-		attribs[1] = i;
-		attribs[2] = EGL_IMAGE_PRESERVED_KHR;
-		attribs[3] = EGL_TRUE;
-		attribs[4] = EGL_NONE;
+		int atti = 0;
+		attribs[atti++] = EGL_WAYLAND_PLANE_WL;
+		attribs[atti++] = i;
+		attribs[atti++] = EGL_IMAGE_PRESERVED_KHR;
+		attribs[atti++] = EGL_TRUE;
+		if (is_secure_buffer) {
+			attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
+			attribs[atti++] = EGL_TRUE;
+		}
+		attribs[atti++] = EGL_NONE;
 
 		gs->images[i] = egl_image_create(gr,
 						 EGL_WAYLAND_BUFFER_WL,
@@ -2215,6 +2391,11 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 		glActiveTexture(GL_TEXTURE0 + i);
 		glBindTexture(target, gs->textures[i]);
 		gr->image_target_texture_2d(target, gs->images[i]->image);
+
+		if (is_secure_buffer) {
+			gs->images[i]->is_secure = true;
+			glTexParameteri(target, GL_TEXTURE_PROTECTED_EXT, GL_TRUE);
+		}
 	}
 
 	gs->pitch = buffer->width;
@@ -3224,6 +3405,22 @@ gl_renderer_create_surface(struct weston_surface *surface)
 	if (surface->buffer_ref.buffer) {
 		gl_renderer_attach(surface, surface->buffer_ref.buffer);
 		gl_renderer_flush_damage(surface);
+	} else if (surface->surf_color.is_pended) {
+		/*
+		 * if weston_surface_set_color is called before
+		 * gl renderer is initialized, surface color is stored
+		 * in surf_color and is_pended is set to true. Here,
+		 * gs color is set accordingly.
+		 */
+		gs->color[0] = surface->surf_color.red;
+		gs->color[1] = surface->surf_color.green;
+		gs->color[2] = surface->surf_color.blue;
+		gs->color[3] = surface->surf_color.alpha;
+		gs->buffer_type = BUFFER_TYPE_SOLID;
+		gs->pitch = 1;
+		gs->height = 1;
+		gs->shader_variant = SHADER_VARIANT_SOLID;
+		surface->surf_color.is_pended = false;
 	}
 
 	return 0;
@@ -3327,8 +3524,24 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 				  const uint32_t *drm_formats,
 				  unsigned drm_formats_count)
 {
+	static bool firstCreateWin = true;
+	if (firstCreateWin)
+	{
+		weston_place_marker("G - first create window start");
+	}
+
 	EGLSurface egl_surface = EGL_NO_SURFACE;
 	EGLConfig egl_config;
+
+	int atti = 0;
+	EGLint attribs[3];
+	int is_secure_surface = 0;
+	gbm_perform(GBM_PERFORM_GET_SURFACE_SECURE_STATUS, (struct gbm_surface *)window_for_platform, &is_secure_surface);
+	if (is_secure_surface) {
+		attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
+		attribs[atti++] = EGL_TRUE;
+	}
+	attribs[atti++] = EGL_NONE;
 
 	egl_config = gl_renderer_get_egl_config(gr, EGL_WINDOW_BIT,
 						drm_formats, drm_formats_count);
@@ -3341,11 +3554,17 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 		egl_surface = gr->create_platform_window(gr->egl_display,
 							 egl_config,
 							 window_for_platform,
-							 NULL);
+							 attribs);
 	else
 		egl_surface = eglCreateWindowSurface(gr->egl_display,
 						     egl_config,
-						     window_for_legacy, NULL);
+						     window_for_legacy, attribs);
+
+	if (firstCreateWin)
+	{
+		weston_place_marker("G - first create window end");
+		firstCreateWin = false;
+	}
 
 	return egl_surface;
 }
@@ -3651,6 +3870,12 @@ gl_renderer_display_create(struct weston_compositor *ec,
 	struct gl_renderer *gr;
 	int ret;
 
+	static bool firstCreateDisplay = true;
+	if (firstCreateDisplay)
+	{
+		weston_place_marker("G - setup egl start");
+	}
+
 	gr = zalloc(sizeof *gr);
 	if (gr == NULL)
 		return -1;
@@ -3658,6 +3883,9 @@ gl_renderer_display_create(struct weston_compositor *ec,
 	gr->compositor = ec;
 	wl_list_init(&gr->shader_list);
 	gr->platform = options->egl_platform;
+
+	//gbm device handle
+	gr->gbm_hdle =(struct gbm_device *)options->egl_native_display;
 
 	gr->shader_scope = gl_shader_scope_create(gr);
 	if (!gr->shader_scope)
@@ -3703,6 +3931,12 @@ gl_renderer_display_create(struct weston_compositor *ec,
 			weston_log("failed to choose EGL config\n");
 			goto fail_terminate;
 		}
+	}
+
+	if (firstCreateDisplay)
+	{
+		weston_place_marker("G - setup egl end");
+		firstCreateDisplay = false;
 	}
 
 	ec->capabilities |= WESTON_CAP_ROTATION_ANY;
@@ -3867,6 +4101,11 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	if (gr->has_context_priority) {
 		context_attribs[nattr++] = EGL_CONTEXT_PRIORITY_LEVEL_IMG;
 		context_attribs[nattr++] = EGL_CONTEXT_PRIORITY_HIGH_IMG;
+	}
+
+	if (property_get_bool("weston.protected_context", false)) {
+		context_attribs[nattr++] = EGL_PROTECTED_CONTENT_EXT;
+		context_attribs[nattr++] = EGL_TRUE;
 	}
 
 	assert(nattr < ARRAY_LENGTH(context_attribs));
