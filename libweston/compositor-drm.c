@@ -3013,7 +3013,6 @@ static int drm_output_plugout(struct weston_output *base)
 			return ret;
 		}
 
-		drm_set_dpms(base, WESTON_DPMS_OFF);
 	}
 
 	return 0;
@@ -3026,10 +3025,8 @@ static int drm_output_plugin(struct weston_output *base)
 	drmModeCrtcPtr tempcrtc;
 	int ret;
 
-	if (output->restore_crtc && (output->dpms != WESTON_DPMS_ON)) {
+	if (output->restore_crtc) {
 		tempcrtc = output->restore_crtc;
-
-		drm_set_dpms(base, WESTON_DPMS_ON);
 
 		ret = drmModeSetCrtc(b->drm.fd, tempcrtc->crtc_id, tempcrtc->buffer_id,
 			tempcrtc->x, tempcrtc->y,
