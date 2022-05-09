@@ -626,7 +626,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
 	} else if (strcmp(interface, "xdg_wm_base") == 0) {
 		d->wm_base = wl_registry_bind(registry,
 					      id, &xdg_wm_base_interface, 1);
-		if (d->wm_base) {
+		if (!d->wm_base) {
 			fprintf(stderr, "d->wm_base is NULL\n");
 			return;
 		}
