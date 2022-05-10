@@ -33,18 +33,14 @@
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
-#include <drm_fourcc.h>
 
 #include <libweston/libweston.h>
 #include <libweston/backend-drm.h>
 #include "shared/helpers.h"
+#include "shared/weston-drm-fourcc.h"
 #include "drm-internal.h"
 #include "pixel-formats.h"
 #include "presentation-time-server-protocol.h"
-
-#ifndef DRM_FORMAT_MOD_LINEAR
-#define DRM_FORMAT_MOD_LINEAR 0
-#endif
 
 struct drm_property_enum_info plane_type_enums[] = {
 	[WDRM_PLANE_TYPE_PRIMARY] = {
@@ -437,12 +433,14 @@ drm_plane_populate_formats(struct drm_plane *plane, const drmModePlane *kplane,
 			   const drmModeObjectProperties *props,
 			   const bool use_modifiers)
 {
-	unsigned i;
-	drmModePropertyBlobRes *blob;
+	unsigned i, j;
+	drmModePropertyBlobRes *blob = NULL;
 	struct drm_format_modifier_blob *fmt_mod_blob;
 	struct drm_format_modifier *blob_modifiers;
 	uint32_t *blob_formats;
 	uint32_t blob_id;
+	struct weston_drm_format *fmt;
+	int ret = 0;
 
 	if (!use_modifiers)
 		goto fallback;
@@ -461,20 +459,15 @@ drm_plane_populate_formats(struct drm_plane *plane, const drmModePlane *kplane,
 	blob_formats = formats_ptr(fmt_mod_blob);
 	blob_modifiers = modifiers_ptr(fmt_mod_blob);
 
-	if (plane->count_formats != fmt_mod_blob->count_formats) {
-		weston_log("DRM backend: format count differs between "
-		           "plane (%d) and IN_FORMATS (%d)\n",
-			   plane->count_formats,
-			   fmt_mod_blob->count_formats);
-		weston_log("This represents a kernel bug; Weston is "
-			   "unable to continue.\n");
-		abort();
-	}
+	assert(kplane->count_formats == fmt_mod_blob->count_formats);
 
 	for (i = 0; i < fmt_mod_blob->count_formats; i++) {
-		uint32_t count_modifiers = 0;
-		uint64_t *modifiers = NULL;
-		unsigned j;
+		fmt = weston_drm_format_array_add_format(&plane->formats,
+							 blob_formats[i]);
+		if (!fmt) {
+			ret = -1;
+			goto out;
+		}
 
 		for (j = 0; j < fmt_mod_blob->count_modifiers; j++) {
 			struct drm_format_modifier *mod = &blob_modifiers[j];
@@ -484,38 +477,30 @@ drm_plane_populate_formats(struct drm_plane *plane, const drmModePlane *kplane,
 			if (!(mod->formats & (1 << (i - mod->offset))))
 				continue;
 
-			modifiers = realloc(modifiers,
-					    (count_modifiers + 1) *
-					     sizeof(modifiers[0]));
-			assert(modifiers);
-			modifiers[count_modifiers++] = mod->modifier;
+			ret = weston_drm_format_add_modifier(fmt, mod->modifier);
+			if (ret < 0)
+				goto out;
 		}
 
-		if (count_modifiers == 0) {
-			modifiers = malloc(sizeof(*modifiers));
-			*modifiers = DRM_FORMAT_MOD_LINEAR;
-			count_modifiers = 1;
-		}
-
-		plane->formats[i].format = blob_formats[i];
-		plane->formats[i].modifiers = modifiers;
-		plane->formats[i].count_modifiers = count_modifiers;
+		if (fmt->modifiers.size == 0)
+			weston_drm_format_array_remove_latest_format(&plane->formats);
 	}
 
+out:
 	drmModeFreePropertyBlob(blob);
-
-	return 0;
+	return ret;
 
 fallback:
 	/* No IN_FORMATS blob available, so just use the old. */
-	assert(plane->count_formats == kplane->count_formats);
 	for (i = 0; i < kplane->count_formats; i++) {
-		plane->formats[i].format = kplane->formats[i];
-		plane->formats[i].modifiers = malloc(sizeof(uint64_t));
-		plane->formats[i].modifiers[0] = DRM_FORMAT_MOD_LINEAR;
-		plane->formats[i].count_modifiers = 1;
+		fmt = weston_drm_format_array_add_format(&plane->formats,
+							 kplane->formats[i]);
+		if (!fmt)
+			return -1;
+		ret = weston_drm_format_add_modifier(fmt, DRM_FORMAT_MOD_INVALID);
+		if (ret < 0)
+			return -1;
 	}
-
 	return 0;
 }
 
@@ -533,7 +518,7 @@ drm_output_set_gamma(struct weston_output *output_base,
 		return;
 
 	rc = drmModeCrtcSetGamma(backend->drm.fd,
-				 output->crtc_id,
+				 output->crtc->crtc_id,
 				 size, r, g, b);
 	if (rc)
 		weston_log("set gamma failed: %s\n", strerror(errno));
@@ -568,7 +553,8 @@ drm_output_assign_state(struct drm_output_state *state,
 	output->state_cur = state;
 
 	if (b->atomic_modeset && mode == DRM_STATE_APPLY_ASYNC) {
-		drm_debug(b, "\t[CRTC:%u] setting pending flip\n", output->crtc_id);
+		drm_debug(b, "\t[CRTC:%u] setting pending flip\n",
+			  output->crtc->crtc_id);
 		output->atomic_complete_pending = true;
 	}
 
@@ -608,6 +594,7 @@ drm_output_set_cursor(struct drm_output_state *output_state)
 {
 	struct drm_output *output = output_state->output;
 	struct drm_backend *b = to_drm_backend(output->base.compositor);
+	struct drm_crtc *crtc = output->crtc;
 	struct drm_plane *plane = output->cursor_plane;
 	struct drm_plane_state *state;
 	uint32_t handle;
@@ -622,7 +609,7 @@ drm_output_set_cursor(struct drm_output_state *output_state)
 	if (!state->fb) {
 		pixman_region32_fini(&plane->base.damage);
 		pixman_region32_init(&plane->base.damage);
-		drmModeSetCursor(b->drm.fd, output->crtc_id, 0, 0, 0);
+		drmModeSetCursor(b->drm.fd, crtc->crtc_id, 0, 0, 0);
 		return;
 	}
 
@@ -631,7 +618,7 @@ drm_output_set_cursor(struct drm_output_state *output_state)
 
 	handle = output->gbm_cursor_handle[output->current_cursor];
 	if (plane->state_cur->fb != state->fb) {
-		if (drmModeSetCursor(b->drm.fd, output->crtc_id, handle,
+		if (drmModeSetCursor(b->drm.fd, crtc->crtc_id, handle,
 				     b->cursor_width, b->cursor_height)) {
 			weston_log("failed to set cursor: %s\n",
 				   strerror(errno));
@@ -642,7 +629,7 @@ drm_output_set_cursor(struct drm_output_state *output_state)
 	pixman_region32_fini(&plane->base.damage);
 	pixman_region32_init(&plane->base.damage);
 
-	if (drmModeMoveCursor(b->drm.fd, output->crtc_id,
+	if (drmModeMoveCursor(b->drm.fd, crtc->crtc_id,
 	                      state->dest_x, state->dest_y)) {
 		weston_log("failed to move cursor: %s\n", strerror(errno));
 		goto err;
@@ -652,7 +639,7 @@ drm_output_set_cursor(struct drm_output_state *output_state)
 
 err:
 	b->cursors_are_broken = true;
-	drmModeSetCursor(b->drm.fd, output->crtc_id, 0, 0, 0);
+	drmModeSetCursor(b->drm.fd, crtc->crtc_id, 0, 0, 0);
 }
 
 static int
@@ -661,6 +648,7 @@ drm_output_apply_state_legacy(struct drm_output_state *state)
 	struct drm_output *output = state->output;
 	struct drm_backend *backend = to_drm_backend(output->base.compositor);
 	struct drm_plane *scanout_plane = output->scanout_plane;
+	struct drm_crtc *crtc = output->crtc;
 	struct drm_property_info *dpms_prop;
 	struct drm_plane_state *scanout_state;
 	struct drm_mode *mode;
@@ -673,7 +661,7 @@ drm_output_apply_state_legacy(struct drm_output_state *state)
 
 	wl_list_for_each(head, &output->base.head_list, base.output_link) {
 		assert(n_conn < MAX_CLONED_CONNECTORS);
-		connectors[n_conn++] = head->connector_id;
+		connectors[n_conn++] = head->connector.connector_id;
 	}
 
 	/* If disable_planes is set then assign_planes() wasn't
@@ -681,7 +669,7 @@ drm_output_apply_state_legacy(struct drm_output_state *state)
 	 * cursor plane set up.
 	 */
 	if (output->base.disable_planes) {
-		output->cursor_view = NULL;
+		drm_output_set_cursor_view(output, NULL);
 		if (output->cursor_plane) {
 			output->cursor_plane->base.x = INT32_MIN;
 			output->cursor_plane->base.y = INT32_MIN;
@@ -690,14 +678,14 @@ drm_output_apply_state_legacy(struct drm_output_state *state)
 
 	if (state->dpms != WESTON_DPMS_ON) {
 		if (output->cursor_plane) {
-			ret = drmModeSetCursor(backend->drm.fd, output->crtc_id,
+			ret = drmModeSetCursor(backend->drm.fd, crtc->crtc_id,
 					       0, 0, 0);
 			if (ret)
 				weston_log("drmModeSetCursor failed disable: %s\n",
 					   strerror(errno));
 		}
 
-		ret = drmModeSetCrtc(backend->drm.fd, output->crtc_id, 0, 0, 0,
+		ret = drmModeSetCrtc(backend->drm.fd, crtc->crtc_id, 0, 0, 0,
 				     NULL, 0, NULL);
 		if (ret)
 			weston_log("drmModeSetCrtc failed disabling: %s\n",
@@ -736,7 +724,7 @@ drm_output_apply_state_legacy(struct drm_output_state *state)
 	    scanout_plane->state_cur->fb->strides[0] !=
 	    scanout_state->fb->strides[0]) {
 
-		ret = drmModeSetCrtc(backend->drm.fd, output->crtc_id,
+		ret = drmModeSetCrtc(backend->drm.fd, crtc->crtc_id,
 				     scanout_state->fb->fb_id,
 				     0, 0,
 				     connectors, n_conn,
@@ -749,10 +737,10 @@ drm_output_apply_state_legacy(struct drm_output_state *state)
 
 	pinfo = scanout_state->fb->format;
 	drm_debug(backend, "\t[CRTC:%u, PLANE:%u] FORMAT: %s\n",
-			   output->crtc_id, scanout_state->plane->plane_id,
+			   crtc->crtc_id, scanout_state->plane->plane_id,
 			   pinfo ? pinfo->drm_format_name : "UNKNOWN");
 
-	if (drmModePageFlip(backend->drm.fd, output->crtc_id,
+	if (drmModePageFlip(backend->drm.fd, crtc->crtc_id,
 			    scanout_state->fb->fb_id,
 			    DRM_MODE_PAGE_FLIP_EVENT, output) < 0) {
 		weston_log("queueing pageflip failed: %s\n", strerror(errno));
@@ -769,14 +757,14 @@ drm_output_apply_state_legacy(struct drm_output_state *state)
 
 	if (state->dpms != output->state_cur->dpms) {
 		wl_list_for_each(head, &output->base.head_list, base.output_link) {
-			dpms_prop = &head->props_conn[WDRM_CONNECTOR_DPMS];
+			dpms_prop = &head->connector.props[WDRM_CONNECTOR_DPMS];
 			if (dpms_prop->prop_id == 0)
 				continue;
 
 			ret = drmModeConnectorSetProperty(backend->drm.fd,
-							  head->connector_id,
-							  dpms_prop->prop_id,
-							  state->dpms);
+						head->connector.connector_id,
+						dpms_prop->prop_id,
+						state->dpms);
 			if (ret) {
 				weston_log("DRM: DPMS: failed property set for %s\n",
 					   head->base.name);
@@ -789,44 +777,44 @@ drm_output_apply_state_legacy(struct drm_output_state *state)
 	return 0;
 
 err:
-	output->cursor_view = NULL;
+	drm_output_set_cursor_view(output, NULL);
 	drm_output_state_free(state);
 	return -1;
 }
 
 static int
-crtc_add_prop(drmModeAtomicReq *req, struct drm_output *output,
+crtc_add_prop(drmModeAtomicReq *req, struct drm_crtc *crtc,
 	      enum wdrm_crtc_property prop, uint64_t val)
 {
-	struct drm_property_info *info = &output->props_crtc[prop];
+	struct drm_property_info *info = &crtc->props_crtc[prop];
 	int ret;
 
 	if (info->prop_id == 0)
 		return -1;
 
-	ret = drmModeAtomicAddProperty(req, output->crtc_id, info->prop_id,
+	ret = drmModeAtomicAddProperty(req, crtc->crtc_id, info->prop_id,
 				       val);
-	drm_debug(output->backend, "\t\t\t[CRTC:%lu] %lu (%s) -> %llu (0x%llx)\n",
-		  (unsigned long) output->crtc_id,
+	drm_debug(crtc->backend, "\t\t\t[CRTC:%lu] %lu (%s) -> %llu (0x%llx)\n",
+		  (unsigned long) crtc->crtc_id,
 		  (unsigned long) info->prop_id, info->name,
 		  (unsigned long long) val, (unsigned long long) val);
 	return (ret <= 0) ? -1 : 0;
 }
 
 static int
-connector_add_prop(drmModeAtomicReq *req, struct drm_head *head,
+connector_add_prop(drmModeAtomicReq *req, struct drm_connector *connector,
 		   enum wdrm_connector_property prop, uint64_t val)
 {
-	struct drm_property_info *info = &head->props_conn[prop];
+	struct drm_property_info *info = &connector->props[prop];
+	uint32_t connector_id = connector->connector_id;
 	int ret;
 
 	if (info->prop_id == 0)
 		return -1;
 
-	ret = drmModeAtomicAddProperty(req, head->connector_id,
-				       info->prop_id, val);
-	drm_debug(head->backend, "\t\t\t[CONN:%lu] %lu (%s) -> %llu (0x%llx)\n",
-		  (unsigned long) head->connector_id,
+	ret = drmModeAtomicAddProperty(req, connector_id, info->prop_id, val);
+	drm_debug(connector->backend, "\t\t\t[CONN:%lu] %lu (%s) -> %llu (0x%llx)\n",
+		  (unsigned long) connector_id,
 		  (unsigned long) info->prop_id, info->name,
 		  (unsigned long long) val, (unsigned long long) val);
 	return (ret <= 0) ? -1 : 0;
@@ -852,10 +840,10 @@ plane_add_prop(drmModeAtomicReq *req, struct drm_plane *plane,
 }
 
 static bool
-drm_head_has_prop(struct drm_head *head,
-		  enum wdrm_connector_property prop)
+drm_connector_has_prop(struct drm_connector *connector,
+		       enum wdrm_connector_property prop)
 {
-	if (head && head->props_conn[prop].prop_id != 0)
+	if (connector->props[prop].prop_id != 0)
 		return true;
 
 	return false;
@@ -891,20 +879,21 @@ get_drm_protection_from_weston(enum weston_hdcp_protection weston_protection,
 }
 
 static void
-drm_head_set_hdcp_property(struct drm_head *head,
-			   enum weston_hdcp_protection protection,
-			   drmModeAtomicReq *req)
+drm_connector_set_hdcp_property(struct drm_connector *connector,
+				enum weston_hdcp_protection protection,
+				drmModeAtomicReq *req)
 {
 	int ret;
 	enum wdrm_content_protection_state drm_protection;
 	enum wdrm_hdcp_content_type drm_cp_type;
 	struct drm_property_enum_info *enum_info;
 	uint64_t prop_val;
+	struct drm_property_info *props = connector->props;
 
 	get_drm_protection_from_weston(protection, &drm_protection,
 				       &drm_cp_type);
 
-	if (!drm_head_has_prop(head, WDRM_CONNECTOR_CONTENT_PROTECTION))
+	if (!drm_connector_has_prop(connector, WDRM_CONNECTOR_CONTENT_PROTECTION))
 		return;
 
 	/*
@@ -912,23 +901,23 @@ drm_head_set_hdcp_property(struct drm_head *head,
 	 * HDCP2.2, therefore, type-1 cannot be supported. The type-0 content
 	 * still can be supported if the content-protection property is exposed.
 	 */
-	if (!drm_head_has_prop(head, WDRM_CONNECTOR_HDCP_CONTENT_TYPE) &&
+	if (!drm_connector_has_prop(connector, WDRM_CONNECTOR_HDCP_CONTENT_TYPE) &&
 	    drm_cp_type != WDRM_HDCP_CONTENT_TYPE0)
 			return;
 
-	enum_info = head->props_conn[WDRM_CONNECTOR_CONTENT_PROTECTION].enum_values;
+	enum_info = props[WDRM_CONNECTOR_CONTENT_PROTECTION].enum_values;
 	prop_val = enum_info[drm_protection].value;
-	ret = connector_add_prop(req, head, WDRM_CONNECTOR_CONTENT_PROTECTION,
-				 prop_val);
+	ret = connector_add_prop(req, connector,
+				 WDRM_CONNECTOR_CONTENT_PROTECTION, prop_val);
 	assert(ret == 0);
 
-	if (!drm_head_has_prop(head, WDRM_CONNECTOR_HDCP_CONTENT_TYPE))
+	if (!drm_connector_has_prop(connector, WDRM_CONNECTOR_HDCP_CONTENT_TYPE))
 		return;
 
-	enum_info = head->props_conn[WDRM_CONNECTOR_HDCP_CONTENT_TYPE].enum_values;
+	enum_info = props[WDRM_CONNECTOR_HDCP_CONTENT_TYPE].enum_values;
 	prop_val = enum_info[drm_cp_type].value;
-	ret = connector_add_prop(req, head, WDRM_CONNECTOR_HDCP_CONTENT_TYPE,
-				 prop_val);
+	ret = connector_add_prop(req, connector,
+				 WDRM_CONNECTOR_HDCP_CONTENT_TYPE, prop_val);
 	assert(ret == 0);
 }
 
@@ -939,6 +928,7 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
 {
 	struct drm_output *output = state->output;
 	struct drm_backend *b = to_drm_backend(output->base.compositor);
+	struct drm_crtc *crtc = output->crtc;
 	struct drm_plane_state *plane_state;
 	struct drm_mode *current_mode = to_drm_mode(output->base.current_mode);
 	struct drm_head *head;
@@ -958,28 +948,31 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
 		if (ret != 0)
 			return ret;
 
-		ret |= crtc_add_prop(req, output, WDRM_CRTC_MODE_ID,
+		ret |= crtc_add_prop(req, crtc, WDRM_CRTC_MODE_ID,
 				     current_mode->blob_id);
-		ret |= crtc_add_prop(req, output, WDRM_CRTC_ACTIVE, 1);
+		ret |= crtc_add_prop(req, crtc, WDRM_CRTC_ACTIVE, 1);
 
 		/* No need for the DPMS property, since it is implicit in
 		 * routing and CRTC activity. */
 		wl_list_for_each(head, &output->base.head_list, base.output_link) {
-			ret |= connector_add_prop(req, head, WDRM_CONNECTOR_CRTC_ID,
-						  output->crtc_id);
+			ret |= connector_add_prop(req, &head->connector,
+						  WDRM_CONNECTOR_CRTC_ID,
+						  crtc->crtc_id);
 		}
 	} else {
-		ret |= crtc_add_prop(req, output, WDRM_CRTC_MODE_ID, 0);
-		ret |= crtc_add_prop(req, output, WDRM_CRTC_ACTIVE, 0);
+		ret |= crtc_add_prop(req, crtc, WDRM_CRTC_MODE_ID, 0);
+		ret |= crtc_add_prop(req, crtc, WDRM_CRTC_ACTIVE, 0);
 
 		/* No need for the DPMS property, since it is implicit in
 		 * routing and CRTC activity. */
 		wl_list_for_each(head, &output->base.head_list, base.output_link)
-			ret |= connector_add_prop(req, head, WDRM_CONNECTOR_CRTC_ID, 0);
+			ret |= connector_add_prop(req, &head->connector,
+						  WDRM_CONNECTOR_CRTC_ID, 0);
 	}
 
 	wl_list_for_each(head, &output->base.head_list, base.output_link)
-		drm_head_set_hdcp_property(head, state->protection, req);
+		drm_connector_set_hdcp_property(&head->connector,
+						state->protection, req);
 
 	if (ret != 0) {
 		weston_log("couldn't set atomic CRTC/connector state\n");
@@ -993,7 +986,7 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
 		ret |= plane_add_prop(req, plane, WDRM_PLANE_FB_ID,
 				      plane_state->fb ? plane_state->fb->fb_id : 0);
 		ret |= plane_add_prop(req, plane, WDRM_PLANE_CRTC_ID,
-				      plane_state->fb ? output->crtc_id : 0);
+				      plane_state->fb ? crtc->crtc_id : 0);
 		ret |= plane_add_prop(req, plane, WDRM_PLANE_SRC_X,
 				      plane_state->src_x);
 		ret |= plane_add_prop(req, plane, WDRM_PLANE_SRC_Y,
@@ -1076,7 +1069,8 @@ drm_pending_state_apply_atomic(struct drm_pending_state *pending_state,
 	if (b->state_invalid) {
 		struct weston_head *head_base;
 		struct drm_head *head;
-		uint32_t *unused;
+		struct drm_crtc *crtc;
+		uint32_t connector_id;
 		int err;
 
 		drm_debug(b, "\t\t[atomic] previous state invalid; "
@@ -1093,74 +1087,54 @@ drm_pending_state_apply_atomic(struct drm_pending_state *pending_state,
 				continue;
 
 			head = to_drm_head(head_base);
+			connector_id = head->connector.connector_id;
 
 			drm_debug(b, "\t\t[atomic] disabling inactive head %s\n",
 				  head_base->name);
 
-			info = &head->props_conn[WDRM_CONNECTOR_CRTC_ID];
-			err = drmModeAtomicAddProperty(req, head->connector_id,
+			info = &head->connector.props[WDRM_CONNECTOR_CRTC_ID];
+			err = drmModeAtomicAddProperty(req, connector_id,
 						       info->prop_id, 0);
 			drm_debug(b, "\t\t\t[CONN:%lu] %lu (%s) -> 0\n",
-				  (unsigned long) head->connector_id,
+				  (unsigned long) connector_id,
 				  (unsigned long) info->prop_id,
 				  info->name);
 			if (err <= 0)
 				ret = -1;
 		}
 
-		wl_array_for_each(unused, &b->unused_crtcs) {
-			struct drm_property_info infos[WDRM_CRTC__COUNT];
+		wl_list_for_each(crtc, &b->crtc_list, link) {
 			struct drm_property_info *info;
 			drmModeObjectProperties *props;
 			uint64_t active;
 
-			memset(infos, 0, sizeof(infos));
+			/* Ignore CRTCs that are in use */
+			if (crtc->output)
+				continue;
 
 			/* We can't emit a disable on a CRTC that's already
 			 * off, as the kernel will refuse to generate an event
 			 * for an off->off state and fail the commit.
 			 */
 			props = drmModeObjectGetProperties(b->drm.fd,
-							   *unused,
+							   crtc->crtc_id,
 							   DRM_MODE_OBJECT_CRTC);
 			if (!props) {
 				ret = -1;
 				continue;
 			}
 
-			drm_property_info_populate(b, crtc_props, infos,
-						   WDRM_CRTC__COUNT,
-						   props);
-
-			info = &infos[WDRM_CRTC_ACTIVE];
+			info = &crtc->props_crtc[WDRM_CRTC_ACTIVE];
 			active = drm_property_get_value(info, props, 0);
 			drmModeFreeObjectProperties(props);
-			if (active == 0) {
-				drm_property_info_free(infos, WDRM_CRTC__COUNT);
+			if (active == 0)
 				continue;
-			}
 
 			drm_debug(b, "\t\t[atomic] disabling unused CRTC %lu\n",
-				  (unsigned long) *unused);
+				  (unsigned long) crtc->crtc_id);
 
-			drm_debug(b, "\t\t\t[CRTC:%lu] %lu (%s) -> 0\n",
-				  (unsigned long) *unused,
-				  (unsigned long) info->prop_id, info->name);
-			err = drmModeAtomicAddProperty(req, *unused,
-						       info->prop_id, 0);
-			if (err <= 0)
-				ret = -1;
-
-			info = &infos[WDRM_CRTC_MODE_ID];
-			drm_debug(b, "\t\t\t[CRTC:%lu] %lu (%s) -> 0\n",
-				  (unsigned long) *unused,
-				  (unsigned long) info->prop_id, info->name);
-			err = drmModeAtomicAddProperty(req, *unused,
-						       info->prop_id, 0);
-			if (err <= 0)
-				ret = -1;
-
-			drm_property_info_free(infos, WDRM_CRTC__COUNT);
+			ret |= crtc_add_prop(req, crtc, WDRM_CRTC_ACTIVE, 0);
+			ret |= crtc_add_prop(req, crtc, WDRM_CRTC_MODE_ID, 0);
 		}
 
 		/* Disable all the planes; planes which are being used will
@@ -1262,7 +1236,7 @@ drm_pending_state_apply(struct drm_pending_state *pending_state)
 {
 	struct drm_backend *b = pending_state->backend;
 	struct drm_output_state *output_state, *tmp;
-	uint32_t *unused;
+	struct drm_crtc *crtc;
 
 	if (b->atomic_modeset)
 		return drm_pending_state_apply_atomic(pending_state,
@@ -1274,9 +1248,12 @@ drm_pending_state_apply(struct drm_pending_state *pending_state)
 		 * disable all the CRTCs we aren't using. This also disables
 		 * all connectors on these CRTCs, so we don't need to do that
 		 * separately with the pre-atomic API. */
-		wl_array_for_each(unused, &b->unused_crtcs)
-			drmModeSetCrtc(b->drm.fd, *unused, 0, 0, 0, NULL, 0,
-				       NULL);
+		wl_list_for_each(crtc, &b->crtc_list, link) {
+			if (crtc->output)
+				continue;
+			drmModeSetCrtc(b->drm.fd, crtc->crtc_id, 0, 0, 0,
+				       NULL, 0, NULL);
+		}
 	}
 
 	wl_list_for_each_safe(output_state, tmp, &pending_state->output_list,
@@ -1294,6 +1271,14 @@ drm_pending_state_apply(struct drm_pending_state *pending_state)
 		if (ret != 0) {
 			weston_log("Couldn't apply state for output %s\n",
 				   output->base.name);
+			weston_output_repaint_failed(&output->base);
+			drm_output_state_free(output->state_cur);
+			output->state_cur = drm_output_state_alloc(output, NULL);
+			b->state_invalid = true;
+			if (!b->use_pixman) {
+				drm_output_fini_egl(output);
+				drm_output_init_egl(output, b);
+			}
 		}
 	}
 
@@ -1318,7 +1303,7 @@ drm_pending_state_apply_sync(struct drm_pending_state *pending_state)
 {
 	struct drm_backend *b = pending_state->backend;
 	struct drm_output_state *output_state, *tmp;
-	uint32_t *unused;
+	struct drm_crtc *crtc;
 
 	if (b->atomic_modeset)
 		return drm_pending_state_apply_atomic(pending_state,
@@ -1330,9 +1315,12 @@ drm_pending_state_apply_sync(struct drm_pending_state *pending_state)
 		 * disable all the CRTCs we aren't using. This also disables
 		 * all connectors on these CRTCs, so we don't need to do that
 		 * separately with the pre-atomic API. */
-		wl_array_for_each(unused, &b->unused_crtcs)
-			drmModeSetCrtc(b->drm.fd, *unused, 0, 0, 0, NULL, 0,
-				       NULL);
+		wl_list_for_each(crtc, &b->crtc_list, link) {
+			if (crtc->output)
+				continue;
+			drmModeSetCrtc(b->drm.fd, crtc->crtc_id, 0, 0, 0,
+				       NULL, 0, NULL);
+		}
 	}
 
 	wl_list_for_each_safe(output_state, tmp, &pending_state->output_list,
@@ -1391,10 +1379,16 @@ atomic_flip_handler(int fd, unsigned int frame, unsigned int sec,
 		    unsigned int usec, unsigned int crtc_id, void *data)
 {
 	struct drm_backend *b = data;
-	struct drm_output *output = drm_output_find_by_crtc(b, crtc_id);
+	struct drm_crtc *crtc;
+	struct drm_output *output;
 	uint32_t flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC |
 			 WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
 			 WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
+
+	crtc = drm_crtc_find(b, crtc_id);
+	assert(crtc);
+
+	output = crtc->output;
 
 	/* During the initial modeset, we can disable CRTCs which we don't
 	 * actually handle during normal operation; this will give us events
@@ -1435,19 +1429,17 @@ init_kms_caps(struct drm_backend *b)
 {
 	uint64_t cap;
 	int ret;
-	clockid_t clk_id;
 
 	weston_log("using %s\n", b->drm.filename);
 
 	ret = drmGetCap(b->drm.fd, DRM_CAP_TIMESTAMP_MONOTONIC, &cap);
-	if (ret == 0 && cap == 1)
-		clk_id = CLOCK_MONOTONIC;
-	else
-		clk_id = CLOCK_REALTIME;
+	if (ret != 0 || cap != 1) {
+		weston_log("Error: kernel DRM KMS does not support DRM_CAP_TIMESTAMP_MONOTONIC.\n");
+		return -1;
+	}
 
-	if (weston_compositor_set_presentation_clock(b->compositor, clk_id) < 0) {
-		weston_log("Error: failed to set presentation clock %d.\n",
-			   clk_id);
+	if (weston_compositor_set_presentation_clock(b->compositor, CLOCK_MONOTONIC) < 0) {
+		weston_log("Error: failed to set presentation clock to CLOCK_MONOTONIC.\n");
 		return -1;
 	}
 
@@ -1463,12 +1455,13 @@ init_kms_caps(struct drm_backend *b)
 	else
 		b->cursor_height = 64;
 
-	if (!getenv("WESTON_DISABLE_UNIVERSAL_PLANES")) {
-		ret = drmSetClientCap(b->drm.fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
-		b->universal_planes = (ret == 0);
+	ret = drmSetClientCap(b->drm.fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+	if (ret) {
+		weston_log("Error: drm card doesn't support universal planes!\n");
+		return -1;
 	}
 
-	if (b->universal_planes && !getenv("WESTON_DISABLE_ATOMIC")) {
+	if (!getenv("WESTON_DISABLE_ATOMIC")) {
 		ret = drmGetCap(b->drm.fd, DRM_CAP_CRTC_IN_VBLANK_EVENT, &cap);
 		if (ret != 0)
 			cap = 0;
@@ -1485,6 +1478,8 @@ init_kms_caps(struct drm_backend *b)
 	}
 	weston_log("DRM: %s GBM modifiers\n",
 		   b->fb_modifiers ? "supports" : "does not support");
+
+	drmSetClientCap(b->drm.fd, DRM_CLIENT_CAP_WRITEBACK_CONNECTORS, 1);
 
 	/*
 	 * KMS support for hardware planes cannot properly synchronize

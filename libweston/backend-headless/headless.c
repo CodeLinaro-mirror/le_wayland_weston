@@ -32,7 +32,6 @@
 #include <string.h>
 #include <sys/time.h>
 #include <stdbool.h>
-#include <drm_fourcc.h>
 
 #include <libweston/libweston.h>
 #include <libweston/backend-headless.h>
@@ -40,6 +39,7 @@
 #include "linux-explicit-synchronization.h"
 #include "pixman-renderer.h"
 #include "renderer-gl/gl-renderer.h"
+#include "shared/weston-drm-fourcc.h"
 #include "shared/weston-egl-ext.h"
 #include "linux-dmabuf.h"
 #include "presentation-time-server-protocol.h"
@@ -255,6 +255,11 @@ headless_output_enable(struct weston_output *base)
 	output->finish_frame_timer =
 		wl_event_loop_add_timer(loop, finish_frame_handler, output);
 
+	if (output->finish_frame_timer == NULL) {
+		weston_log("failed to add finish frame timer\n");
+		return -1;
+	}
+
 	switch (b->renderer_type) {
 	case HEADLESS_GL:
 		ret = headless_output_enable_gl(output);
@@ -394,7 +399,7 @@ headless_gl_renderer_init(struct headless_backend *b)
 {
 	const struct gl_renderer_display_options options = {
 		.egl_platform = EGL_PLATFORM_SURFACELESS_MESA,
-		.egl_native_display = EGL_DEFAULT_DISPLAY,
+		.egl_native_display = NULL,
 		.egl_surface_type = EGL_PBUFFER_BIT,
 		.drm_formats = headless_formats,
 		.drm_formats_count = ARRAY_LENGTH(headless_formats),

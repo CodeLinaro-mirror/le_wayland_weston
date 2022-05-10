@@ -18,7 +18,7 @@ If you have picked an issue you would like to work on, you may want to mention
 in the issue tracker that you would like to pick it up. You can also discuss
 it with the developers in the issue tracker, or on the
 [mailing list](https://lists.freedesktop.org/mailman/listinfo/wayland-devel).
-Many developers also use IRC through [Freenode](https://freenode.net)'s
+Many developers also use IRC through [OFTC](https://www.oftc.net/)'s
 `#wayland` channel; however you may need to wait some time for a response on
 IRC, which requires keeping your client connected. If you cannot stay for a
 long time (potentially some hours due to timezone differences), then you
@@ -39,9 +39,8 @@ repository, and then submit these patches for review through a merge request.
 Weston formerly accepted patches via `git-send-email`, sent to
 **wayland-devel\@lists.freedesktop.org**; these were
 [tracked using Patchwork](https://patchwork.freedesktop.org/projects/wayland/).
-Some old patches continue to be sent this way, and we may accept small new
-patches sent to the list, but please send all new patches through GitLab merge
-requests.
+New email patches are no longer accepted.
+
 
 Formatting and separating commits
 ---------------------------------
@@ -97,17 +96,20 @@ cope with the way git log presents them.
 See [notes on commit messages] for a recommended reading on writing commit
 messages.
 
-Your patches should also include a Signed-off-by line with your name and
-email address which indicates that you agree to the
+Your patches must also include a Signed-off-by line with your name
+(or pseudonym) and email address which indicates that you agree to the
 [Developer's Certificate of Origin 1.1](DCO-1.1.txt).
 If you're not the patch's original author, you should
-also gather S-o-b's by them (and/or whomever gave the patch to you.) The
+also gather S-o-b's from them (and/or whomever gave the patch to you) in
+addition to your own S-o-b. The
 significance of this is that it certifies that you created the patch,
 that it was created under an appropriate open source license, or
 provided to you under those terms.  This lets us indicate a chain of
 responsibility for the copyright status of the code.
 
-We won't reject patches that lack S-o-b, but it is strongly recommended.
+**Agreeing to DCO 1.1 is mandatory.** Patches without a Signed-off-by cannot
+be accepted, but using a pseudonym is fine as long as the email address is
+yours personally.
 
 When you re-send patches, revised or not, it would be very good to document the
 changes compared to the previous revision in the commit message and/or the

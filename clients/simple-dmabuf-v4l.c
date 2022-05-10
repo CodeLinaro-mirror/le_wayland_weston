@@ -37,8 +37,6 @@
 #include <signal.h>
 #include <fcntl.h>
 
-#include <drm_fourcc.h>
-
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -54,6 +52,7 @@
 #include "weston-direct-display-client-protocol.h"
 
 #include "shared/helpers.h"
+#include "shared/weston-drm-fourcc.h"
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 #define OPT_FLAG_INVERT (1 << 0)
@@ -631,6 +630,8 @@ create_window(struct display *display)
 					  &xdg_toplevel_listener, window);
 
 		xdg_toplevel_set_title(window->xdg_toplevel, "simple-dmabuf-v4l");
+		xdg_toplevel_set_app_id(window->xdg_toplevel,
+				"org.freedesktop.weston.simple-dmabuf-v4l");
 
 		window->wait_for_configure = true;
 		wl_surface_commit(window->surface);

@@ -63,12 +63,13 @@
 #include <libweston/backend-wayland.h>
 #include <libweston/windowed-output-api.h>
 #include <libweston/weston-log.h>
-#include "../remoting/remoting-plugin.h"
-#include "../pipewire/pipewire-plugin.h"
+#include <libweston/remoting-plugin.h>
+#include <libweston/pipewire-plugin.h>
 
 #define WINDOW_TITLE "Weston Compositor"
 /* flight recorder size (in bytes) */
 #define DEFAULT_FLIGHT_REC_SIZE (5 * 1024 * 1024)
+#define DEFAULT_FLIGHT_REC_SCOPES "log,drm-backend"
 
 struct wet_output_config {
 	int width;
@@ -122,6 +123,10 @@ struct wet_compositor {
 	int (*simple_output_configure)(struct weston_output *output);
 	bool init_failed;
 	struct wl_list layoutput_list;	/**< wet_layoutput::compositor_link */
+	struct wl_list child_process_list;
+	pid_t autolaunch_pid;
+	bool autolaunch_watch;
+	bool use_color_manager;
 };
 
 static FILE *weston_logfile = NULL;
@@ -344,23 +349,34 @@ protocol_log_fn(void *user_data,
 	free(logstr);
 }
 
-static struct wl_list child_process_list;
-static struct weston_compositor *segv_compositor;
+static struct wet_compositor *
+to_wet_compositor(struct weston_compositor *compositor)
+{
+	return weston_compositor_get_user_data(compositor);
+}
 
 static int
 sigchld_handler(int signal_number, void *data)
 {
 	struct weston_process *p;
+	struct wet_compositor *wet = data;
 	int status;
 	pid_t pid;
 
 	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-		wl_list_for_each(p, &child_process_list, link) {
+		if (wet->autolaunch_pid != -1 && wet->autolaunch_pid == pid) {
+			if (wet->autolaunch_watch)
+				wl_display_terminate(wet->compositor->wl_display);
+			wet->autolaunch_pid = -1;
+			continue;
+		}
+
+		wl_list_for_each(p, &wet->child_process_list, link) {
 			if (p->pid == pid)
 				break;
 		}
 
-		if (&p->link == &child_process_list) {
+		if (&p->link == &wet->child_process_list) {
 			weston_log("unknown child process exited\n");
 			continue;
 		}
@@ -455,15 +471,17 @@ weston_client_launch(struct weston_compositor *compositor,
 
 	proc->pid = pid;
 	proc->cleanup = cleanup;
-	weston_watch_process(proc);
+	wet_watch_process(compositor, proc);
 
 	return client;
 }
 
 WL_EXPORT void
-weston_watch_process(struct weston_process *process)
+wet_watch_process(struct weston_compositor *compositor,
+		  struct weston_process *process)
 {
-	wl_list_insert(&child_process_list, &process->link);
+	struct wet_compositor *wet = to_wet_compositor(compositor);
+	wl_list_insert(&wet->child_process_list, &process->link);
 }
 
 struct process_info {
@@ -537,12 +555,6 @@ log_uname(void)
 						usys.version, usys.machine);
 }
 
-static struct wet_compositor *
-to_wet_compositor(struct weston_compositor *compositor)
-{
-	return weston_compositor_get_user_data(compositor);
-}
-
 static struct wet_output_config *
 wet_init_parsed_options(struct weston_compositor *ec)
 {
@@ -583,8 +595,8 @@ static const char xdg_wrong_message[] =
 
 static const char xdg_wrong_mode_message[] =
 	"warning: XDG_RUNTIME_DIR \"%s\" is not configured\n"
-	"correctly.  Unix access mode must be 0700 (current mode is %o),\n"
-	"and must be owned by the user (current owner is UID %d).\n";
+	"correctly.  Unix access mode must be 0700 (current mode is %04o),\n"
+	"and must be owned by the user UID %d (current owner is UID %d).\n";
 
 static const char xdg_detail_message[] =
 	"Refer to your distribution on how to get it, or\n"
@@ -611,7 +623,7 @@ verify_xdg_runtime_dir(void)
 
 	if ((s.st_mode & 0777) != 0700 || s.st_uid != getuid()) {
 		weston_log(xdg_wrong_mode_message,
-			   dir, s.st_mode & 0777, s.st_uid);
+			   dir, s.st_mode & 0777, getuid(), s.st_uid);
 		weston_log_continue(xdg_detail_message);
 	}
 }
@@ -780,8 +792,13 @@ static const struct {
 	uint32_t bit; /* enum weston_capability */
 	const char *desc;
 } capability_strings[] = {
-	{ WESTON_CAP_ROTATION_ANY, "arbitrary surface rotation:" },
-	{ WESTON_CAP_CAPTURE_YFLIP, "screen capture uses y-flip:" },
+	{ WESTON_CAP_ROTATION_ANY, "arbitrary surface rotation" },
+	{ WESTON_CAP_CAPTURE_YFLIP, "screen capture uses y-flip" },
+	{ WESTON_CAP_CURSOR_PLANE, "cursor planes" },
+	{ WESTON_CAP_ARBITRARY_MODES, "arbitrary resolutions" },
+	{ WESTON_CAP_VIEW_CLIP_MASK, "view mask clipping" },
+	{ WESTON_CAP_EXPLICIT_SYNC, "explicit sync" },
+	{ WESTON_CAP_COLOR_OPS, "color operations" },
 };
 
 static void
@@ -794,7 +811,7 @@ weston_compositor_log_capabilities(struct weston_compositor *compositor)
 	weston_log("Compositor capabilities:\n");
 	for (i = 0; i < ARRAY_LENGTH(capability_strings); i++) {
 		yes = compositor->capabilities & capability_strings[i].bit;
-		weston_log_continue(STAMP_SPACE "%s %s\n",
+		weston_log_continue(STAMP_SPACE "%s: %s\n",
 				    capability_strings[i].desc,
 				    yes ? "yes" : "no");
 	}
@@ -812,6 +829,33 @@ weston_compositor_log_capabilities(struct weston_compositor *compositor)
 				"presentation clock resolution: N/A\n");
 }
 
+static bool
+check_compositor_capabilities(struct weston_compositor *compositor,
+			      uint32_t mask)
+{
+	uint32_t missing = mask & ~compositor->capabilities;
+	unsigned i;
+
+	if (missing == 0)
+		return true;
+
+	weston_log("Quirk error, missing capabilities:\n");
+	for (i = 0; i < ARRAY_LENGTH(capability_strings); i++) {
+		if (!(missing & capability_strings[i].bit))
+			continue;
+
+		weston_log_continue(STAMP_SPACE "- %s\n",
+				    capability_strings[i].desc);
+		missing &= ~capability_strings[i].bit;
+	}
+	if (missing) {
+		weston_log_continue(STAMP_SPACE "- unlisted bits 0x%x\n",
+				    missing);
+	}
+
+	return false;
+}
+
 static void
 handle_primary_client_destroyed(struct wl_listener *listener, void *data)
 {
@@ -825,24 +869,29 @@ handle_primary_client_destroyed(struct wl_listener *listener, void *data)
 static int
 weston_create_listening_socket(struct wl_display *display, const char *socket_name)
 {
+	char name_candidate[16];
+
 	if (socket_name) {
 		if (wl_display_add_socket(display, socket_name)) {
 			weston_log("fatal: failed to add socket: %s\n",
 				   strerror(errno));
 			return -1;
 		}
+
+		setenv("WAYLAND_DISPLAY", socket_name, 1);
+		return 0;
 	} else {
-		socket_name = wl_display_add_socket_auto(display);
-		if (!socket_name) {
-			weston_log("fatal: failed to add socket: %s\n",
-				   strerror(errno));
-			return -1;
+		for (int i = 1; i <= 32; i++) {
+			sprintf(name_candidate, "wayland-%d", i);
+			if (wl_display_add_socket(display, name_candidate) >= 0) {
+				setenv("WAYLAND_DISPLAY", name_candidate, 1);
+				return 0;
+			}
 		}
+		weston_log("fatal: failed to add socket: %s\n",
+			   strerror(errno));
+		return -1;
 	}
-
-	setenv("WAYLAND_DISPLAY", socket_name, 1);
-
-	return 0;
 }
 
 WL_EXPORT void *
@@ -1047,9 +1096,11 @@ static int
 weston_compositor_init_config(struct weston_compositor *ec,
 			      struct weston_config *config)
 {
+	struct wet_compositor *compositor = to_wet_compositor(ec);
 	struct xkb_rule_names xkb_names;
 	struct weston_config_section *s;
 	int repaint_msec;
+	bool color_management;
 	bool cal;
 
 	/* weston.ini [keyboard] */
@@ -1088,6 +1139,15 @@ weston_compositor_init_config(struct weston_compositor *ec,
 	}
 	weston_log("Output repaint window is %d ms maximum.\n",
 		   ec->repaint_msec);
+
+	weston_config_section_get_bool(s, "color-management",
+				       &color_management, false);
+	if (color_management) {
+		if (weston_compositor_load_color_manager(ec) < 0)
+			return -1;
+		else
+			compositor->use_color_manager = true;
+	}
 
 	/* weston.ini [libinput] */
 	s = weston_config_get_section(config, "libinput", NULL, NULL);
@@ -1246,6 +1306,48 @@ wet_output_set_transform(struct weston_output *output,
 	return 0;
 }
 
+static int
+wet_output_set_color_profile(struct weston_output *output,
+			     struct weston_config_section *section,
+			     struct weston_color_profile *parent_winsys_profile)
+{
+	struct wet_compositor *compositor = to_wet_compositor(output->compositor);
+	struct weston_color_profile *cprof;
+	char *icc_file = NULL;
+	bool ok;
+
+	if (!compositor->use_color_manager)
+		return 0;
+
+	if (section) {
+		weston_config_section_get_string(section, "icc_profile",
+						 &icc_file, NULL);
+	}
+
+	if (icc_file) {
+		cprof = weston_compositor_load_icc_file(output->compositor,
+							icc_file);
+		free(icc_file);
+	} else if (parent_winsys_profile) {
+		cprof = weston_color_profile_ref(parent_winsys_profile);
+	} else {
+		return 0;
+	}
+
+	if (!cprof)
+		return -1;
+
+	ok = weston_output_set_color_profile(output, cprof);
+	if (!ok) {
+		weston_log("Error: failed to set color profile '%s' for output %s\n",
+			   weston_color_profile_get_description(cprof),
+			   output->name);
+	}
+
+	weston_color_profile_unref(cprof);
+	return ok ? 0 : -1;
+}
+
 static void
 allow_content_protection(struct weston_output *output,
 			struct weston_config_section *section)
@@ -1309,6 +1411,9 @@ wet_configure_windowed_output_from_config(struct weston_output *output,
 				     parsed_options->transform) < 0) {
 		return -1;
 	}
+
+	if (wet_output_set_color_profile(output, section, NULL) < 0)
+		return -1;
 
 	if (api->output_set_size(output, width, height) < 0) {
 		weston_log("Cannot configure output \"%s\" using weston_windowed_output_api.\n",
@@ -1749,6 +1854,9 @@ drm_backend_output_configure(struct weston_output *output,
 				     UINT32_MAX) < 0) {
 		return -1;
 	}
+
+	if (wet_output_set_color_profile(output, section, NULL) < 0)
+		return -1;
 
 	weston_config_section_get_string(section,
 					 "gbm-format", &gbm_format, NULL);
@@ -2249,6 +2357,9 @@ drm_backend_remoted_output_configure(struct weston_output *output,
 		return -1;
 	};
 
+	if (wet_output_set_color_profile(output, section, NULL) < 0)
+		return -1;
+
 	weston_config_section_get_string(section, "gbm-format", &gbm_format,
 					 NULL);
 	api->set_gbm_format(output, gbm_format);
@@ -2400,6 +2511,9 @@ drm_backend_pipewire_output_configure(struct weston_output *output,
 		return -1;
 	}
 
+	if (wet_output_set_color_profile(output, section, NULL) < 0)
+		return -1;
+
 	weston_config_section_get_string(section, "seat", &seat, "");
 
 	api->set_seat(output, seat);
@@ -2510,6 +2624,7 @@ load_drm_backend(struct weston_compositor *c,
 	struct weston_drm_backend_config config = {{ 0, }};
 	struct weston_config_section *section;
 	struct wet_compositor *wet = to_wet_compositor(c);
+	bool without_input = false;
 	int ret = 0;
 
 	wet->drm_use_current_mode = false;
@@ -2524,7 +2639,7 @@ load_drm_backend(struct weston_compositor *c,
 		{ WESTON_OPTION_STRING, "drm-device", 0, &config.specific_device },
 		{ WESTON_OPTION_BOOLEAN, "current-mode", 0, &wet->drm_use_current_mode },
 		{ WESTON_OPTION_BOOLEAN, "use-pixman", 0, &config.use_pixman },
-		{ WESTON_OPTION_BOOLEAN, "continue-without-input", 0, &config.continue_without_input },
+		{ WESTON_OPTION_BOOLEAN, "continue-without-input", false, &without_input }
 	};
 
 	parse_options(options, ARRAY_LENGTH(options), argc, argv);
@@ -2537,6 +2652,8 @@ load_drm_backend(struct weston_compositor *c,
 	                               &config.pageflip_timeout, 0);
 	weston_config_section_get_bool(section, "pixman-shadow",
 				       &config.use_pixman_shadow, true);
+	if (without_input)
+		c->require_input = !without_input;
 
 	config.base.struct_version = WESTON_DRM_BACKEND_CONFIG_VERSION;
 	config.base.struct_size = sizeof(struct weston_drm_backend_config);
@@ -2557,6 +2674,7 @@ load_drm_backend(struct weston_compositor *c,
 
 	free(config.gbm_format);
 	free(config.seat_id);
+	free(config.specific_device);
 
 	return ret;
 }
@@ -3067,6 +3185,45 @@ wet_load_xwayland(struct weston_compositor *comp)
 }
 #endif
 
+static int
+execute_autolaunch(struct wet_compositor *wet, struct weston_config *config)
+{
+	int ret = -1;
+	pid_t tmp_pid = -1;
+	char *autolaunch_path = NULL;
+	struct weston_config_section *section = NULL;
+
+	section = weston_config_get_section(config, "autolaunch", NULL, NULL);
+	weston_config_section_get_string(section, "path", &autolaunch_path, "");
+	weston_config_section_get_bool(section, "watch", &wet->autolaunch_watch, false);
+
+	if (!strlen(autolaunch_path))
+		goto out_ok;
+
+	if (access(autolaunch_path, X_OK) != 0) {
+		weston_log("Specified autolaunch path (%s) is not executable\n", autolaunch_path);
+		goto out;
+	}
+
+	tmp_pid = fork();
+	if (tmp_pid == -1) {
+		weston_log("Failed to fork autolaunch process: %s\n", strerror(errno));
+		goto out;
+	} else if (tmp_pid == 0) {
+		execl(autolaunch_path, autolaunch_path, NULL);
+		/* execl shouldn't return */
+		fprintf(stderr, "Failed to execute autolaunch: %s\n", strerror(errno));
+		_exit(1);
+	}
+
+out_ok:
+	ret = 0;
+out:
+	wet->autolaunch_pid = tmp_pid;
+	free(autolaunch_path);
+	return ret;
+}
+
 static void
 weston_log_setup_scopes(struct weston_log_context *log_ctx,
 			struct weston_log_subscriber *subscriber,
@@ -3100,22 +3257,17 @@ weston_log_subscribe_to_scopes(struct weston_log_context *log_ctx,
 			       const char *log_scopes,
 			       const char *flight_rec_scopes)
 {
-	if (log_scopes)
+	if (logger && log_scopes)
 		weston_log_setup_scopes(log_ctx, logger, log_scopes);
 	else
 		weston_log_subscribe(log_ctx, logger, "log");
 
-	if (flight_rec_scopes) {
+	if (flight_rec && flight_rec_scopes)
 		weston_log_setup_scopes(log_ctx, flight_rec, flight_rec_scopes);
-	} else {
-		/* by default subscribe to 'log', and 'drm-backend' */
-		weston_log_subscribe(log_ctx, flight_rec, "log");
-		weston_log_subscribe(log_ctx, flight_rec, "drm-backend");
-	}
 }
 
 WL_EXPORT int
-wet_main(int argc, char *argv[])
+wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 {
 	int ret = EXIT_FAILURE;
 	char *cmdline;
@@ -3208,7 +3360,12 @@ wet_main(int argc, char *argv[])
 	weston_log_set_handler(vlog, vlog_continue);
 
 	logger = weston_log_subscriber_create_log(weston_logfile);
-	flight_rec = weston_log_subscriber_create_flight_rec(DEFAULT_FLIGHT_REC_SIZE);
+
+	if (!flight_rec_scopes)
+		flight_rec_scopes = DEFAULT_FLIGHT_REC_SCOPES;
+
+	if (flight_rec_scopes && strlen(flight_rec_scopes) > 0)
+		flight_rec = weston_log_subscriber_create_flight_rec(DEFAULT_FLIGHT_REC_SIZE);
 
 	weston_log_subscribe_to_scopes(log_ctx, logger, flight_rec,
 				       log_scopes, flight_rec_scopes);
@@ -3223,6 +3380,7 @@ wet_main(int argc, char *argv[])
 	free(cmdline);
 	log_uname();
 
+	weston_log("Flight recorder: %s\n", flight_rec ? "enabled" : "disabled");
 	verify_xdg_runtime_dir();
 
 	display = wl_display_create();
@@ -3239,9 +3397,9 @@ wet_main(int argc, char *argv[])
 	signals[2] = wl_event_loop_add_signal(loop, SIGQUIT, on_term_signal,
 					      display);
 
-	wl_list_init(&child_process_list);
+	wl_list_init(&wet.child_process_list);
 	signals[3] = wl_event_loop_add_signal(loop, SIGCHLD, sigchld_handler,
-					      NULL);
+					      &wet);
 
 	if (!signals[0] || !signals[1] || !signals[2] || !signals[3])
 		goto out_signals;
@@ -3279,12 +3437,11 @@ wet_main(int argc, char *argv[])
 			backend = weston_choose_default_backend();
 	}
 
-	wet.compositor = weston_compositor_create(display, log_ctx, &wet);
+	wet.compositor = weston_compositor_create(display, log_ctx, &wet, test_data);
 	if (wet.compositor == NULL) {
 		weston_log("fatal: failed to create compositor\n");
 		goto out;
 	}
-	segv_compositor = wet.compositor;
 
 	protocol_scope =
 		weston_log_ctx_add_log_scope(log_ctx, "proto",
@@ -3297,9 +3454,10 @@ wet_main(int argc, char *argv[])
 	if (debug_protocol)
 		weston_compositor_enable_debug_protocol(wet.compositor);
 
-	weston_compositor_add_debug_binding(wet.compositor, KEY_D,
-					    flight_rec_key_binding_handler,
-					    flight_rec);
+	if (flight_rec)
+		weston_compositor_add_debug_binding(wet.compositor, KEY_D,
+						    flight_rec_key_binding_handler,
+						    flight_rec);
 
 	if (weston_compositor_init_config(wet.compositor, config) < 0)
 		goto out;
@@ -3309,6 +3467,12 @@ wet_main(int argc, char *argv[])
 
 	if (load_backend(wet.compositor, backend, &argc, argv, config) < 0) {
 		weston_log("fatal: failed to create compositor backend\n");
+		goto out;
+	}
+
+	if (test_data && !check_compositor_capabilities(wet.compositor,
+				test_data->test_quirks.required_capabilities)) {
+		ret = WET_MAIN_RET_MISSING_CAPS;
 		goto out;
 	}
 
@@ -3395,6 +3559,9 @@ wet_main(int argc, char *argv[])
 
 	weston_compositor_wake(wet.compositor);
 
+	if (execute_autolaunch(&wet, config) < 0)
+		goto out;
+
 	wl_display_run(display);
 
 	/* Allow for setting return exit code after
@@ -3417,11 +3584,6 @@ out:
 	weston_compositor_destroy(wet.compositor);
 	weston_log_scope_destroy(protocol_scope);
 	protocol_scope = NULL;
-	weston_log_scope_destroy(log_scope);
-	log_scope = NULL;
-	weston_log_subscriber_destroy(logger);
-	weston_log_subscriber_destroy(flight_rec);
-	weston_log_ctx_destroy(log_ctx);
 
 out_signals:
 	for (i = ARRAY_LENGTH(signals) - 1; i >= 0; i--)
@@ -3431,6 +3593,12 @@ out_signals:
 	wl_display_destroy(display);
 
 out_display:
+	weston_log_scope_destroy(log_scope);
+	log_scope = NULL;
+	weston_log_subscriber_destroy(logger);
+	if (flight_rec)
+		weston_log_subscriber_destroy(flight_rec);
+	weston_log_ctx_destroy(log_ctx);
 	weston_log_file_close();
 
 	if (config)
@@ -3441,6 +3609,7 @@ out_display:
 	free(socket_name);
 	free(option_modules);
 	free(log);
+	free(log_scopes);
 	free(modules);
 
 	return ret;

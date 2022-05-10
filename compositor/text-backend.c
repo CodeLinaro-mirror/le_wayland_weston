@@ -103,6 +103,7 @@ struct text_backend {
 
 	struct {
 		char *path;
+		bool overlay_keyboard;
 		struct wl_client *client;
 
 		unsigned deathcount;
@@ -675,6 +676,9 @@ input_method_context_grab_keyboard(struct wl_client *client,
 	struct weston_seat *seat = context->input_method->seat;
 	struct weston_keyboard *keyboard = weston_seat_get_keyboard(seat);
 
+	if (!keyboard)
+		return;
+
 	cr = wl_resource_create(client, &wl_keyboard_interface, 1, id);
 	wl_resource_set_implementation(cr, NULL, context, unbind_keyboard);
 
@@ -849,6 +853,9 @@ unbind_input_method(struct wl_resource *resource)
 {
 	struct input_method *input_method = wl_resource_get_user_data(resource);
 
+	if (!input_method)
+		return;
+
 	input_method->input_method_binding = NULL;
 	input_method->context = NULL;
 }
@@ -896,8 +903,12 @@ input_method_notifier_destroy(struct wl_listener *listener, void *data)
 	if (input_method->input)
 		deactivate_input_method(input_method);
 
+	if (input_method->input_method_binding)
+		wl_resource_set_user_data(input_method->input_method_binding, NULL);
+
 	wl_global_destroy(input_method->input_method_global);
 	wl_list_remove(&input_method->destroy_listener.link);
+	input_method->seat->input_method = NULL;
 
 	free(input_method);
 }
@@ -986,6 +997,9 @@ launch_input_method(struct text_backend *text_backend)
 	if (strcmp(text_backend->input_method.path, "") == 0)
 		return;
 
+	if (text_backend->input_method.overlay_keyboard)
+		setenv("WESTON_KEYBOARD_SURFACE_TYPE", "overlay", 1);
+
 	text_backend->input_method.client =
 		weston_client_start(text_backend->compositor,
 				    text_backend->input_method.path);
@@ -1053,6 +1067,9 @@ text_backend_configuration(struct text_backend *text_backend)
 	weston_config_section_get_string(section, "path",
 					 &text_backend->input_method.path,
 					 client);
+	weston_config_section_get_bool(section, "overlay-keyboard",
+				       &text_backend->input_method.overlay_keyboard,
+				       false);
 	free(client);
 }
 

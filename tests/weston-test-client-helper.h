@@ -37,10 +37,18 @@
 #include <wayland-client-protocol.h>
 #include "weston-test-runner.h"
 #include "weston-test-client-protocol.h"
+#include "weston-screenshooter-client-protocol.h"
 #include "viewporter-client-protocol.h"
 
 struct client {
 	struct wl_display *wl_display;
+
+	/*
+	 * Have successfully received an expected protocol error, the
+	 * connection is in error state, and that is ok.
+	 */
+	bool errored_ok;
+
 	struct wl_registry *wl_registry;
 	struct wl_compositor *wl_compositor;
 	struct wl_shm *wl_shm;
@@ -57,8 +65,9 @@ struct client {
 	struct surface *surface;
 	int has_argb;
 	struct wl_list global_list;
-	bool has_wl_drm;
 	struct wl_list output_list; /* struct output::link */
+	struct weston_screenshooter *screenshooter;
+	bool buffer_copy_done;
 };
 
 struct global {
@@ -73,7 +82,6 @@ struct test {
 	int pointer_x;
 	int pointer_y;
 	uint32_t n_egl_buffers;
-	int buffer_copy_done;
 };
 
 struct input {
@@ -91,6 +99,7 @@ struct input {
 struct pointer {
 	struct wl_pointer *wl_pointer;
 	struct surface *focus;
+	uint32_t serial;
 	int x;
 	int y;
 	uint32_t button;
@@ -259,6 +268,13 @@ struct buffer *
 capture_screenshot_of_output(struct client *client);
 
 bool
+verify_image(struct buffer *shot,
+	     const char *ref_image,
+	     int ref_seq_no,
+	     const struct rectangle *clip,
+	     int seq_no);
+
+bool
 verify_screen_content(struct client *client,
 		      const char *ref_image,
 		      int ref_seq_no,
@@ -279,7 +295,7 @@ struct wp_viewport *
 client_create_viewport(struct client *client);
 
 void
-fill_image_with_color(pixman_image_t *image, pixman_color_t *color);
+fill_image_with_color(pixman_image_t *image, const pixman_color_t *color);
 
 pixman_color_t *
 color_rgb888(pixman_color_t *tmp, uint8_t r, uint8_t g, uint8_t b);

@@ -38,7 +38,6 @@
 #include <sys/mman.h>
 #include <linux/input.h>
 
-#include <drm_fourcc.h>
 #include <wayland-client.h>
 #include <wayland-cursor.h>
 
@@ -49,6 +48,7 @@
 #include <libweston/libweston.h>
 #include <libweston/backend-wayland.h>
 #include "renderer-gl/gl-renderer.h"
+#include "shared/weston-drm-fourcc.h"
 #include "shared/weston-egl-ext.h"
 #include "pixman-renderer.h"
 #include "shared/helpers.h"
@@ -97,6 +97,9 @@ struct wayland_backend {
 	struct wl_cursor *cursor;
 
 	struct wl_list input_list;
+	/* These struct wayland_input objects are waiting for the outer
+	 * compositor to provide a name and initial capabilities. */
+	struct wl_list pending_input_list;
 };
 
 struct wayland_output {
@@ -221,6 +224,11 @@ struct wayland_input {
 	struct wayland_output *keyboard_focus;
 
 	struct weston_pointer_axis_event vert, horiz;
+
+	bool seat_initialized;
+	struct wl_callback *initial_info_cb;
+	char *name;
+	enum wl_seat_capability caps;
 };
 
 struct gl_renderer_interface *gl_renderer;
@@ -1239,6 +1247,9 @@ wayland_output_enable(struct weston_output *base)
 	enum mode_status mode_status;
 	int ret = 0;
 
+	wl_list_init(&output->shm.buffers);
+	wl_list_init(&output->shm.free_buffers);
+
 	weston_log("Creating %dx%d wayland output at (%d, %d)\n",
 		   output->base.current_mode->width,
 		   output->base.current_mode->height,
@@ -1249,9 +1260,6 @@ wayland_output_enable(struct weston_output *base)
 
 	if (ret < 0)
 		return -1;
-
-	wl_list_init(&output->shm.buffers);
-	wl_list_init(&output->shm.free_buffers);
 
 	if (b->use_pixman) {
 		if (wayland_output_init_pixman_renderer(output) < 0)
@@ -2209,8 +2217,8 @@ input_handle_touch_up(void *data, struct wl_touch *wl_touch,
 
 static void
 input_handle_touch_motion(void *data, struct wl_touch *wl_touch,
-                        uint32_t time, int32_t id,
-                        wl_fixed_t fixed_x, wl_fixed_t fixed_y)
+                          uint32_t time, int32_t id,
+                          wl_fixed_t fixed_x, wl_fixed_t fixed_y)
 {
 	struct wayland_input *input = data;
 	struct wayland_output *output = input->touch_focus;
@@ -2284,13 +2292,10 @@ create_touch_device(struct wayland_input *input)
 }
 
 static void
-input_handle_capabilities(void *data, struct wl_seat *seat,
-		          enum wl_seat_capability caps)
+input_update_capabilities(struct wayland_input *input, enum wl_seat_capability caps)
 {
-	struct wayland_input *input = data;
-
 	if ((caps & WL_SEAT_CAPABILITY_POINTER) && !input->parent.pointer) {
-		input->parent.pointer = wl_seat_get_pointer(seat);
+		input->parent.pointer = wl_seat_get_pointer(input->parent.seat);
 		wl_pointer_set_user_data(input->parent.pointer, input);
 		wl_pointer_add_listener(input->parent.pointer,
 					&pointer_listener, input);
@@ -2305,7 +2310,7 @@ input_handle_capabilities(void *data, struct wl_seat *seat,
 	}
 
 	if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !input->parent.keyboard) {
-		input->parent.keyboard = wl_seat_get_keyboard(seat);
+		input->parent.keyboard = wl_seat_get_keyboard(input->parent.seat);
 		wl_keyboard_set_user_data(input->parent.keyboard, input);
 		wl_keyboard_add_listener(input->parent.keyboard,
 					 &keyboard_listener, input);
@@ -2319,7 +2324,7 @@ input_handle_capabilities(void *data, struct wl_seat *seat,
 	}
 
 	if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !input->parent.touch) {
-		input->parent.touch = wl_seat_get_touch(seat);
+		input->parent.touch = wl_seat_get_touch(input->parent.seat);
 		wl_touch_set_user_data(input->parent.touch, input);
 		wl_touch_add_listener(input->parent.touch,
 				      &touch_listener, input);
@@ -2338,9 +2343,27 @@ input_handle_capabilities(void *data, struct wl_seat *seat,
 }
 
 static void
+input_handle_capabilities(void *data, struct wl_seat *seat,
+		          enum wl_seat_capability caps)
+{
+	struct wayland_input *input = data;
+
+	if (input->seat_initialized)
+		input_update_capabilities(input, caps);
+	else
+		input->caps = caps;
+}
+
+static void
 input_handle_name(void *data, struct wl_seat *seat,
 		  const char *name)
 {
+	struct wayland_input *input = data;
+
+	if (!input->seat_initialized) {
+		assert(!input->name);
+		input->name = strdup(name);
+	}
 }
 
 static const struct wl_seat_listener seat_listener = {
@@ -2349,7 +2372,42 @@ static const struct wl_seat_listener seat_listener = {
 };
 
 static void
-display_add_seat(struct wayland_backend *b, uint32_t id, uint32_t available_version)
+display_finish_add_seat(void *data, struct wl_callback *wl_callback,
+			uint32_t callback_data)
+{
+	struct wayland_input *input = data;
+	char *name;
+
+	assert(wl_callback == input->initial_info_cb);
+	wl_callback_destroy(input->initial_info_cb);
+	input->initial_info_cb = NULL;
+	input->seat_initialized = true;
+
+	wl_list_remove(&input->link);
+	wl_list_insert(input->backend->input_list.prev, &input->link);
+
+	name = input->name ? input->name : "default";
+	weston_seat_init(&input->base, input->backend->compositor, name);
+	free(input->name);
+	input->name = NULL;
+
+	input_update_capabilities(input, input->caps);
+
+	/* Because this happens one roundtrip after wl_seat is bound,
+	 * wl_compositor will also have been bound by this time. */
+	input->parent.cursor.surface =
+		wl_compositor_create_surface(input->backend->parent.compositor);
+
+	input->vert.axis = WL_POINTER_AXIS_VERTICAL_SCROLL;
+	input->horiz.axis = WL_POINTER_AXIS_HORIZONTAL_SCROLL;
+}
+
+static const struct wl_callback_listener seat_callback_listener = {
+	display_finish_add_seat
+};
+
+static void
+display_start_add_seat(struct wayland_backend *b, uint32_t id, uint32_t available_version)
 {
 	struct wayland_input *input;
 	uint32_t version = MIN(available_version, 4);
@@ -2358,21 +2416,63 @@ display_add_seat(struct wayland_backend *b, uint32_t id, uint32_t available_vers
 	if (input == NULL)
 		return;
 
-	weston_seat_init(&input->base, b->compositor, "default");
 	input->backend = b;
 	input->parent.seat = wl_registry_bind(b->parent.registry, id,
 					      &wl_seat_interface, version);
 	input->seat_version = version;
-	wl_list_insert(b->input_list.prev, &input->link);
 
 	wl_seat_add_listener(input->parent.seat, &seat_listener, input);
 	wl_seat_set_user_data(input->parent.seat, input);
 
-	input->parent.cursor.surface =
-		wl_compositor_create_surface(b->parent.compositor);
+	/* Wait one roundtrip for the compositor to provide the seat name
+	 * and initial capabilities */
+	input->initial_info_cb = wl_display_sync(b->parent.wl_display);
+	wl_callback_add_listener(input->initial_info_cb,
+				 &seat_callback_listener, input);
 
-	input->vert.axis = WL_POINTER_AXIS_VERTICAL_SCROLL;
-	input->horiz.axis = WL_POINTER_AXIS_HORIZONTAL_SCROLL;
+	wl_list_insert(input->backend->pending_input_list.prev, &input->link);
+}
+
+static void
+wayland_input_destroy(struct wayland_input *input)
+{
+	if (input->touch_device)
+		weston_touch_device_destroy(input->touch_device);
+
+	weston_seat_release(&input->base);
+
+	if (input->parent.keyboard) {
+		if (input->seat_version >= WL_KEYBOARD_RELEASE_SINCE_VERSION)
+			wl_keyboard_release(input->parent.keyboard);
+		else
+			wl_keyboard_destroy(input->parent.keyboard);
+	}
+	if (input->parent.pointer) {
+		if (input->seat_version >= WL_POINTER_RELEASE_SINCE_VERSION)
+			wl_pointer_release(input->parent.pointer);
+		else
+			wl_pointer_destroy(input->parent.pointer);
+	}
+	if (input->parent.touch) {
+		if (input->seat_version >= WL_TOUCH_RELEASE_SINCE_VERSION)
+			wl_touch_release(input->parent.touch);
+		else
+			wl_touch_destroy(input->parent.touch);
+	}
+	if (input->parent.seat) {
+		if (input->seat_version >= WL_SEAT_RELEASE_SINCE_VERSION)
+			wl_seat_release(input->parent.seat);
+		else
+			wl_seat_destroy(input->parent.seat);
+	}
+	if (input->initial_info_cb)
+		wl_callback_destroy(input->initial_info_cb);
+	if (input->parent.cursor.surface)
+		wl_surface_destroy(input->parent.cursor.surface);
+	if (input->name)
+		free(input->name);
+
+	free(input);
 }
 
 static void
@@ -2580,7 +2680,7 @@ registry_handle_global(void *data, struct wl_registry *registry, uint32_t name,
 			wl_registry_bind(registry, name,
 					 &zwp_fullscreen_shell_v1_interface, 1);
 	} else if (strcmp(interface, "wl_seat") == 0) {
-		display_add_seat(b, name, version);
+		display_start_add_seat(b, name, version);
 	} else if (strcmp(interface, "wl_output") == 0) {
 		wayland_backend_register_output(b, name);
 	} else if (strcmp(interface, "wl_shm") == 0) {
@@ -2599,6 +2699,8 @@ registry_handle_global_remove(void *data, struct wl_registry *registry,
 	wl_list_for_each_safe(output, next, &b->parent.output_list, link)
 		if (output->id == name)
 			wayland_parent_output_destroy(output);
+
+	// todo: handle wl_seat removal
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -2627,6 +2729,11 @@ wayland_backend_handle_event(int fd, uint32_t mask, void *data)
 		wl_display_flush(b->parent.wl_display);
 	}
 
+	if (count < 0) {
+		weston_compositor_exit(b->compositor);
+		return 0;
+	}
+
 	return count;
 }
 
@@ -2635,6 +2742,7 @@ wayland_destroy(struct weston_compositor *ec)
 {
 	struct wayland_backend *b = to_wayland_backend(ec);
 	struct weston_head *base, *next;
+	struct wayland_input *input, *next_input;
 
 	wl_event_source_remove(b->parent.wl_source);
 
@@ -2642,6 +2750,12 @@ wayland_destroy(struct weston_compositor *ec)
 
 	wl_list_for_each_safe(base, next, &ec->head_list, compositor_link)
 		wayland_head_destroy(to_wayland_head(base));
+
+	wl_list_for_each_safe(input, next_input, &b->input_list, link)
+		wayland_input_destroy(input);
+
+	wl_list_for_each_safe(input, next_input, &b->pending_input_list, link)
+		wayland_input_destroy(input);
 
 	if (b->parent.shm)
 		wl_shm_destroy(b->parent.shm);
@@ -2756,9 +2870,15 @@ wayland_backend_create(struct weston_compositor *compositor,
 
 	wl_list_init(&b->parent.output_list);
 	wl_list_init(&b->input_list);
+	wl_list_init(&b->pending_input_list);
 	b->parent.registry = wl_display_get_registry(b->parent.wl_display);
 	wl_registry_add_listener(b->parent.registry, &registry_listener, b);
 	wl_display_roundtrip(b->parent.wl_display);
+
+	if (b->parent.shm == NULL) {
+		weston_log("Error: Failed to retrieve wl_shm from parent Wayland compositor\n");
+		goto err_display;
+	}
 
 	create_cursor(b, new_config);
 

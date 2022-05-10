@@ -1,7 +1,7 @@
 /*
  * Copyright © 2008-2011 Kristian Høgsberg
  * Copyright © 2017, 2018 General Electric Company
- * Copyright © 2012, 2017-2019 Collabora, Ltd.
+ * Copyright © 2012, 2017-2019, 2021 Collabora, Ltd.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -40,6 +40,8 @@
  * features should either provide their own (internal) header or use this one.
  */
 
+#include <libweston/libweston.h>
+#include "color.h"
 
 /* weston_buffer */
 
@@ -186,13 +188,13 @@ weston_seat_release(struct weston_seat *seat);
 void
 weston_seat_send_selection(struct weston_seat *seat, struct wl_client *client);
 
-void
+int
 weston_seat_init_pointer(struct weston_seat *seat);
 
 int
 weston_seat_init_keyboard(struct weston_seat *seat, struct xkb_keymap *keymap);
 
-void
+int
 weston_seat_init_touch(struct weston_seat *seat);
 
 void
@@ -259,7 +261,6 @@ weston_surface_to_buffer_float(struct weston_surface *surface,
 pixman_box32_t
 weston_surface_to_buffer_rect(struct weston_surface *surface,
 			      pixman_box32_t rect);
-
 void
 weston_surface_to_buffer_region(struct weston_surface *surface,
 				pixman_region32_t *surface_region,
@@ -324,6 +325,104 @@ weston_matrix_transform_region(pixman_region32_t *dest,
 void
 weston_protected_surface_send_event(struct protected_surface *psurface,
 				    enum weston_hdcp_protection protection);
+
+/* weston_drm_format */
+
+struct weston_drm_format {
+	uint32_t format;
+	struct wl_array modifiers;
+};
+
+struct weston_drm_format_array {
+	struct wl_array arr;
+};
+
+void
+weston_drm_format_array_init(struct weston_drm_format_array *formats);
+
+void
+weston_drm_format_array_fini(struct weston_drm_format_array *formats);
+
+int
+weston_drm_format_array_replace(struct weston_drm_format_array *formats,
+				const struct weston_drm_format_array *source_formats);
+
+struct weston_drm_format *
+weston_drm_format_array_add_format(struct weston_drm_format_array *formats,
+				   uint32_t format);
+
+void
+weston_drm_format_array_remove_latest_format(struct weston_drm_format_array *formats);
+
+struct weston_drm_format *
+weston_drm_format_array_find_format(const struct weston_drm_format_array *formats,
+				    uint32_t format);
+
+unsigned int
+weston_drm_format_array_count_pairs(const struct weston_drm_format_array *formats);
+
+bool
+weston_drm_format_array_equal(const struct weston_drm_format_array *formats_A,
+			      const struct weston_drm_format_array *formats_B);
+
+int
+weston_drm_format_array_join(struct weston_drm_format_array *formats_A,
+			     const struct weston_drm_format_array *formats_B);
+
+int
+weston_drm_format_array_intersect(struct weston_drm_format_array *formats_A,
+				  const struct weston_drm_format_array *formats_B);
+
+int
+weston_drm_format_array_subtract(struct weston_drm_format_array *formats_A,
+				 const struct weston_drm_format_array *formats_B);
+
+int
+weston_drm_format_add_modifier(struct weston_drm_format *format,
+			       uint64_t modifier);
+
+bool
+weston_drm_format_has_modifier(const struct weston_drm_format *format,
+			       uint64_t modifier);
+
+const uint64_t *
+weston_drm_format_get_modifiers(const struct weston_drm_format *format,
+				unsigned int *count_out);
+
+/**
+ * paint node
+ *
+ * A generic data structure unique for surface-view-output combination.
+ */
+struct weston_paint_node {
+	/* Immutable members: */
+
+	/* struct weston_surface::paint_node_list */
+	struct wl_list surface_link;
+	struct weston_surface *surface;
+
+	/* struct weston_view::paint_node_list */
+	struct wl_list view_link;
+	struct weston_view *view;
+
+	/* struct weston_output::paint_node_list */
+	struct wl_list output_link;
+	struct weston_output *output;
+
+	/* Mutable members: */
+
+	/* struct weston_output::paint_node_z_order_list */
+	struct wl_list z_order_link;
+
+	struct weston_surface_color_transform surf_xform;
+	bool surf_xform_valid;
+
+	uint32_t try_view_on_plane_failure_reasons;
+};
+
+struct weston_paint_node *
+weston_view_find_paint_node(struct weston_view *view,
+			    struct weston_output *output);
 
 /* others */
 int

@@ -36,6 +36,9 @@ dep_toytoolkit = declare_dependency(
 	dependencies: deps_toytoolkit,
 )
 
+simple_clients_enabled = get_option('simple-clients')
+simple_build_all = simple_clients_enabled.contains('all')
+
 simple_clients = [
 	{
 		'name': 'damage',
@@ -49,6 +52,31 @@ simple_clients = [
 			fullscreen_shell_unstable_v1_protocol_c,
 		],
 		'dep_objs': [ dep_wayland_client, dep_libshared ]
+	},
+	{
+		'name': 'dmabuf-feedback',
+		'sources': [
+			'simple-dmabuf-feedback.c',
+			'../libweston/pixel-formats.c',
+			linux_dmabuf_unstable_v1_client_protocol_h,
+			linux_dmabuf_unstable_v1_protocol_c,
+			xdg_shell_client_protocol_h,
+			xdg_shell_protocol_c,
+		],
+		'dep_objs': [
+			dep_wayland_client,
+			dep_libshared,
+			dep_pixman,
+			dep_libdrm,
+			dependency('libudev', version: '>= 136'),
+			# gbm_bo_get_fd_for_plane() from 21.1.0
+			dependency('gbm', version: '>= 21.1.1',
+				required: simple_build_all or simple_clients_enabled.contains('dmabuf-feedback'),
+				not_found_message: 'dmabuf-feedback requires gbm which was not found. If you rather not build this, drop "dmabuf-feedback" from simple-clients option.',
+				disabler: true)
+		],
+		'deps': [ 'egl', 'glesv2', 'gbm' ],
+		'options': [ 'renderer-gl' ]
 	},
 	{
 		'name': 'dmabuf-egl',
@@ -119,13 +147,13 @@ simple_clients = [
 		'name': 'touch',
 		'sources': [
 			'simple-touch.c',
+			xdg_shell_client_protocol_h,
+			xdg_shell_protocol_c,
 		],
 		'dep_objs': [ dep_wayland_client, dep_libshared ]
 	},
 ]
 
-simple_clients_enabled = get_option('simple-clients')
-simple_build_all = simple_clients_enabled.contains('all')
 foreach t : simple_clients
 	if simple_build_all or simple_clients_enabled.contains(t.get('name'))
 		t_name = 'weston-simple-' + t.get('name')
@@ -266,7 +294,13 @@ demo_clients = [
 		]
 	},
 	{ 'basename': 'image' },
-	{ 'basename': 'multi-resource' },
+	{
+		'basename': 'multi-resource',
+		'add_sources': [
+			xdg_shell_client_protocol_h,
+			xdg_shell_protocol_c,
+		]
+	},
 	{
 		'basename': 'presentation-shm',
 		'add_sources': [

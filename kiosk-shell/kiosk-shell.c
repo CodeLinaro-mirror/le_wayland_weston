@@ -33,7 +33,9 @@
 #include "kiosk-shell-grab.h"
 #include "compositor/weston.h"
 #include "shared/helpers.h"
-#include "util.h"
+#include "shared/shell-utils.h"
+
+#include <libweston/xwayland-api.h>
 
 static struct kiosk_shell_surface *
 get_kiosk_shell_surface(struct weston_surface *surface)
@@ -55,12 +57,60 @@ get_kiosk_shell_seat(struct weston_seat *seat)
 {
 	struct wl_listener *listener;
 
+	if (!seat)
+		return NULL;
+
 	listener = wl_signal_get(&seat->destroy_signal,
 				 kiosk_shell_seat_handle_destroy);
-	assert(listener != NULL);
+
+	if (!listener)
+		return NULL;
 
 	return container_of(listener,
 			    struct kiosk_shell_seat, seat_destroy_listener);
+}
+
+
+static struct weston_seat *
+get_kiosk_shell_first_seat(struct kiosk_shell *shell)
+{
+	struct wl_list *node;
+	struct weston_compositor *compositor = shell->compositor;
+
+	if (wl_list_empty(&compositor->seat_list))
+		return NULL;
+
+	node = compositor->seat_list.next;
+	return container_of(node, struct weston_seat, link);
+}
+
+static void
+transform_handler(struct wl_listener *listener, void *data)
+{
+	struct weston_surface *surface = data;
+	struct kiosk_shell_surface *shsurf = get_kiosk_shell_surface(surface);
+	const struct weston_xwayland_surface_api *api;
+	int x, y;
+
+	if (!shsurf)
+		return;
+
+	api = shsurf->shell->xwayland_surface_api;
+	if (!api) {
+		api = weston_xwayland_surface_get_api(shsurf->shell->compositor);
+		shsurf->shell->xwayland_surface_api = api;
+	}
+
+	if (!api || !api->is_xwayland_surface(surface))
+		return;
+
+	if (!weston_view_is_mapped(shsurf->view))
+		return;
+
+	x = shsurf->view->geometry.x;
+	y = shsurf->view->geometry.y;
+
+	api->send_position(surface, x, y);
 }
 
 /*
@@ -312,33 +362,65 @@ kiosk_shell_surface_create(struct kiosk_shell *shell,
 	return shsurf;
 }
 
+static void
+kiosk_shell_surface_activate(struct kiosk_shell_surface *shsurf,
+			     struct kiosk_shell_seat *kiosk_seat,
+			     uint32_t activate_flags)
+{
+	struct weston_desktop_surface *dsurface = shsurf->desktop_surface;
+	struct weston_surface *surface =
+		weston_desktop_surface_get_surface(dsurface);
+
+	/* keyboard focus */
+	weston_view_activate_input(shsurf->view, kiosk_seat->seat, activate_flags);
+
+	/* xdg-shell deactivation if there's a focused one */
+	if (kiosk_seat->focused_surface) {
+		struct kiosk_shell_surface *current_focus =
+			get_kiosk_shell_surface(kiosk_seat->focused_surface);
+		struct weston_desktop_surface *dsurface_focus;
+		assert(current_focus);
+
+		dsurface_focus = current_focus->desktop_surface;
+		if (--current_focus->focus_count == 0)
+			weston_desktop_surface_set_activated(dsurface_focus, false);
+
+		/* removes it from the normal_layer and move it to inactive
+		 * one, without occluding the top-level window if the new one
+		 * is a child to that */
+		if (!shsurf->parent) {
+			weston_layer_entry_remove(&current_focus->view->layer_link);
+			weston_layer_entry_insert(&shsurf->shell->inactive_layer.view_list,
+						  &current_focus->view->layer_link);
+			weston_view_geometry_dirty(current_focus->view);
+			weston_surface_damage(current_focus->view->surface);
+		}
+	}
+
+	/* xdg-shell activation for the new one */
+	kiosk_seat->focused_surface = surface;
+	if (shsurf->focus_count++ == 0)
+		weston_desktop_surface_set_activated(dsurface, true);
+
+	/* removes it from the inactive_layer, on removal of a surface, and
+	 * move it back to the normal layer */
+	weston_layer_entry_remove(&shsurf->view->layer_link);
+	weston_layer_entry_insert(&shsurf->shell->normal_layer.view_list,
+				  &shsurf->view->layer_link);
+	weston_view_geometry_dirty(shsurf->view);
+	weston_surface_damage(shsurf->view->surface);
+}
+
 /*
  * kiosk_shell_seat
  */
 
 static void
-kiosk_shell_seat_handle_keyboard_focus(struct wl_listener *listener, void *data)
+kiosk_shell_seat_destroy(struct kiosk_shell_seat *shseat)
 {
-	struct weston_keyboard *keyboard = data;
-	struct kiosk_shell_seat *shseat = get_kiosk_shell_seat(keyboard->seat);
-
-	if (shseat->focused_surface) {
-		struct kiosk_shell_surface *shsurf =
-			get_kiosk_shell_surface(shseat->focused_surface);
-		if (shsurf && --shsurf->focus_count == 0)
-			weston_desktop_surface_set_activated(shsurf->desktop_surface,
-							     false);
-	}
-
-	shseat->focused_surface = weston_surface_get_main_surface(keyboard->focus);
-
-	if (shseat->focused_surface) {
-		struct kiosk_shell_surface *shsurf =
-			get_kiosk_shell_surface(shseat->focused_surface);
-		if (shsurf && shsurf->focus_count++ == 0)
-			weston_desktop_surface_set_activated(shsurf->desktop_surface,
-							     true);
-	}
+	wl_list_remove(&shseat->seat_destroy_listener.link);
+	wl_list_remove(&shseat->link);
+	free(shseat);
 }
 
 static void
@@ -348,36 +430,19 @@ kiosk_shell_seat_handle_destroy(struct wl_listener *listener, void *data)
 		container_of(listener,
 			     struct kiosk_shell_seat, seat_destroy_listener);
 
-	wl_list_remove(&shseat->keyboard_focus_listener.link);
-	wl_list_remove(&shseat->caps_changed_listener.link);
-	wl_list_remove(&shseat->seat_destroy_listener.link);
-	free(shseat);
-}
-
-static void
-kiosk_shell_seat_handle_caps_changed(struct wl_listener *listener, void *data)
-{
-	struct weston_keyboard *keyboard;
-	struct kiosk_shell_seat *shseat;
-
-	shseat = container_of(listener, struct kiosk_shell_seat,
-			      caps_changed_listener);
-	keyboard = weston_seat_get_keyboard(shseat->seat);
-
-	if (keyboard &&
-	    wl_list_empty(&shseat->keyboard_focus_listener.link)) {
-		wl_signal_add(&keyboard->focus_signal,
-			      &shseat->keyboard_focus_listener);
-	} else if (!keyboard) {
-		wl_list_remove(&shseat->keyboard_focus_listener.link);
-		wl_list_init(&shseat->keyboard_focus_listener.link);
-	}
+	kiosk_shell_seat_destroy(shseat);
 }
 
 static struct kiosk_shell_seat *
-kiosk_shell_seat_create(struct weston_seat *seat)
+kiosk_shell_seat_create(struct kiosk_shell *shell, struct weston_seat *seat)
 {
 	struct kiosk_shell_seat *shseat;
+
+	if (wl_list_length(&shell->seat_list) > 0) {
+		weston_log("WARNING: multiple seats detected. kiosk-shell "
+			   "can not handle multiple seats!\n");
+		return NULL;
+	}
 
 	shseat = zalloc(sizeof *shseat);
 	if (!shseat) {
@@ -390,13 +455,7 @@ kiosk_shell_seat_create(struct weston_seat *seat)
 	shseat->seat_destroy_listener.notify = kiosk_shell_seat_handle_destroy;
 	wl_signal_add(&seat->destroy_signal, &shseat->seat_destroy_listener);
 
-	shseat->keyboard_focus_listener.notify = kiosk_shell_seat_handle_keyboard_focus;
-	wl_list_init(&shseat->keyboard_focus_listener.link);
-
-	shseat->caps_changed_listener.notify = kiosk_shell_seat_handle_caps_changed;
-	wl_signal_add(&seat->updated_caps_signal,
-		      &shseat->caps_changed_listener);
-	kiosk_shell_seat_handle_caps_changed(&shseat->caps_changed_listener, NULL);
+	wl_list_insert(&shell->seat_list, &shseat->link);
 
 	return shseat;
 }
@@ -417,6 +476,9 @@ kiosk_shell_output_recreate_background(struct kiosk_shell_output *shoutput)
 {
 	struct kiosk_shell *shell = shoutput->shell;
 	struct weston_output *output = shoutput->output;
+	struct weston_config_section *shell_section = NULL;
+	uint32_t bg_color = 0x0;
+	struct weston_solid_color_surface solid_surface = {};
 
 	if (shoutput->background_view)
 		weston_surface_destroy(shoutput->background_view->surface);
@@ -424,17 +486,29 @@ kiosk_shell_output_recreate_background(struct kiosk_shell_output *shoutput)
 	if (!output)
 		return;
 
+	if (shell->config)
+		shell_section = weston_config_get_section(shell->config, "shell", NULL, NULL);
+	if (shell_section)
+		weston_config_section_get_color(shell_section, "background-color",
+						&bg_color, 0x00000000);
+
+	solid_surface.r = ((bg_color >> 16) & 0xff) / 255.0;
+	solid_surface.g = ((bg_color >> 8) & 0xff) / 255.0;
+	solid_surface.b = ((bg_color >> 0) & 0xff) / 255.0;
+
+	solid_surface.get_label = kiosk_shell_background_surface_get_label;
+	solid_surface.surface_committed = NULL;
+	solid_surface.surface_private = NULL;
+
 	shoutput->background_view =
-			create_colored_surface(shoutput->shell->compositor,
-					       0.5, 0.5, 0.5,
-					       output->x, output->y,
-					       output->width,
-			                       output->height);
+			create_solid_color_surface(shoutput->shell->compositor,
+						   &solid_surface,
+						   output->x, output->y,
+						   output->width,
+						   output->height);
 
 	weston_surface_set_role(shoutput->background_view->surface,
 				"kiosk-shell-background", NULL, 0);
-	weston_surface_set_label_func(shoutput->background_view->surface,
-				      kiosk_shell_background_surface_get_label);
 
 	weston_layer_entry_insert(&shell->background_layer.view_list,
 				  &shoutput->background_view->layer_link);
@@ -546,16 +620,15 @@ desktop_surface_added(struct weston_desktop_surface *desktop_surface,
 {
 	struct kiosk_shell *shell = data;
 	struct kiosk_shell_surface *shsurf;
-	struct weston_seat *seat;
+	struct weston_surface *surface =
+		weston_desktop_surface_get_surface(desktop_surface);
 
 	shsurf = kiosk_shell_surface_create(shell, desktop_surface);
 	if (!shsurf)
 		return;
 
+	weston_surface_set_label_func(surface, surface_get_label);
 	kiosk_shell_surface_set_fullscreen(shsurf, NULL);
-
-	wl_list_for_each(seat, &shell->compositor->seat_list, link)
-		weston_view_activate(shsurf->view, seat, 0);
 }
 
 /* Return the view that should gain focus after the specified shsurf is
@@ -564,12 +637,21 @@ desktop_surface_added(struct weston_desktop_surface *desktop_surface,
  * parentage. */
 static struct weston_view *
 find_focus_successor(struct weston_layer *layer,
-		     struct kiosk_shell_surface *shsurf)
+		     struct kiosk_shell_surface *shsurf,
+		     struct weston_surface *focused_surface)
 {
 	struct kiosk_shell_surface *parent_root =
 		kiosk_shell_surface_get_parent_root(shsurf);
 	struct weston_view *top_view = NULL;
 	struct weston_view *view;
+
+	/* we need to take into account that the surface being destroyed it not
+	 * always the same as the focus_surface, which could result in picking
+	 * and *activating* the wrong window, so avoid returning a view for
+	 * that case. A particular case is when a top-level child window, would
+	 * pick a parent window below the focused_surface. */
+	if (focused_surface != shsurf->view->surface)
+		return top_view;
 
 	wl_list_for_each(view, &layer->view_list.link, layer_link.link) {
 		struct kiosk_shell_surface *view_shsurf;
@@ -604,17 +686,27 @@ desktop_surface_removed(struct weston_desktop_surface *desktop_surface,
 		weston_desktop_surface_get_surface(desktop_surface);
 	struct weston_view *focus_view;
 	struct weston_seat *seat;
+	struct kiosk_shell_seat* kiosk_seat;
 
 	if (!shsurf)
 		return;
 
-	focus_view = find_focus_successor(&shell->normal_layer, shsurf);
+	seat = get_kiosk_shell_first_seat(shell);
+	kiosk_seat = get_kiosk_shell_seat(seat);
 
-	if (focus_view) {
-		wl_list_for_each(seat, &shell->compositor->seat_list, link) {
-			struct weston_keyboard *keyboard = seat->keyboard_state;
-			if (keyboard && keyboard->focus == surface)
-				weston_view_activate(focus_view, seat, 0);
+	if (seat && kiosk_seat) {
+		focus_view = find_focus_successor(&shell->inactive_layer, shsurf,
+						  kiosk_seat->focused_surface);
+
+		if (focus_view) {
+			struct kiosk_shell_surface *focus_shsurf =
+				get_kiosk_shell_surface(focus_view->surface);
+
+			kiosk_shell_surface_activate(focus_shsurf, kiosk_seat,
+						     WESTON_ACTIVATE_FLAG_NONE);
+		} else {
+			if (kiosk_seat->focused_surface == surface)
+				kiosk_seat->focused_surface = NULL;
 		}
 	}
 
@@ -631,6 +723,8 @@ desktop_surface_committed(struct weston_desktop_surface *desktop_surface,
 		weston_desktop_surface_get_surface(desktop_surface);
 	bool is_resized;
 	bool is_fullscreen;
+
+	assert(shsurf);
 
 	if (surface->width == 0)
 		return;
@@ -661,10 +755,17 @@ desktop_surface_committed(struct weston_desktop_surface *desktop_surface,
 	}
 
 	if (!weston_surface_is_mapped(surface)) {
-		weston_layer_entry_insert(&shsurf->shell->normal_layer.view_list,
-					  &shsurf->view->layer_link);
+		struct weston_seat *seat =
+			get_kiosk_shell_first_seat(shsurf->shell);
+		struct kiosk_shell_seat *kiosk_seat;
+
 		shsurf->view->is_mapped = true;
 		surface->is_mapped = true;
+
+		kiosk_seat = get_kiosk_shell_seat(seat);
+		if (seat && kiosk_seat)
+			kiosk_shell_surface_activate(shsurf, kiosk_seat,
+						     WESTON_ACTIVATE_FLAG_NONE);
 	}
 
 	if (!is_fullscreen && (sx != 0 || sy != 0)) {
@@ -856,6 +957,8 @@ kiosk_shell_activate_view(struct kiosk_shell *shell,
 		weston_surface_get_main_surface(view->surface);
 	struct kiosk_shell_surface *shsurf =
 		get_kiosk_shell_surface(main_surface);
+	struct kiosk_shell_seat *kiosk_seat =
+		get_kiosk_shell_seat(seat);
 
 	if (!shsurf)
 		return;
@@ -872,7 +975,8 @@ kiosk_shell_activate_view(struct kiosk_shell *shell,
 		weston_surface_damage(view->surface);
 	}
 
-	weston_view_activate(view, seat, flags);
+	if (kiosk_seat)
+		kiosk_shell_surface_activate(shsurf, kiosk_seat, flags);
 }
 
 static void
@@ -986,7 +1090,24 @@ static void
 kiosk_shell_handle_seat_created(struct wl_listener *listener, void *data)
 {
 	struct weston_seat *seat = data;
-	kiosk_shell_seat_create(seat);
+	struct kiosk_shell *shell =
+		container_of(listener, struct kiosk_shell, seat_created_listener);
+	kiosk_shell_seat_create(shell, seat);
+}
+
+static void
+kiosk_shell_destroy_surfaces_on_layer(struct weston_layer *layer)
+{
+       struct weston_view *view, *view_next;
+
+       wl_list_for_each_safe(view, view_next, &layer->view_list.link, layer_link.link) {
+               struct kiosk_shell_surface *shsurf =
+                       get_kiosk_shell_surface(view->surface);
+               assert(shsurf);
+               kiosk_shell_surface_destroy(shsurf);
+       }
+
+       weston_layer_fini(layer);
 }
 
 static void
@@ -995,15 +1116,28 @@ kiosk_shell_destroy(struct wl_listener *listener, void *data)
 	struct kiosk_shell *shell =
 		container_of(listener, struct kiosk_shell, destroy_listener);
 	struct kiosk_shell_output *shoutput, *tmp;
+	struct kiosk_shell_seat *shseat, *shseat_next;
 
 	wl_list_remove(&shell->destroy_listener.link);
 	wl_list_remove(&shell->output_created_listener.link);
 	wl_list_remove(&shell->output_resized_listener.link);
 	wl_list_remove(&shell->output_moved_listener.link);
 	wl_list_remove(&shell->seat_created_listener.link);
+	wl_list_remove(&shell->transform_listener.link);
 
 	wl_list_for_each_safe(shoutput, tmp, &shell->output_list, link) {
 		kiosk_shell_output_destroy(shoutput);
+	}
+
+	/* bg layer doesn't contain a weston_desktop_surface, and
+	 * kiosk_shell_output_destroy() takes care of destroying it, we're just
+	 * doing a weston_layer_fini() here as there might be multiple bg views */
+	weston_layer_fini(&shell->background_layer);
+	kiosk_shell_destroy_surfaces_on_layer(&shell->normal_layer);
+	kiosk_shell_destroy_surfaces_on_layer(&shell->inactive_layer);
+
+	wl_list_for_each_safe(shseat, shseat_next, &shell->seat_list, link) {
+		kiosk_shell_seat_destroy(shseat);
 	}
 
 	weston_desktop_destroy(shell->desktop);
@@ -1018,6 +1152,7 @@ wet_shell_init(struct weston_compositor *ec,
 	struct kiosk_shell *shell;
 	struct weston_seat *seat;
 	struct weston_output *output;
+	const char *config_file;
 
 	shell = zalloc(sizeof *shell);
 	if (shell == NULL)
@@ -1032,11 +1167,20 @@ wet_shell_init(struct weston_compositor *ec,
 		return 0;
 	}
 
+	shell->transform_listener.notify = transform_handler;
+	wl_signal_add(&ec->transform_signal, &shell->transform_listener);
+
+	config_file = weston_config_get_name_from_env();
+	shell->config = weston_config_parse(config_file);
+
 	weston_layer_init(&shell->background_layer, ec);
 	weston_layer_init(&shell->normal_layer, ec);
+	weston_layer_init(&shell->inactive_layer, ec);
 
 	weston_layer_set_position(&shell->background_layer,
 				  WESTON_LAYER_POSITION_BACKGROUND);
+	weston_layer_set_position(&shell->inactive_layer,
+				  WESTON_LAYER_POSITION_HIDDEN);
 	/* We use the NORMAL layer position, so that xwayland surfaces, which
 	 * are placed at NORMAL+1, are visible.  */
 	weston_layer_set_position(&shell->normal_layer,
@@ -1047,8 +1191,9 @@ wet_shell_init(struct weston_compositor *ec,
 	if (!shell->desktop)
 		return -1;
 
+	wl_list_init(&shell->seat_list);
 	wl_list_for_each(seat, &ec->seat_list, link)
-		kiosk_shell_seat_create(seat);
+		kiosk_shell_seat_create(shell, seat);
 	shell->seat_created_listener.notify = kiosk_shell_handle_seat_created;
 	wl_signal_add(&ec->seat_created_signal, &shell->seat_created_listener);
 
@@ -1064,6 +1209,8 @@ wet_shell_init(struct weston_compositor *ec,
 
 	shell->output_moved_listener.notify = kiosk_shell_handle_output_moved;
 	wl_signal_add(&ec->output_moved_signal, &shell->output_moved_listener);
+
+	screenshooter_create(ec);
 
 	kiosk_shell_add_bindings(shell);
 

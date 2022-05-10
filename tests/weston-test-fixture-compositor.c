@@ -30,12 +30,20 @@
 #include <libudev.h>
 #include <unistd.h>
 #include <sys/file.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <stdarg.h>
+#include <stdlib.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #include "shared/helpers.h"
 #include "weston-test-fixture-compositor.h"
 #include "weston.h"
 #include "test-config.h"
+
+static_assert(WET_MAIN_RET_MISSING_CAPS == RESULT_SKIP,
+	      "wet_main() return value for skip is wrong");
 
 struct prog_args {
 	int argc;
@@ -84,11 +92,12 @@ prog_args_fini(struct prog_args *p)
 {
 	int i;
 
-	assert(p->saved);
+	if (p->saved) {
+		for (i = 0; i < p->argc; i++)
+			free(p->saved[i]);
+		free(p->saved);
+	}
 
-	for (i = 0; i < p->argc; i++)
-		free(p->saved[i]);
-	free(p->saved);
 	free(p->argv);
 	prog_args_init(p);
 }
@@ -170,6 +179,7 @@ compositor_setup_defaults_(struct compositor_setup *setup,
 			   const char *testset_name)
 {
 	*setup = (struct compositor_setup) {
+		.test_quirks = (struct weston_testsuite_quirks){ },
 		.backend = WESTON_BACKEND_HEADLESS,
 		.renderer = RENDERER_NOOP,
 		.shell = SHELL_DESKTOP,
@@ -271,6 +281,7 @@ int
 execute_compositor(const struct compositor_setup *setup,
 		   struct wet_testsuite_data *data)
 {
+	struct weston_testsuite_data test_data;
 	struct prog_args args;
 	char *tmp;
 	const char *ctmp, *drm_device;
@@ -348,7 +359,8 @@ execute_compositor(const struct compositor_setup *setup,
 				"WESTON_TEST_SUITE_DRM_DEVICE is not set. " \
 				"See test suite documentation to learn how " \
 				"to run them.\n");
-			return RESULT_SKIP;
+			ret = RESULT_SKIP;
+			goto out;
 		}
 		asprintf(&tmp, "--drm-device=%s", drm_device);
 		prog_args_take(&args, tmp);
@@ -358,9 +370,14 @@ execute_compositor(const struct compositor_setup *setup,
 		prog_args_take(&args, strdup("--continue-without-input"));
 
 		lock_fd = wait_for_lock();
-		if (lock_fd == -1)
-			return RESULT_FAIL;
+		if (lock_fd == -1) {
+			ret = RESULT_FAIL;
+			goto out;
+		}
 	}
+
+	/* Test suite needs the debug protocol to be able to take screenshots */
+	prog_args_take(&args, strdup("--debug"));
 
 	asprintf(&tmp, "--socket=%s", setup->testset_name);
 	prog_args_take(&args, tmp);
@@ -393,6 +410,7 @@ execute_compositor(const struct compositor_setup *setup,
 	if (setup->config_file) {
 		asprintf(&tmp, "--config=%s", setup->config_file);
 		prog_args_take(&args, tmp);
+		free(setup->config_file);
 	} else {
 		prog_args_take(&args, strdup("--no-config"));
 	}
@@ -412,10 +430,12 @@ execute_compositor(const struct compositor_setup *setup,
 	if (setup->xwayland)
 		prog_args_take(&args, strdup("--xwayland"));
 
-	wet_testsuite_data_set(data);
+	test_data.test_quirks = setup->test_quirks;
+	test_data.test_private_data = data;
 	prog_args_save(&args);
-	ret = wet_main(args.argc, args.argv);
+	ret = wet_main(args.argc, args.argv, &test_data);
 
+out:
 	prog_args_fini(&args);
 
 	/* We acquired a lock (if this is a DRM-backend test) and now we can
@@ -425,3 +445,77 @@ execute_compositor(const struct compositor_setup *setup,
 
 	return ret;
 }
+
+static void
+write_cfg(va_list entry_list, FILE *weston_ini)
+{
+	char *entry = va_arg(entry_list, char *);
+	int ret;
+	assert(entry);
+
+	while (entry) {
+		ret = fprintf(weston_ini, "%s\n", entry);
+		assert(ret >= 0);
+		free(entry);
+		entry = va_arg(entry_list, char *);
+	}
+}
+
+static FILE *
+open_ini_file(struct compositor_setup *setup)
+{
+	char *wd, *tmp_path = NULL;
+	FILE *weston_ini = NULL;
+
+	assert(!setup->config_file);
+
+	wd = realpath(".", NULL);
+	assert(wd);
+
+	if (asprintf(&tmp_path, "%s/%s.ini", wd, setup->testset_name) == -1) {
+		fprintf(stderr, "Fail formatting Weston.ini file name.\n");
+		goto out;
+	}
+
+	weston_ini = fopen(tmp_path, "w");
+	assert(weston_ini);
+	setup->config_file = tmp_path;
+
+out:
+	free(wd);
+	return weston_ini;
+}
+
+void
+weston_ini_setup_(struct compositor_setup *setup, ...)
+{
+	FILE *weston_ini = NULL;
+	int ret;
+	va_list entry_list;
+
+	weston_ini = open_ini_file(setup);
+	assert(weston_ini);
+
+	va_start(entry_list, setup);
+	write_cfg(entry_list, weston_ini);
+	va_end(entry_list);
+
+	ret = fclose(weston_ini);
+	assert(ret != EOF);
+}
+
+char *
+cfgln(const char *fmt, ...)
+{
+	char *str;
+	int ret;
+	va_list ap;
+
+	va_start(ap, fmt);
+	ret = vasprintf(&str, fmt, ap);
+	assert(ret >= 0);
+	va_end(ap);
+
+	return str;
+}
+

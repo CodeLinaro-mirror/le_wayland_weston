@@ -33,13 +33,13 @@
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
-#include <drm_fourcc.h>
 
 #include <libweston/libweston.h>
 #include <libweston/backend-drm.h>
 #include <libweston/pixel-formats.h>
 #include <libweston/linux-dmabuf.h>
 #include "shared/helpers.h"
+#include "shared/weston-drm-fourcc.h"
 #include "drm-internal.h"
 #include "linux-dmabuf.h"
 
@@ -48,8 +48,6 @@ drm_fb_destroy(struct drm_fb *fb)
 {
 	if (fb->fb_id != 0)
 		drmModeRmFB(fb->fd, fb->fb_id);
-	weston_buffer_reference(&fb->buffer_ref, NULL);
-	weston_buffer_release_reference(&fb->buffer_release_ref, NULL);
 	free(fb);
 }
 
@@ -220,17 +218,17 @@ drm_fb_destroy_dmabuf(struct drm_fb *fb)
 
 static struct drm_fb *
 drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
-		       struct drm_backend *backend, bool is_opaque)
+		       struct drm_backend *backend, bool is_opaque,
+		       uint32_t *try_view_on_plane_failure_reasons)
 {
+#ifndef HAVE_GBM_FD_IMPORT
+	/* Importing a buffer to KMS requires explicit modifiers, so
+	 * we can't continue with the legacy GBM_BO_IMPORT_FD instead
+	 * of GBM_BO_IMPORT_FD_MODIFIER. */
+	return NULL;
+#else
 	struct drm_fb *fb;
-	struct gbm_import_fd_data import_legacy = {
-		.width = dmabuf->attributes.width,
-		.height = dmabuf->attributes.height,
-		.format = dmabuf->attributes.format,
-		.stride = dmabuf->attributes.stride[0],
-		.fd = dmabuf->attributes.fd[0],
-	};
-#ifdef HAVE_GBM_FD_IMPORT
+	int i;
 	struct gbm_import_fd_modifier_data import_mod = {
 		.width = dmabuf->attributes.width,
 		.height = dmabuf->attributes.height,
@@ -238,9 +236,20 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 		.num_fds = dmabuf->attributes.n_planes,
 		.modifier = dmabuf->attributes.modifier[0],
 	};
-#endif /* HAVE_GBM_FD_IMPORT */
 
-	int i;
+	/* We should not import to KMS a buffer that has been allocated using no
+	 * modifiers. Usually drivers use linear layouts to allocate with no
+	 * modifiers, but this is not a rule. The driver could use, for
+	 * instance, a tiling layout under the hood - and both Weston and the
+	 * KMS driver can't know. So giving the buffer to KMS is not safe, as
+	 * not knowing its layout can result in garbage being displayed. In
+	 * short, importing a buffer to KMS requires explicit modifiers. */
+	if (dmabuf->attributes.modifier[0] == DRM_FORMAT_MOD_INVALID) {
+		if (try_view_on_plane_failure_reasons)
+			*try_view_on_plane_failure_reasons |=
+				FAILURE_REASONS_DMABUF_MODIFIER_INVALID;
+		return NULL;
+	}
 
 	/* XXX: TODO:
 	 *
@@ -261,52 +270,12 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	fb->refcnt = 1;
 	fb->type = BUFFER_DMABUF;
 
-#ifdef HAVE_GBM_FD_IMPORT
-	static_assert(ARRAY_LENGTH(import_mod.fds) ==
-		      ARRAY_LENGTH(dmabuf->attributes.fd),
-		      "GBM and linux_dmabuf FD size must match");
-	static_assert(sizeof(import_mod.fds) == sizeof(dmabuf->attributes.fd),
-		      "GBM and linux_dmabuf FD size must match");
-	memcpy(import_mod.fds, dmabuf->attributes.fd, sizeof(import_mod.fds));
+	ARRAY_COPY(import_mod.fds, dmabuf->attributes.fd);
+	ARRAY_COPY(import_mod.strides, dmabuf->attributes.stride);
+	ARRAY_COPY(import_mod.offsets, dmabuf->attributes.offset);
 
-	static_assert(ARRAY_LENGTH(import_mod.strides) ==
-		      ARRAY_LENGTH(dmabuf->attributes.stride),
-		      "GBM and linux_dmabuf stride size must match");
-	static_assert(sizeof(import_mod.strides) ==
-		      sizeof(dmabuf->attributes.stride),
-		      "GBM and linux_dmabuf stride size must match");
-	memcpy(import_mod.strides, dmabuf->attributes.stride,
-	       sizeof(import_mod.strides));
-
-	static_assert(ARRAY_LENGTH(import_mod.offsets) ==
-		      ARRAY_LENGTH(dmabuf->attributes.offset),
-		      "GBM and linux_dmabuf offset size must match");
-	static_assert(sizeof(import_mod.offsets) ==
-		      sizeof(dmabuf->attributes.offset),
-		      "GBM and linux_dmabuf offset size must match");
-	memcpy(import_mod.offsets, dmabuf->attributes.offset,
-	       sizeof(import_mod.offsets));
-#endif /* NOT HAVE_GBM_FD_IMPORT */
-
-	/* The legacy FD-import path does not allow us to supply modifiers,
-	 * multiple planes, or buffer offsets. */
-	if (dmabuf->attributes.modifier[0] != DRM_FORMAT_MOD_INVALID ||
-	    dmabuf->attributes.n_planes > 1 ||
-	    dmabuf->attributes.offset[0] > 0) {
-#ifdef HAVE_GBM_FD_IMPORT
-		fb->bo = gbm_bo_import(backend->gbm, GBM_BO_IMPORT_FD_MODIFIER,
-				       &import_mod,
-				       GBM_BO_USE_SCANOUT);
-#else /* NOT HAVE_GBM_FD_IMPORT */
-		drm_debug(backend, "\t\t\t[dmabuf] Unsupported use of modifiers.\n");
-		goto err_free;
-#endif /* NOT HAVE_GBM_FD_IMPORT */
-	} else {
-		fb->bo = gbm_bo_import(backend->gbm, GBM_BO_IMPORT_FD,
-				       &import_legacy,
-				       GBM_BO_USE_SCANOUT);
-	}
-
+	fb->bo = gbm_bo_import(backend->gbm, GBM_BO_IMPORT_FD_MODIFIER,
+			       &import_mod, GBM_BO_USE_SCANOUT);
 	if (!fb->bo)
 		goto err_free;
 
@@ -316,18 +285,8 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	fb->size = 0;
 	fb->fd = backend->drm.fd;
 
-	static_assert(ARRAY_LENGTH(fb->strides) ==
-		      ARRAY_LENGTH(dmabuf->attributes.stride),
-		      "drm_fb and dmabuf stride size must match");
-	static_assert(sizeof(fb->strides) == sizeof(dmabuf->attributes.stride),
-		      "drm_fb and dmabuf stride size must match");
-	memcpy(fb->strides, dmabuf->attributes.stride, sizeof(fb->strides));
-	static_assert(ARRAY_LENGTH(fb->offsets) ==
-		      ARRAY_LENGTH(dmabuf->attributes.offset),
-		      "drm_fb and dmabuf offset size must match");
-	static_assert(sizeof(fb->offsets) == sizeof(dmabuf->attributes.offset),
-		      "drm_fb and dmabuf offset size must match");
-	memcpy(fb->offsets, dmabuf->attributes.offset, sizeof(fb->offsets));
+	ARRAY_COPY(fb->strides, dmabuf->attributes.stride);
+	ARRAY_COPY(fb->offsets, dmabuf->attributes.offset);
 
 	fb->format = pixel_format_get_info(dmabuf->attributes.format);
 	if (!fb->format) {
@@ -347,7 +306,6 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 		goto err_free;
 	}
 
-#ifdef HAVE_GBM_MODIFIERS
 	fb->num_planes = dmabuf->attributes.n_planes;
 	for (i = 0; i < dmabuf->attributes.n_planes; i++) {
 		union gbm_bo_handle handle;
@@ -357,29 +315,20 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 			goto err_free;
 		fb->handles[i] = handle.u32;
 	}
-#else /* NOT HAVE_GBM_MODIFIERS */
-	{
-		union gbm_bo_handle handle;
 
-		fb->num_planes = 1;
-
-	        handle = gbm_bo_get_handle(fb->bo);
-
-		if (handle.s32 == -1)
-			goto err_free;
-		fb->handles[0] = handle.u32;
-	}
-#endif /* NOT HAVE_GBM_MODIFIERS */
-
-
-	if (drm_fb_addfb(backend, fb) != 0)
+	if (drm_fb_addfb(backend, fb) != 0) {
+		if (try_view_on_plane_failure_reasons)
+			*try_view_on_plane_failure_reasons |=
+				FAILURE_REASONS_ADD_FB_FAILED;
 		goto err_free;
+	}
 
 	return fb;
 
 err_free:
 	drm_fb_destroy_dmabuf(fb);
 	return NULL;
+#endif
 }
 
 struct drm_fb *
@@ -459,17 +408,6 @@ err_free:
 	free(fb);
 	return NULL;
 }
-
-static void
-drm_fb_set_buffer(struct drm_fb *fb, struct weston_buffer *buffer,
-		  struct weston_buffer_release *buffer_release)
-{
-	assert(fb->buffer_ref.buffer == NULL);
-	assert(fb->type == BUFFER_CLIENT || fb->type == BUFFER_DMABUF);
-	weston_buffer_reference(&fb->buffer_ref, buffer);
-	weston_buffer_release_reference(&fb->buffer_release_ref,
-					buffer_release);
-}
 #endif
 
 void
@@ -513,7 +451,7 @@ drm_can_scanout_dmabuf(struct weston_compositor *ec,
 	struct drm_backend *b = to_drm_backend(ec);
 	bool ret = false;
 
-	fb = drm_fb_get_from_dmabuf(dmabuf, b, true);
+	fb = drm_fb_get_from_dmabuf(dmabuf, b, true, NULL);
 	if (fb)
 		ret = true;
 
@@ -523,15 +461,70 @@ drm_can_scanout_dmabuf(struct weston_compositor *ec,
 	return ret;
 }
 
+static bool
+drm_fb_compatible_with_plane(struct drm_fb *fb, struct drm_plane *plane)
+{
+	struct drm_backend *b = plane->backend;
+	struct weston_drm_format *fmt;
+
+	/* Check whether the format is supported */
+	fmt = weston_drm_format_array_find_format(&plane->formats,
+						  fb->format->format);
+	if (fmt) {
+		/* We never try to promote a dmabuf with DRM_FORMAT_MOD_INVALID
+		 * to a KMS plane (see drm_fb_get_from_dmabuf() for more details).
+		 * So if fb->modifier == DRM_FORMAT_MOD_INVALID, we are sure
+		 * that this is for the legacy GBM import path, in which a
+		 * wl_drm is being used for scanout. Mesa is the only user we
+		 * care in this case (even though recent versions are also using
+		 * dmabufs), and it should know better what works or not. */
+		if (fb->modifier == DRM_FORMAT_MOD_INVALID)
+			return true;
+
+		if (weston_drm_format_has_modifier(fmt, fb->modifier))
+			return true;
+	}
+
+	drm_debug(b, "\t\t\t\t[%s] not placing view on %s: "
+		  "no free %s planes matching format %s (0x%lx) "
+		  "modifier 0x%llx\n",
+		  drm_output_get_plane_type_name(plane),
+		  drm_output_get_plane_type_name(plane),
+		  drm_output_get_plane_type_name(plane),
+		  fb->format->drm_format_name,
+		  (unsigned long) fb->format->format,
+		  (unsigned long long) fb->modifier);
+
+	return false;
+}
+
+static void
+drm_fb_handle_buffer_destroy(struct wl_listener *listener, void *data)
+{
+	struct drm_buffer_fb *buf_fb =
+		container_of(listener, struct drm_buffer_fb, buffer_destroy_listener);
+
+	if (buf_fb->fb) {
+		assert(buf_fb->fb->type == BUFFER_CLIENT ||
+		       buf_fb->fb->type == BUFFER_DMABUF);
+		drm_fb_unref(buf_fb->fb);
+	}
+
+	free(buf_fb);
+}
+
 struct drm_fb *
-drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev)
+drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev,
+		     uint32_t *try_view_on_plane_failure_reasons)
 {
 	struct drm_output *output = state->output;
 	struct drm_backend *b = to_drm_backend(output->base.compositor);
 	struct weston_buffer *buffer = ev->surface->buffer_ref.buffer;
+	struct drm_buffer_fb *buf_fb;
 	bool is_opaque = weston_view_is_opaque(ev, &ev->transform.boundingbox);
 	struct linux_dmabuf_buffer *dmabuf;
 	struct drm_fb *fb;
+	struct drm_plane *plane;
 
 	if (ev->alpha != 1.0f)
 		return NULL;
@@ -546,37 +539,67 @@ drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev)
 	if (!buffer)
 		return NULL;
 
+	if (buffer->backend_private) {
+		buf_fb = buffer->backend_private;
+		*try_view_on_plane_failure_reasons |= buf_fb->failure_reasons;
+		return buf_fb->fb ? drm_fb_ref(buf_fb->fb) : NULL;
+	}
+
+	buf_fb = zalloc(sizeof(*buf_fb));
+	buffer->backend_private = buf_fb;
+	buf_fb->buffer_destroy_listener.notify = drm_fb_handle_buffer_destroy;
+	wl_signal_add(&buffer->destroy_signal, &buf_fb->buffer_destroy_listener);
+
 	if (wl_shm_buffer_get(buffer->resource))
-		return NULL;
+		goto unsuitable;
 
 	/* GBM is used for dmabuf import as well as from client wl_buffer. */
 	if (!b->gbm)
-		return NULL;
+		goto unsuitable;
 
 	dmabuf = linux_dmabuf_buffer_get(buffer->resource);
 	if (dmabuf) {
-		fb = drm_fb_get_from_dmabuf(dmabuf, b, is_opaque);
+		fb = drm_fb_get_from_dmabuf(dmabuf, b, is_opaque,
+					    &buf_fb->failure_reasons);
 		if (!fb)
-			return NULL;
+			goto unsuitable;
 	} else {
 		struct gbm_bo *bo;
 
 		bo = gbm_bo_import(b->gbm, GBM_BO_IMPORT_WL_BUFFER,
 				   buffer->resource, GBM_BO_USE_SCANOUT);
 		if (!bo)
-			return NULL;
+			goto unsuitable;
 
 		fb = drm_fb_get_from_bo(bo, b, is_opaque, BUFFER_CLIENT);
 		if (!fb) {
 			gbm_bo_destroy(bo);
-			return NULL;
+			goto unsuitable;
 		}
 	}
 
+	/* Check if this buffer can ever go on any planes. If it can't, we have
+	 * no reason to ever have a drm_fb, so we fail it here. */
+	wl_list_for_each(plane, &b->plane_list, link) {
+		if (drm_fb_compatible_with_plane(fb, plane))
+			fb->plane_mask |= (1 << plane->plane_idx);
+	}
+	if (fb->plane_mask == 0) {
+		drm_fb_unref(fb);
+		buf_fb->failure_reasons |= FAILURE_REASONS_FB_FORMAT_INCOMPATIBLE;
+		goto unsuitable;
+	}
+
+	/* The caller holds its own ref to the drm_fb, so when creating a new
+	 * drm_fb we take an additional ref for the weston_buffer's cache. */
+	buf_fb->fb = drm_fb_ref(fb);
+
 	drm_debug(b, "\t\t\t[view] view %p format: %s\n",
 		  ev, fb->format->drm_format_name);
-	drm_fb_set_buffer(fb, buffer,
-			  ev->surface->buffer_release_ref.buffer_release);
 	return fb;
+
+unsuitable:
+	*try_view_on_plane_failure_reasons |= buf_fb->failure_reasons;
+	return NULL;
 }
 #endif

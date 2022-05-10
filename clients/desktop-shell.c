@@ -48,6 +48,7 @@
 #include "shared/xalloc.h"
 #include <libweston/zalloc.h>
 #include "shared/file-util.h"
+#include "shared/timespec-util.h"
 
 #include "weston-desktop-shell-client-protocol.h"
 
@@ -59,6 +60,8 @@ extern char **environ; /* defined by libc */
 enum clock_format {
 	CLOCK_FORMAT_MINUTES,
 	CLOCK_FORMAT_SECONDS,
+	CLOCK_FORMAT_MINUTES_24H,
+	CLOCK_FORMAT_SECONDS_24H,
 	CLOCK_FORMAT_NONE
 };
 
@@ -421,13 +424,19 @@ static int
 clock_timer_reset(struct panel_clock *clock)
 {
 	struct itimerspec its;
+	struct timespec ts;
+	struct tm *tm;
+
+	clock_gettime(CLOCK_REALTIME, &ts);
+	tm = localtime(&ts.tv_sec);
 
 	its.it_interval.tv_sec = clock->refresh_timer;
 	its.it_interval.tv_nsec = 0;
-	its.it_value.tv_sec = clock->refresh_timer;
-	its.it_value.tv_nsec = 0;
-	toytimer_arm(&clock->timer, &its);
+	its.it_value.tv_sec = clock->refresh_timer - tm->tm_sec % clock->refresh_timer;
+	its.it_value.tv_nsec = 10000000; /* 10 ms late to ensure the clock digit has actually changed */
+	timespec_add_nsec(&its.it_value, &its.it_value, -ts.tv_nsec);
 
+	toytimer_arm(&clock->timer, &its);
 	return 0;
 }
 
@@ -455,6 +464,14 @@ panel_add_clock(struct panel *panel)
 		break;
 	case CLOCK_FORMAT_SECONDS:
 		clock->format_string = "%a %b %d, %I:%M:%S %p";
+		clock->refresh_timer = 1;
+		break;
+	case CLOCK_FORMAT_MINUTES_24H:
+		clock->format_string = "%a %b %d, %H:%M";
+		clock->refresh_timer = 60;
+		break;
+	case CLOCK_FORMAT_SECONDS_24H:
+		clock->format_string = "%a %b %d, %H:%M:%S";
 		clock->refresh_timer = 1;
 		break;
 	case CLOCK_FORMAT_NONE:
@@ -495,7 +512,7 @@ panel_resize_handler(struct widget *widget,
 
 	if (panel->clock_format == CLOCK_FORMAT_SECONDS)
 		w = 170;
-	else /* CLOCK_FORMAT_MINUTES */
+	else /* CLOCK_FORMAT_MINUTES and 24H versions */
 		w = 150;
 
 	if (horizontal)
@@ -542,6 +559,8 @@ panel_configure(void *data,
 			width = 32;
 			break;
 		case CLOCK_FORMAT_MINUTES:
+		case CLOCK_FORMAT_MINUTES_24H:
+		case CLOCK_FORMAT_SECONDS_24H:
 			width = 150;
 			break;
 		case CLOCK_FORMAT_SECONDS:
@@ -849,7 +868,7 @@ background_configure(void *data,
 		return;
 	}
 
-	if (!background->image) {
+	if (!background->image && background->color) {
 		widget_set_viewport_destination(background->widget, width, height);
 		width = 1;
 		height = 1;
@@ -1453,7 +1472,7 @@ panel_add_launchers(struct panel *panel, struct desktop *desktop)
 	}
 
 	if (count == 0) {
-                char *name = file_name_with_datadir("terminal.png");
+		char *name = file_name_with_datadir("terminal.png");
 
 		/* add default launcher */
 		panel_add_launcher(panel,
@@ -1498,6 +1517,10 @@ parse_clock_format(struct desktop *desktop, struct weston_config_section *s)
 		desktop->clock_format = CLOCK_FORMAT_MINUTES;
 	else if (strcmp(clock_format, "seconds") == 0)
 		desktop->clock_format = CLOCK_FORMAT_SECONDS;
+	else if (strcmp(clock_format, "minutes-24h") == 0)
+		desktop->clock_format = CLOCK_FORMAT_MINUTES_24H;
+	else if (strcmp(clock_format, "seconds-24h") == 0)
+		desktop->clock_format = CLOCK_FORMAT_SECONDS_24H;
 	else if (strcmp(clock_format, "none") == 0)
 		desktop->clock_format = CLOCK_FORMAT_NONE;
 	else
@@ -1526,6 +1549,7 @@ int main(int argc, char *argv[])
 	if (desktop.display == NULL) {
 		fprintf(stderr, "failed to create display: %s\n",
 			strerror(errno));
+		weston_config_destroy(desktop.config);
 		return -1;
 	}
 
@@ -1554,6 +1578,7 @@ int main(int argc, char *argv[])
 		unlock_dialog_destroy(desktop.unlock_dialog);
 	weston_desktop_shell_destroy(desktop.shell);
 	display_destroy(desktop.display);
+	weston_config_destroy(desktop.config);
 
 	return 0;
 }

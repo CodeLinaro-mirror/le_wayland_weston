@@ -38,6 +38,49 @@
 #include "drm-internal.h"
 #include "renderer-gl/gl-renderer.h"
 
+#define POISON_PTR ((void *)8)
+
+/**
+ * Create a drm_crtc for virtual output
+ *
+ * It will leave its ID and pipe zeroed, as virtual outputs should not use real
+ * CRTC's. Also, as this is a fake CRTC, it will not try to populate props.
+ */
+static struct drm_crtc *
+drm_virtual_crtc_create(struct drm_backend *b, struct drm_output *output)
+{
+	struct drm_crtc *crtc;
+
+	crtc = zalloc(sizeof(*crtc));
+	if (!crtc)
+		return NULL;
+
+	crtc->backend = b;
+	crtc->output = output;
+
+	crtc->crtc_id = 0;
+	crtc->pipe = 0;
+
+	/* Poisoning the pointers as CRTC's of virtual outputs should not be
+	 * added to the DRM-backend CRTC list. With this we can assure (in
+	 * function drm_virtual_crtc_destroy()) that this did not happen. */
+	crtc->link.prev = POISON_PTR;
+	crtc->link.next = POISON_PTR;
+
+	return crtc;
+}
+
+/**
+ * Destroy drm_crtc created by drm_virtual_crtc_create()
+ */
+static void
+drm_virtual_crtc_destroy(struct drm_crtc *crtc)
+{
+	assert(crtc->link.prev == POISON_PTR);
+	assert(crtc->link.next == POISON_PTR);
+	free(crtc);
+}
+
 /**
  * Create a drm_plane for virtual output
  *
@@ -50,9 +93,10 @@ static struct drm_plane *
 drm_virtual_plane_create(struct drm_backend *b, struct drm_output *output)
 {
 	struct drm_plane *plane;
+	struct weston_drm_format *fmt;
+	uint64_t mod;
 
-	/* num of formats is one */
-	plane = zalloc(sizeof(*plane) + sizeof(plane->formats[0]));
+	plane = zalloc(sizeof(*plane));
 	if (!plane) {
 		weston_log("%s: out of memory\n", __func__);
 		return NULL;
@@ -62,21 +106,33 @@ drm_virtual_plane_create(struct drm_backend *b, struct drm_output *output)
 	plane->backend = b;
 	plane->state_cur = drm_plane_state_alloc(NULL, plane);
 	plane->state_cur->complete = true;
-	plane->formats[0].format = output->gbm_format;
-	plane->count_formats = 1;
-	if ((output->gbm_bo_flags & GBM_BO_USE_LINEAR) && b->fb_modifiers) {
-		uint64_t *modifiers = zalloc(sizeof *modifiers);
-		if (modifiers) {
-			*modifiers = DRM_FORMAT_MOD_LINEAR;
-			plane->formats[0].modifiers = modifiers;
-			plane->formats[0].count_modifiers = 1;
-		}
-	}
+
+	weston_drm_format_array_init(&plane->formats);
+	fmt = weston_drm_format_array_add_format(&plane->formats, output->gbm_format);
+	if (!fmt)
+		goto err;
+
+	/* If output supports linear modifier, we add it to the plane.
+	 * Otherwise we add DRM_FORMAT_MOD_INVALID, as explicit modifiers
+	 * are not supported. */
+	if ((output->gbm_bo_flags & GBM_BO_USE_LINEAR) && b->fb_modifiers)
+		mod = DRM_FORMAT_MOD_LINEAR;
+	else
+		mod = DRM_FORMAT_MOD_INVALID;
+
+	if (weston_drm_format_add_modifier(fmt, mod) < 0)
+		goto err;
 
 	weston_plane_init(&plane->base, b->compositor, 0, 0);
 	wl_list_insert(&b->plane_list, &plane->link);
 
 	return plane;
+
+err:
+	drm_plane_state_free(plane->state_cur, true);
+	weston_drm_format_array_fini(&plane->formats);
+	free(plane);
+	return NULL;
 }
 
 /**
@@ -90,8 +146,7 @@ drm_virtual_plane_destroy(struct drm_plane *plane)
 	drm_plane_state_free(plane->state_cur, true);
 	weston_plane_release(&plane->base);
 	wl_list_remove(&plane->link);
-	if (plane->formats[0].modifiers)
-		free(plane->formats[0].modifiers);
+	weston_drm_format_array_fini(&plane->formats);
 	free(plane);
 }
 
@@ -184,6 +239,7 @@ drm_virtual_output_deinit(struct weston_output *base)
 	drm_output_fini_egl(output);
 
 	drm_virtual_plane_destroy(output->scanout_plane);
+	drm_virtual_crtc_destroy(output->crtc);
 }
 
 static void
@@ -267,10 +323,17 @@ static struct weston_output *
 drm_virtual_output_create(struct weston_compositor *c, char *name)
 {
 	struct drm_output *output;
+	struct drm_backend *b = to_drm_backend(c);
 
 	output = zalloc(sizeof *output);
 	if (!output)
 		return NULL;
+
+	output->crtc = drm_virtual_crtc_create(b, output);
+	if (!output->crtc) {
+		free(output);
+		return NULL;
+	}
 
 	output->virtual = true;
 	output->gbm_bo_flags = GBM_BO_USE_LINEAR | GBM_BO_USE_RENDERING;

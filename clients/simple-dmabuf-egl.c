@@ -39,13 +39,13 @@
 #include <unistd.h>
 #include <sys/time.h>
 
-#include <drm_fourcc.h>
 #include <xf86drm.h>
 #include <gbm.h>
 
 #include <wayland-client.h>
 #include "shared/helpers.h"
 #include "shared/platform.h"
+#include "shared/weston-drm-fourcc.h"
 #include <libweston/zalloc.h>
 #include "xdg-shell-client-protocol.h"
 #include "fullscreen-shell-unstable-v1-client-protocol.h"
@@ -60,17 +60,12 @@
 
 #include "shared/weston-egl-ext.h"
 
-#ifndef DRM_FORMAT_MOD_INVALID
-#define DRM_FORMAT_MOD_INVALID ((1ULL << 56) - 1)
-#endif
-
 /* Possible options that affect the displayed image */
 #define OPT_IMMEDIATE     (1 << 0)  /* create wl_buffer immediately */
 #define OPT_IMPLICIT_SYNC (1 << 1)  /* force implicit sync */
 #define OPT_MANDELBROT    (1 << 2)  /* render mandelbrot */
 #define OPT_DIRECT_DISPLAY     (1 << 3)  /* direct-display */
 
-#define BUFFER_FORMAT DRM_FORMAT_XRGB8888
 #define MAX_BUFFER_PLANES 4
 
 struct display {
@@ -82,6 +77,8 @@ struct display {
 	struct zwp_linux_dmabuf_v1 *dmabuf;
 	struct weston_direct_display_v1 *direct_display;
 	struct zwp_linux_explicit_synchronization_v1 *explicit_sync;
+	uint32_t format;
+	bool format_supported;
 	uint64_t *modifiers;
 	int modifiers_count;
 	int req_dmabuf_immediate;
@@ -341,7 +338,7 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 	buffer->display = display;
 	buffer->width = width;
 	buffer->height = height;
-	buffer->format = BUFFER_FORMAT;
+	buffer->format = display->format;
 	buffer->release_fence_fd = -1;
 
 #ifdef HAVE_GBM_MODIFIERS
@@ -683,6 +680,8 @@ create_window(struct display *display, int width, int height, int opts)
 					  &xdg_toplevel_listener, window);
 
 		xdg_toplevel_set_title(window->xdg_toplevel, "simple-dmabuf-egl");
+		xdg_toplevel_set_app_id(window->xdg_toplevel,
+				"org.freedesktop.weston.simple-dmabuf-egl");
 
 		window->wait_for_configure = true;
 		wl_surface_commit(window->surface);
@@ -1001,17 +1000,19 @@ dmabuf_modifiers(void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf,
 		 uint32_t format, uint32_t modifier_hi, uint32_t modifier_lo)
 {
 	struct display *d = data;
+	uint64_t modifier = ((uint64_t)modifier_hi << 32) | modifier_lo;
 
-	switch (format) {
-	case BUFFER_FORMAT:
+	if (format != d->format) {
+		return;
+	}
+
+	d->format_supported = true;
+
+	if (modifier != DRM_FORMAT_MOD_INVALID) {
 		++d->modifiers_count;
 		d->modifiers = realloc(d->modifiers,
 				       d->modifiers_count * sizeof(*d->modifiers));
-		d->modifiers[d->modifiers_count - 1] =
-			((uint64_t)modifier_hi << 32) | modifier_lo;
-		break;
-	default:
-		break;
+		d->modifiers[d->modifiers_count - 1] = modifier;
 	}
 }
 
@@ -1274,7 +1275,7 @@ display_update_supported_modifiers_for_egl(struct display *d)
 
 	if (try_modifiers) {
 		ret = d->egl.query_dma_buf_modifiers(d->egl.display,
-						     BUFFER_FORMAT,
+						     d->format,
 						     0,    /* max_modifiers */
 						     NULL, /* modifiers */
 						     NULL, /* external_only */
@@ -1299,7 +1300,7 @@ display_update_supported_modifiers_for_egl(struct display *d)
 	egl_modifiers = zalloc(num_egl_modifiers * sizeof(*egl_modifiers));
 
 	ret = d->egl.query_dma_buf_modifiers(d->egl.display,
-					     BUFFER_FORMAT,
+					     d->format,
 					     num_egl_modifiers,
 					     egl_modifiers,
 					     NULL, /* external_only */
@@ -1359,7 +1360,7 @@ display_set_up_gbm(struct display *display, char const* drm_render_node)
 }
 
 static struct display *
-create_display(char const *drm_render_node, int opts)
+create_display(char const *drm_render_node, uint32_t format, int opts)
 {
 	struct display *display = NULL;
 
@@ -1374,6 +1375,7 @@ create_display(char const *drm_render_node, int opts)
 	display->display = wl_display_connect(NULL);
 	assert(display->display);
 
+	display->format = format;
 	display->req_dmabuf_immediate = opts & OPT_IMMEDIATE;
 
 	display->registry = wl_display_get_registry(display->display);
@@ -1387,8 +1389,9 @@ create_display(char const *drm_render_node, int opts)
 
 	wl_display_roundtrip(display->display);
 
-	if (!display->modifiers_count) {
-		fprintf(stderr, "format XRGB8888 is not available\n");
+	if (!display->format_supported) {
+		fprintf(stderr, "format 0x%"PRIX32" is not available\n",
+			display->format);
 		goto error;
 	}
 
@@ -1454,6 +1457,8 @@ print_usage_and_exit(void)
 		"\t'-e,--explicit-sync=<>'"
 		"\n\t\t0 to disable explicit sync, "
 		"\n\t\t1 to enable explicit sync (default: 1)\n"
+		"\t'-f,--format=0x<>'"
+		"\n\t\tthe DRM format code to use\n"
 		"\t'-m,--mandelbrot'"
 		"\n\t\trender a mandelbrot set with multiple draw calls\n"
 		"\t'-g,--direct-display'"
@@ -1483,6 +1488,7 @@ main(int argc, char **argv)
 	struct sigaction sigint;
 	struct display *display;
 	struct window *window;
+	uint32_t format = DRM_FORMAT_XRGB8888;
 	int opts = 0;
 	char const *drm_render_node = "/dev/dri/renderD128";
 	int c, option_index, ret = 0;
@@ -1493,13 +1499,14 @@ main(int argc, char **argv)
 		{"drm-render-node",  required_argument, 0,  'd' },
 		{"size",	     required_argument, 0,  's' },
 		{"explicit-sync",    required_argument, 0,  'e' },
+		{"format",           required_argument, 0,  'f' },
 		{"mandelbrot",       no_argument,	0,  'm' },
 		{"direct-display",   no_argument,	0,  'g' },
 		{"help",             no_argument      , 0,  'h' },
 		{0, 0, 0, 0}
 	};
 
-	while ((c = getopt_long(argc, argv, "hi:d:s:e:mg",
+	while ((c = getopt_long(argc, argv, "hi:d:s:e:f:mg",
 				long_options, &option_index)) != -1) {
 		switch (c) {
 		case 'i':
@@ -1522,12 +1529,15 @@ main(int argc, char **argv)
 		case 'g':
 			opts |= OPT_DIRECT_DISPLAY;
 			break;
+		case 'f':
+			format = strtoul(optarg, NULL, 0);
+			break;
 		default:
 			print_usage_and_exit();
 		}
 	}
 
-	display = create_display(drm_render_node, opts);
+	display = create_display(drm_render_node, format, opts);
 	if (!display)
 		return 1;
 	window = create_window(display, window_size, window_size, opts);

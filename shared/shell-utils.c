@@ -1,7 +1,7 @@
 /*
  * Copyright 2010-2012 Intel Corporation
  * Copyright 2013 Raspberry Pi Foundation
- * Copyright 2011-2012,2020 Collabora, Ltd.
+ * Copyright 2011-2012,2021 Collabora, Ltd.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,17 +21,12 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
+ *
  */
 
-/* Helper functions for kiosk-shell */
-
-/* TODO: These functions are useful to many shells, and, in fact,
- * much of content in this file was copied from desktop-shell. We should
- * create a shared shell utility collection to deduplicate this code. */
-
-#include "util.h"
-#include "shared/helpers.h"
-#include <libweston/libweston.h>
+#include "config.h"
+#include "shared/shell-utils.h"
+#include <libweston-desktop/libweston-desktop.h>
 
 struct weston_output *
 get_default_output(struct weston_compositor *compositor)
@@ -74,11 +69,11 @@ get_focused_output(struct weston_compositor *compositor)
 	return output;
 }
 
-/* This is a copy of the same function from desktop-shell.
- * TODO: Fix this function to take into account nested subsurfaces. */
-static void
+/* TODO: Fix this function to take into account nested subsurfaces. */
+void
 surface_subsurfaces_boundingbox(struct weston_surface *surface, int32_t *x,
-				int32_t *y, int32_t *w, int32_t *h) {
+				int32_t *y, int32_t *w, int32_t *h)
+{
 	pixman_region32_t region;
 	pixman_box32_t *box;
 	struct weston_subsurface *subsurface;
@@ -127,15 +122,26 @@ center_on_output(struct weston_view *view, struct weston_output *output)
 	weston_view_set_position(view, x, y);
 }
 
-static void
-colored_surface_committed(struct weston_surface *es, int32_t sx, int32_t sy)
+int
+surface_get_label(struct weston_surface *surface, char *buf, size_t len)
 {
+	const char *t, *c;
+	struct weston_desktop_surface *desktop_surface =
+		weston_surface_get_desktop_surface(surface);
+
+	t = weston_desktop_surface_get_title(desktop_surface);
+	c = weston_desktop_surface_get_app_id(desktop_surface);
+
+	return snprintf(buf, len, "%s window%s%s%s%s%s",
+		"top-level",
+		t ? " '" : "", t ?: "", t ? "'" : "",
+		c ? " of " : "", c ?: "");
 }
 
 struct weston_view *
-create_colored_surface(struct weston_compositor *compositor,
-		       float r, float g, float b,
-		       float x, float y, int w, int h)
+create_solid_color_surface(struct weston_compositor *compositor,
+			   struct weston_solid_color_surface *ss,
+			   float x, float y, int w, int h)
 {
 	struct weston_surface *surface = NULL;
 	struct weston_view *view;
@@ -146,16 +152,17 @@ create_colored_surface(struct weston_compositor *compositor,
 		return NULL;
 	}
 	view = weston_view_create(surface);
-	if (surface == NULL) {
+	if (view == NULL) {
 		weston_log("no memory\n");
 		weston_surface_destroy(surface);
 		return NULL;
 	}
 
-	surface->committed = colored_surface_committed;
-	surface->committed_private = NULL;
+	surface->committed = ss->surface_committed;
+	surface->committed_private = ss->surface_private;
 
-	weston_surface_set_color(surface, r, g, b, 1.0);
+	weston_surface_set_color(surface, ss->r, ss->g, ss->b, 1.0);
+	weston_surface_set_label_func(surface, ss->get_label);
 	pixman_region32_fini(&surface->opaque);
 	pixman_region32_init_rect(&surface->opaque, 0, 0, w, h);
 	pixman_region32_fini(&surface->input);

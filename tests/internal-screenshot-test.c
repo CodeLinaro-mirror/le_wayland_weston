@@ -42,7 +42,11 @@ fixture_setup(struct weston_test_harness *harness)
 	setup.width = 320;
 	setup.height = 240;
 	setup.shell = SHELL_DESKTOP;
-	setup.config_file = TESTSUITE_INTERNAL_SCREENSHOT_CONFIG_PATH;
+
+	weston_ini_setup (&setup,
+			  cfgln("[shell]"),
+			  cfgln("startup-animation=%s", "none"),
+			  cfgln("background-color=%s", "0xCC336699"));
 
 	return weston_test_harness_execute_as_client(harness, &setup);
 }
@@ -87,7 +91,7 @@ TEST(internal_screenshot)
 	pixman_image_t *reference_bad = NULL;
 	pixman_image_t *diffimg;
 	struct rectangle clip;
-	const char *fname;
+	char *fname;
 	bool match = false;
 	bool dump_all_images = true;
 
@@ -131,12 +135,14 @@ TEST(internal_screenshot)
 	testlog("Loading good reference image %s\n", fname);
 	reference_good = load_image_from_png(fname);
 	assert(reference_good);
+	free(fname);
 
 	/* Load bad reference image */
 	fname = screenshot_reference_filename("internal-screenshot-bad", 0);
 	testlog("Loading bad reference image %s\n", fname);
 	reference_bad = load_image_from_png(fname);
 	assert(reference_bad);
+	free(fname);
 
 	/* Test check_images_match() without a clip.
 	 * We expect this to fail since we use a bad reference image
@@ -162,6 +168,7 @@ TEST(internal_screenshot)
 		fname = screenshot_output_filename("internal-screenshot-error", 0);
 		write_image_as_png(diffimg, fname);
 		pixman_image_unref(diffimg);
+		free(fname);
 	}
 	pixman_image_unref(reference_good);
 
@@ -169,10 +176,14 @@ TEST(internal_screenshot)
 	if (!match || dump_all_images) {
 		fname = screenshot_output_filename("internal-screenshot", 0);
 		write_image_as_png(screenshot->image, fname);
+		free(fname);
 	}
 
 	buffer_destroy(screenshot);
 
 	testlog("Test complete\n");
 	assert(match);
+
+	buffer_destroy(buf);
+	client_destroy(client);
 }

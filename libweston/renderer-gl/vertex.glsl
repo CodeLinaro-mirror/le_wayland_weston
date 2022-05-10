@@ -1,5 +1,7 @@
 /*
- * Copyright 2019 Collabora, Ltd.
+ * Copyright 2012 Intel Corporation
+ * Copyright 2015,2019 Collabora, Ltd.
+ * Copyright 2016 NVIDIA Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -23,40 +25,13 @@
  * SOFTWARE.
  */
 
-#include "config.h"
+uniform mat4 proj;
+attribute vec2 position;
+attribute vec2 texcoord;
+varying vec2 v_texcoord;
 
-#include <wayland-util.h>
-#include "weston.h"
-
-static struct wet_testsuite_data *wet_testsuite_data_global;
-
-/** Set global test suite data
- *
- * \param data Custom test suite data.
- *
- * The type struct wet_testsuite_data is free to be defined by any test suite
- * in any way they want. This function stores a single pointer to that data
- * in a global variable.
- *
- * The data is expected to be fetched from a test suite specific plugin that
- * knows how to interpret it.
- *
- * \sa wet_testsuite_data_get
- */
-WL_EXPORT void
-wet_testsuite_data_set(struct wet_testsuite_data *data)
+void main()
 {
-	wet_testsuite_data_global = data;
-}
-
-/** Get global test suite data
- *
- * \return Custom test suite data.
- *
- * Returns the value last set with wet_testsuite_data_set().
- */
-WL_EXPORT struct wet_testsuite_data *
-wet_testsuite_data_get(void)
-{
-	return wet_testsuite_data_global;
+	gl_Position = proj * vec4(position, 0.0, 1.0);
+	v_texcoord = texcoord;
 }

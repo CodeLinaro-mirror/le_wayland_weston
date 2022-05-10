@@ -151,7 +151,7 @@ init_egl(struct display *display, struct window *window)
 		EGL_NONE
 	};
 
-	EGLint major, minor, n, count, i, size;
+	EGLint major, minor, n, count, i;
 	EGLConfig *configs;
 	EGLBoolean ret;
 
@@ -179,9 +179,13 @@ init_egl(struct display *display, struct window *window)
 	assert(ret && n >= 1);
 
 	for (i = 0; i < n; i++) {
+		EGLint buffer_size, red_size;
 		eglGetConfigAttrib(display->egl.dpy,
-				   configs[i], EGL_BUFFER_SIZE, &size);
-		if (window->buffer_size == size) {
+				   configs[i], EGL_BUFFER_SIZE, &buffer_size);
+		eglGetConfigAttrib(display->egl.dpy,
+				   configs[i], EGL_RED_SIZE, &red_size);
+		if ((window->buffer_size == 0 ||
+		     window->buffer_size == buffer_size) && red_size < 10) {
 			display->egl.conf = configs[i];
 			break;
 		}
@@ -382,6 +386,8 @@ create_surface(struct window *window)
 				  &xdg_toplevel_listener, window);
 
 	xdg_toplevel_set_title(window->xdg_toplevel, "simple-egl");
+	xdg_toplevel_set_app_id(window->xdg_toplevel,
+			"org.freedesktop.weston.simple-egl");
 
 	window->wait_for_configure = true;
 	wl_surface_commit(window->surface);
@@ -484,7 +490,10 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 	glUniformMatrix4fv(window->gl.rotation_uniform, 1, GL_FALSE,
 			   (GLfloat *) rotation);
 
-	glClearColor(0.0, 0.0, 0.0, 0.5);
+	if (window->opaque || window->fullscreen)
+		glClearColor(0.0, 0.0, 0.0, 1);
+	else
+		glClearColor(0.0, 0.0, 0.0, 0.5);
 	glClear(GL_COLOR_BUFFER_BIT);
 
 	glVertexAttribPointer(window->gl.pos, 2, GL_FLOAT, GL_FALSE, 0, verts);
@@ -818,7 +827,7 @@ main(int argc, char **argv)
 	window.geometry.width  = 250;
 	window.geometry.height = 250;
 	window.window_size = window.geometry;
-	window.buffer_size = 32;
+	window.buffer_size = 0;
 	window.frame_sync = 1;
 	window.delay = 0;
 
@@ -847,6 +856,11 @@ main(int argc, char **argv)
 				 &registry_listener, &display);
 
 	wl_display_roundtrip(display.display);
+
+	if (!display.wm_base) {
+		fprintf(stderr, "xdg-shell support required. simple-egl exiting\n");
+		goto out_no_xdg_shell;
+	}
 
 	init_egl(&display, &window);
 	create_surface(&window);
@@ -879,8 +893,24 @@ main(int argc, char **argv)
 	fini_egl(&display);
 
 	wl_surface_destroy(display.cursor_surface);
+out_no_xdg_shell:
 	if (display.cursor_theme)
 		wl_cursor_theme_destroy(display.cursor_theme);
+
+	if (display.shm)
+		wl_shm_destroy(display.shm);
+
+	if (display.pointer)
+		wl_pointer_destroy(display.pointer);
+
+	if (display.keyboard)
+		wl_keyboard_destroy(display.keyboard);
+
+	if (display.touch)
+		wl_touch_destroy(display.touch);
+
+	if (display.seat)
+		wl_seat_destroy(display.seat);
 
 	if (display.wm_base)
 		xdg_wm_base_destroy(display.wm_base);

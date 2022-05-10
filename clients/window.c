@@ -230,6 +230,7 @@ struct window {
 	struct display *display;
 	struct wl_list window_output_list;
 	char *title;
+	char *appid;
 	struct rectangle saved_allocation;
 	struct rectangle min_allocation;
 	struct rectangle pending_allocation;
@@ -353,7 +354,6 @@ struct input {
 	struct wl_surface *pointer_surface;
 	uint32_t modifiers;
 	uint32_t pointer_enter_serial;
-	uint32_t cursor_serial;
 	float sx, sy;
 	struct wl_list link;
 
@@ -1375,7 +1375,8 @@ create_cursors(struct display *display)
 static void
 destroy_cursors(struct display *display)
 {
-	wl_cursor_theme_destroy(display->cursor_theme);
+	if (display->cursor_theme)
+		wl_cursor_theme_destroy(display->cursor_theme);
 	free(display->cursors);
 }
 
@@ -1609,6 +1610,7 @@ window_destroy(struct window *window)
 	wl_list_remove(&window->link);
 
 	free(window->title);
+	free(window->appid);
 	free(window);
 }
 
@@ -2213,9 +2215,9 @@ widget_set_tooltip(struct widget *parent, char *entry, float x, float y)
 	if (parent->tooltip_count > 1)
 		return 0;
 
-        tooltip = malloc(sizeof *tooltip);
-        if (!tooltip)
-                return -1;
+	tooltip = malloc(sizeof *tooltip);
+	if (!tooltip)
+		return -1;
 
 	parent->tooltip = tooltip;
 	tooltip->parent = parent;
@@ -2746,6 +2748,12 @@ input_remove_pointer_focus(struct input *input)
 	input->pointer_focus = NULL;
 	input->current_cursor = CURSOR_UNSET;
 	cancel_pointer_image_update(input);
+	wl_surface_destroy(input->pointer_surface);
+	input->pointer_surface = NULL;
+	if (input->cursor_frame_cb) {
+		wl_callback_destroy(input->cursor_frame_cb);
+		input->cursor_frame_cb = NULL;
+	}
 }
 
 static void
@@ -3785,6 +3793,8 @@ input_set_pointer_image_index(struct input *input, int index)
 	struct wl_buffer *buffer;
 	struct wl_cursor *cursor;
 	struct wl_cursor_image *image;
+	struct wl_surface *prev_surface;
+	struct display *d = input->display;
 
 	if (!input->pointer)
 		return;
@@ -3803,6 +3813,11 @@ input_set_pointer_image_index(struct input *input, int index)
 	if (!buffer)
 		return;
 
+	/* Don't re-use the previous surface, otherwise the new buffer and the
+	 * new hotspot aren't applied atomically. */
+	prev_surface = input->pointer_surface;
+	input->pointer_surface = wl_compositor_create_surface(d->compositor);
+
 	wl_surface_attach(input->pointer_surface, buffer, 0, 0);
 	wl_surface_damage(input->pointer_surface, 0, 0,
 			  image->width, image->height);
@@ -3810,6 +3825,9 @@ input_set_pointer_image_index(struct input *input, int index)
 	wl_pointer_set_cursor(input->pointer, input->pointer_enter_serial,
 			      input->pointer_surface,
 			      image->hotspot_x, image->hotspot_y);
+
+	if (prev_surface)
+		wl_surface_destroy(prev_surface);
 }
 
 static const struct wl_callback_listener pointer_surface_listener;
@@ -3865,6 +3883,7 @@ schedule_pointer_image_update(struct input *input,
 	wl_callback_add_listener(input->cursor_frame_cb,
 				 &pointer_surface_listener, input);
 
+	wl_surface_commit(input->pointer_surface);
 }
 
 static void
@@ -3914,11 +3933,11 @@ pointer_surface_frame_callback(void *data, struct wl_callback *callback,
 					time - input->cursor_anim_start,
 					&duration);
 
+	input_set_pointer_image_index(input, i);
+
 	if (cursor->image_count > 1)
 		schedule_pointer_image_update(input, cursor, duration,
 					      force_frame);
-
-	input_set_pointer_image_index(input, i);
 }
 
 static void
@@ -3948,30 +3967,15 @@ static const struct wl_callback_listener pointer_surface_listener = {
 void
 input_set_pointer_image(struct input *input, int pointer)
 {
-	int force = 0;
-
 	if (!input->pointer)
 		return;
 
-	if (input->pointer_enter_serial > input->cursor_serial)
-		force = 1;
-
-	if (!force && pointer == input->current_cursor)
+	if (pointer == input->current_cursor)
 		return;
 
 	input->current_cursor = pointer;
-	input->cursor_serial = input->pointer_enter_serial;
 	if (!input->cursor_frame_cb)
 		pointer_surface_frame_callback(input, NULL, 0);
-	else if (force && !input_set_pointer_special(input)) {
-		/* The current frame callback may be stuck if, for instance,
-		 * the set cursor request was processed by the server after
-		 * this client lost the focus. In this case the cursor surface
-		 * might not be mapped and the frame callback wouldn't ever
-		 * complete. Send a set_cursor and attach to try to map the
-		 * cursor surface again so that the callback will finish */
-		input_set_pointer_image_index(input, 0);
-	}
 }
 
 struct wl_data_device *
@@ -4825,6 +4829,22 @@ window_get_title(struct window *window)
 }
 
 void
+window_set_appid(struct window *window, const char *appid)
+{
+	assert(!window->appid);
+	window->appid = strdup(appid);
+
+	if (window->xdg_toplevel)
+		xdg_toplevel_set_app_id(window->xdg_toplevel, window->appid);
+}
+
+const char *
+window_get_appid(struct window *window)
+{
+	return window->appid;
+}
+
+void
 window_set_text_cursor_position(struct window *window, int32_t x, int32_t y)
 {
 	struct text_cursor_position *text_cursor_position =
@@ -5413,7 +5433,7 @@ menu_redraw_handler(struct widget *widget, void *data)
 	cairo_rectangle(cr, x, y, width, height);
 	cairo_fill(cr);
 
-	cairo_select_font_face(cr, "sans",
+	cairo_select_font_face(cr, "sans-serif",
 			       CAIRO_FONT_SLANT_NORMAL,
 			       CAIRO_FONT_WEIGHT_NORMAL);
 	cairo_set_font_size(cr, 12);
@@ -5732,6 +5752,8 @@ output_destroy(struct output *output)
 
 	wl_output_destroy(output->output);
 	wl_list_remove(&output->link);
+	free(output->make);
+	free(output->model);
 	free(output);
 }
 
@@ -5865,6 +5887,8 @@ output_get_model(struct output *output)
 static void
 fini_xkb(struct input *input)
 {
+	xkb_compose_state_unref(input->xkb.compose_state);
+	xkb_compose_table_unref(input->xkb.compose_table);
 	xkb_state_unref(input->xkb.state);
 	xkb_keymap_unref(input->xkb.keymap);
 }
@@ -5898,8 +5922,6 @@ display_add_input(struct display *d, uint32_t id, int display_seat_version)
 					    &data_device_listener,
 					    input);
 	}
-
-	input->pointer_surface = wl_compositor_create_surface(d->compositor);
 
 	toytimer_init(&input->cursor_timer, CLOCK_MONOTONIC, d,
 		      cursor_timer_func);
@@ -5968,7 +5990,8 @@ input_destroy(struct input *input)
 
 	fini_xkb(input);
 
-	wl_surface_destroy(input->pointer_surface);
+	if (input->pointer_surface)
+		wl_surface_destroy(input->pointer_surface);
 
 	wl_list_remove(&input->link);
 	wl_seat_destroy(input->seat);
@@ -5986,6 +6009,19 @@ xdg_wm_base_ping(void *data, struct xdg_wm_base *shell, uint32_t serial)
 static const struct xdg_wm_base_listener wm_base_listener = {
 	xdg_wm_base_ping,
 };
+
+static void
+global_destroy(struct display *disp, struct global *g)
+{
+	if (disp->global_handler_remove) {
+		disp->global_handler_remove(disp, g->name, g->interface,
+					    g->version, disp->user_data);
+	}
+
+	wl_list_remove(&g->link);
+	free(g->interface);
+	free(g);
+}
 
 static void
 registry_handle_global(void *data, struct wl_registry *registry, uint32_t id,
@@ -6060,15 +6096,7 @@ registry_handle_global_remove(void *data, struct wl_registry *registry,
 		if (strcmp(global->interface, "wl_output") == 0)
 			display_destroy_output(d, name);
 
-		/* XXX: Should destroy remaining bound globals */
-
-		if (d->global_handler_remove)
-			d->global_handler_remove(d, name, global->interface,
-					global->version, d->user_data);
-
-		wl_list_remove(&global->link);
-		free(global->interface);
-		free(global);
+		global_destroy(d, global);
 	}
 }
 
@@ -6236,6 +6264,12 @@ display_create(int *argc, char *argv[])
 	if (d == NULL)
 		return NULL;
 
+	wl_list_init(&d->window_list);
+	wl_list_init(&d->deferred_list);
+	wl_list_init(&d->input_list);
+	wl_list_init(&d->output_list);
+	wl_list_init(&d->global_list);
+
 	d->display = wl_display_connect(NULL);
 	if (d->display == NULL) {
 		fprintf(stderr, "failed to connect to Wayland display: %s\n",
@@ -6257,17 +6291,13 @@ display_create(int *argc, char *argv[])
 	display_watch_fd(d, d->display_fd, EPOLLIN | EPOLLERR | EPOLLHUP,
 			 &d->display_task);
 
-	wl_list_init(&d->deferred_list);
-	wl_list_init(&d->input_list);
-	wl_list_init(&d->output_list);
-	wl_list_init(&d->global_list);
-
 	d->registry = wl_display_get_registry(d->display);
 	wl_registry_add_listener(d->registry, &registry_listener, d);
 
 	if (wl_display_roundtrip(d->display) < 0) {
 		fprintf(stderr, "Failed to process Wayland connection: %s\n",
 			strerror(errno));
+		display_destroy(d);
 		return NULL;
 	}
 
@@ -6280,8 +6310,6 @@ display_create(int *argc, char *argv[])
 	create_cursors(d);
 
 	d->theme = theme_create();
-
-	wl_list_init(&d->window_list);
 
 	init_dummy_surface(d);
 
@@ -6311,6 +6339,8 @@ display_destroy_inputs(struct display *display)
 void
 display_destroy(struct display *display)
 {
+	struct global *global, *tmp;
+
 	if (!wl_list_empty(&display->window_list))
 		fprintf(stderr, "toytoolkit warning: %d windows exist.\n",
 			wl_list_length(&display->window_list));
@@ -6318,21 +6348,36 @@ display_destroy(struct display *display)
 	if (!wl_list_empty(&display->deferred_list))
 		fprintf(stderr, "toytoolkit warning: deferred tasks exist.\n");
 
-	cairo_surface_destroy(display->dummy_surface);
-	free(display->dummy_surface_data);
+	if (display->dummy_surface)
+		cairo_surface_destroy(display->dummy_surface);
+	if (display->dummy_surface_data)
+		free(display->dummy_surface_data);
 
 	display_destroy_outputs(display);
 	display_destroy_inputs(display);
 
+	wl_list_for_each_safe(global, tmp, &display->global_list, link)
+		global_destroy(display, global);
+
 	xkb_context_unref(display->xkb_context);
 
-	theme_destroy(display->theme);
+	if (display->theme)
+		theme_destroy(display->theme);
 	destroy_cursors(display);
 
 #ifdef HAVE_CAIRO_EGL
 	if (display->argb_device)
 		fini_egl(display);
 #endif
+
+	if (display->relative_pointer_manager)
+		zwp_relative_pointer_manager_v1_destroy(display->relative_pointer_manager);
+
+	if (display->pointer_constraints)
+		zwp_pointer_constraints_v1_destroy(display->pointer_constraints);
+
+	if (display->viewporter)
+		wp_viewporter_destroy(display->viewporter);
 
 	if (display->subcompositor)
 		wl_subcompositor_destroy(display->subcompositor);
@@ -6346,7 +6391,8 @@ display_destroy(struct display *display)
 	if (display->data_device_manager)
 		wl_data_device_manager_destroy(display->data_device_manager);
 
-	wl_compositor_destroy(display->compositor);
+	if (display->compositor)
+		wl_compositor_destroy(display->compositor);
 	wl_registry_destroy(display->registry);
 
 	close(display->epoll_fd);

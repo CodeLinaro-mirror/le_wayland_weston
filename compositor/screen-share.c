@@ -485,7 +485,6 @@ shared_output_get_shm_buffer(struct shared_output *so)
 
 	sb->output = so;
 	wl_list_init(&sb->free_link);
-	wl_list_insert(&so->shm.buffers, &sb->link);
 
 	pixman_region32_init_rect(&sb->damage, 0, 0, width, height);
 
@@ -510,10 +509,13 @@ shared_output_get_shm_buffer(struct shared_output *so)
 	if (!sb->pm_image)
 		goto out_pixman_error;
 
+	wl_list_insert(&so->shm.buffers, &sb->link);
 	return sb;
 
 out_pixman_error:
+	wl_buffer_destroy(sb->buffer);
 	pixman_region32_fini(&sb->damage);
+	free(sb);
 out_unmap:
 	munmap(data, height * stride);
 out_close:
@@ -1163,8 +1165,10 @@ wet_module_init(struct weston_compositor *compositor,
 		int *argc, char *argv[])
 {
 	struct screen_share *ss;
+	struct weston_output *output;
 	struct weston_config *config;
 	struct weston_config_section *section;
+	bool start_on_startup = false;
 
 	ss = zalloc(sizeof *ss);
 	if (ss == NULL)
@@ -1180,5 +1184,13 @@ wet_module_init(struct weston_compositor *compositor,
 	weston_compositor_add_key_binding(compositor, KEY_S,
 				          MODIFIER_CTRL | MODIFIER_ALT,
 					  share_output_binding, ss);
+
+	weston_config_section_get_bool(section, "start-on-startup",
+				       &start_on_startup, false);
+	if (start_on_startup) {
+		wl_list_for_each(output, &compositor->output_list, link)
+			weston_output_share(output, ss->command);
+	}
+
 	return 0;
 }

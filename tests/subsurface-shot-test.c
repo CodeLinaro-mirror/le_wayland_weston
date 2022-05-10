@@ -33,18 +33,29 @@
 #include "weston-test-client-helper.h"
 #include "weston-test-fixture-compositor.h"
 
-static const enum renderer_type renderers[] = {
-	RENDERER_PIXMAN,
-	RENDERER_GL,
+struct setup_args {
+	struct fixture_metadata meta;
+	enum renderer_type renderer;
+};
+
+static const struct setup_args my_setup_args[] = {
+	{
+		.renderer = RENDERER_PIXMAN,
+		.meta.name = "pixman"
+	},
+	{
+		.renderer = RENDERER_GL,
+		.meta.name = "GL"
+	},
 };
 
 static enum test_result_code
-fixture_setup(struct weston_test_harness *harness, const enum renderer_type *arg)
+fixture_setup(struct weston_test_harness *harness, const struct setup_args *arg)
 {
 	struct compositor_setup setup;
 
 	compositor_setup_defaults(&setup);
-	setup.renderer = *arg;
+	setup.renderer = arg->renderer;
 	setup.width = 320;
 	setup.height = 240;
 	setup.shell = SHELL_TEST_DESKTOP;
@@ -52,7 +63,7 @@ fixture_setup(struct weston_test_harness *harness, const enum renderer_type *arg
 
 	return weston_test_harness_execute_as_client(harness, &setup);
 }
-DECLARE_FIXTURE_SETUP_WITH_ARG(fixture_setup, renderers);
+DECLARE_FIXTURE_SETUP_WITH_ARG(fixture_setup, my_setup_args, meta);
 
 static struct wl_subcompositor *
 get_subcompositor(struct client *client)
@@ -141,6 +152,7 @@ TEST(subsurface_z_order)
 
 	/* make the parent surface red */
 	surf[0] = client->surface->wl_surface;
+	client->surface->wl_surface = NULL; /* we stole it and destroy it */
 	bufs[0] = surface_commit_color(client, surf[0], &red, 100, 100);
 	/* sub[0] is not used */
 
@@ -197,4 +209,7 @@ TEST(subsurface_z_order)
 	for (i = 0; i < ARRAY_LENGTH(bufs); i++)
 		if (bufs[i])
 			buffer_destroy(bufs[i]);
+
+	wl_subcompositor_destroy(subco);
+	client_destroy(client);
 }

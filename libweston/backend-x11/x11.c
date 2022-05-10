@@ -39,7 +39,6 @@
 #include <sys/shm.h>
 #include <linux/input.h>
 
-#include <drm_fourcc.h>
 #include <xcb/xcb.h>
 #include <xcb/shm.h>
 #ifdef HAVE_XCB_XKB
@@ -58,6 +57,7 @@
 #include "shared/timespec-util.h"
 #include "shared/file-util.h"
 #include "renderer-gl/gl-renderer.h"
+#include "shared/weston-drm-fourcc.h"
 #include "shared/weston-egl-ext.h"
 #include "pixman-renderer.h"
 #include "presentation-time-server-protocol.h"
@@ -807,14 +807,14 @@ x11_output_switch_mode(struct weston_output *base, struct weston_mode *mode)
 	static uint32_t values[2];
 	int ret;
 
-        b = to_x11_backend(base->compositor);
-        output = to_x11_output(base);
+	b = to_x11_backend(base->compositor);
+	output = to_x11_output(base);
 
-        if (mode->width == output->mode.width &&
+	if (mode->width == output->mode.width &&
 	    mode->height == output->mode.height)
-	        return 0;
+		return 0;
 
-        if (mode->width < WINDOW_MIN_WIDTH || mode->width > WINDOW_MAX_WIDTH)
+	if (mode->width < WINDOW_MIN_WIDTH || mode->width > WINDOW_MAX_WIDTH)
 		return -1;
 
 	if (mode->height < WINDOW_MIN_HEIGHT || mode->height > WINDOW_MAX_HEIGHT)
@@ -857,7 +857,7 @@ x11_output_switch_mode(struct weston_output *base, struct weston_mode *mode)
 	} else {
 		Window xid = (Window) output->window;
 		const struct gl_renderer_output_options options = {
-			.window_for_legacy = (EGLNativeWindowType) output->window,
+			.window_for_legacy = (EGLNativeWindowType) (uintptr_t) output->window,
 			.window_for_platform = &xid,
 			.drm_formats = x11_formats,
 			.drm_formats_count = ARRAY_LENGTH(x11_formats),
@@ -1037,7 +1037,7 @@ x11_output_enable(struct weston_output *base)
 		 * but eglCreateWindowSurface takes a Window. */
 		Window xid = (Window) output->window;
 		const struct gl_renderer_output_options options = {
-			.window_for_legacy = (EGLNativeWindowType) output->window,
+			.window_for_legacy = (EGLNativeWindowType) (uintptr_t) output->window,
 			.window_for_platform = &xid,
 			.drm_formats = x11_formats,
 			.drm_formats_count = ARRAY_LENGTH(x11_formats),

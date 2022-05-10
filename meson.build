@@ -1,16 +1,16 @@
 project('weston',
 	'c',
-	version: '9.0.0',
+	version: '10.0.0',
 	default_options: [
 		'warning_level=3',
 		'c_std=gnu99',
 		'b_lundef=true',
 	],
-	meson_version: '>= 0.47',
+	meson_version: '>= 0.52.1',
 	license: 'MIT/Expat',
 )
 
-libweston_major = 9
+libweston_major = 10
 
 # libweston_revision is manufactured to follow the autotools build's
 # library file naming, thanks to libtool
@@ -63,6 +63,7 @@ global_args_maybe = [
 	'-Wno-shift-negative-value', # required due to Pixman
 	'-Wno-missing-field-initializers',
 	'-Wno-pedantic',
+	'-Wundef',
 	'-fvisibility=hidden',
 ]
 foreach a : global_args_maybe
@@ -102,6 +103,7 @@ config_h.set('_GNU_SOURCE', '1')
 config_h.set('_ALL_SOURCE', '1')
 config_h.set('EGL_NO_X11', '1')
 config_h.set('MESA_EGL_NO_X11_HEADERS', '1')
+config_h.set('EGL_NO_PLATFORM_SPECIFIC_TYPES', '1')
 
 config_h.set_quoted('PACKAGE_STRING', 'weston @0@'.format(version_weston))
 config_h.set_quoted('PACKAGE_VERSION', version_weston)
@@ -137,16 +139,32 @@ if dep_xkbcommon.version().version_compare('>= 0.5.0')
 	config_h.set('HAVE_XKBCOMMON_COMPOSE', '1')
 endif
 
-dep_wayland_server = dependency('wayland-server', version: '>= 1.17.0')
-dep_wayland_client = dependency('wayland-client', version: '>= 1.17.0')
+if get_option('deprecated-wl-shell')
+	warning('Support for the deprecated wl_shell interface is enabled.')
+	warning('This feature will be removed in a future version.')
+	config_h.set('HAVE_DEPRECATED_WL_SHELL', '1')
+endif
+
+dep_wayland_server = dependency('wayland-server', version: '>= 1.18.0')
+dep_wayland_client = dependency('wayland-client', version: '>= 1.18.0')
 dep_pixman = dependency('pixman-1', version: '>= 0.25.2')
 dep_libinput = dependency('libinput', version: '>= 0.8.0')
 dep_libevdev = dependency('libevdev')
 dep_libm = cc.find_library('m')
 dep_libdl = cc.find_library('dl')
-dep_libdrm = dependency('libdrm', version: '>= 2.4.86')
+dep_libdrm = dependency('libdrm', version: '>= 2.4.95')
 dep_libdrm_headers = dep_libdrm.partial_dependency(compile_args: true)
 dep_threads = dependency('threads')
+
+dep_libdrm_version = dep_libdrm.version()
+if dep_libdrm_version.version_compare('>=2.4.107')
+  message('Found libdrm with human format modifier support.')
+  config_h.set('HAVE_HUMAN_FORMAT_MODIFIER', '1')
+endif
+
+prog_python = import('python').find_installation('python3')
+files_xxd_py = files('tools/xxd.py')
+cmd_xxd = [ prog_python, files_xxd_py, '@INPUT@', '@OUTPUT@' ]
 
 subdir('include')
 subdir('protocol')

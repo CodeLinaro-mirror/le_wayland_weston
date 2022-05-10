@@ -2,7 +2,7 @@ plugin_test_shell_desktop = shared_library(
 	'weston-test-desktop-shell',
 	'weston-test-desktop-shell.c',
 	include_directories: common_inc,
-	dependencies: [ dep_lib_desktop, dep_libweston_public ],
+	dependencies: [ dep_lib_desktop, dep_libweston_public, dep_libexec_weston ],
 	name_prefix: '',
 	install: false
 )
@@ -29,9 +29,12 @@ lib_test_client = static_library(
 		'weston-test-client-helper.c',
 		'weston-test-fixture-compositor.c',
 		weston_test_client_protocol_h,
+		weston_screenshooter_protocol_c,
 		weston_test_protocol_c,
 		viewporter_client_protocol_h,
 		viewporter_protocol_c,
+		'color_util.h',
+		'color_util.c',
 	],
 	include_directories: common_inc,
 	dependencies: [
@@ -72,13 +75,13 @@ exe_plugin_test = shared_library(
 )
 
 deps_zuc = [ dep_libshared ]
+config_h.set10('ENABLE_JUNIT_XML', get_option('test-junit-xml'))
 if get_option('test-junit-xml')
 	d = dependency('libxml-2.0', version: '>= 2.6', required: false)
 	if not d.found()
 		error('JUnit XML support requires libxml-2.0 >= 2.6 which was not found. Or, you can use \'-Dtest-junit-xml=false\'.')
 	endif
 	deps_zuc += d
-	config_h.set('ENABLE_JUNIT_XML', '1')
 endif
 
 lib_zuc = static_library(
@@ -117,10 +120,19 @@ dep_zucmain = declare_dependency(
 )
 
 tests = [
+	{
+		'name': 'alpha-blending',
+		'dep_objs': dep_libm,
+	},
 	{	'name': 'bad-buffer', },
-	{	'name': 'drm-smoke', },
 	{	'name': 'buffer-transforms', },
+	{	'name': 'color-manager', },
 	{	'name': 'devices', },
+	{
+		'name': 'drm-formats',
+		'dep_objs': dep_libdrm_headers,
+	},
+	{	'name': 'drm-smoke', 'run_exclusive': true },
 	{	'name': 'event', },
 	{	'name': 'internal-screenshot', },
 	{
@@ -140,6 +152,7 @@ tests = [
 			linux_explicit_synchronization_unstable_v1_protocol_c,
 		],
 	},
+	{	'name': 'output-damage', },
 	{	'name': 'output-transforms', },
 	{	'name': 'plugin-registry', },
 	{
@@ -151,6 +164,7 @@ tests = [
 			input_timestamps_unstable_v1_protocol_c,
 		],
 	},
+	{	'name': 'pointer-shot', },
 	{
 		'name': 'presentation',
 		'sources': [
@@ -159,7 +173,14 @@ tests = [
 			presentation_time_protocol_c,
 		],
 	},
-	{	'name': 'roles', },
+	{
+		'name': 'roles',
+		'sources': [
+			'roles-test.c',
+			xdg_shell_client_protocol_h,
+			xdg_shell_protocol_c,
+		],
+	},
 	{	'name': 'string', },
 	{	'name': 'subsurface', },
 	{	'name': 'subsurface-shot', },
@@ -188,6 +209,21 @@ tests = [
 	},
 	{	'name': 'viewporter', },
 	{	'name': 'viewporter-shot', },
+	{
+		'name': 'yuv-buffer',
+		'dep_objs': [
+			dep_libdrm_headers,
+			dep_libm,
+		],
+	},
+	{	'name': 'safe-signal', },
+	{	'name': 'safe-signal-output-removal',
+		'sources': [
+		  'safe-signal-output-removal-test.c',
+		  '../shared/shell-utils.c',
+		],
+		'dep_objs': [ dep_lib_desktop ]
+	},
 ]
 
 tests_standalone = [
@@ -266,8 +302,7 @@ test_config_h.set_quoted('WESTON_TEST_REFERENCE_PATH', meson.current_source_dir(
 test_config_h.set_quoted('WESTON_MODULE_MAP', env_modmap)
 test_config_h.set_quoted('WESTON_DATA_DIR', join_paths(meson.current_source_dir(), '..', 'data'))
 test_config_h.set_quoted('TESTSUITE_PLUGIN_PATH', exe_plugin_test.full_path())
-test_config_h.set_quoted('TESTSUITE_IVI_CONFIG_PATH', join_paths(meson.current_build_dir(), '../ivi-shell/weston-ivi-test.ini'))
-test_config_h.set_quoted('TESTSUITE_INTERNAL_SCREENSHOT_CONFIG_PATH', join_paths(meson.current_source_dir(), 'internal-screenshot.ini'))
+test_config_h.set10('WESTON_TEST_SKIP_IS_FAILURE', get_option('test-skip-is-failure'))
 configure_file(output: 'test-config.h', configuration: test_config_h)
 
 foreach t : tests
@@ -277,6 +312,8 @@ foreach t : tests
 
 	t_deps = [ dep_test_client, dep_libweston_private_h ]
 	t_deps += t.get('dep_objs', [])
+
+	run_exclusive = t.get('run_exclusive', false)
 
 	t_exe = executable(
 		t_name,
@@ -291,7 +328,14 @@ foreach t : tests
 		install: false,
 	)
 
-	test(t.get('name'), t_exe, depends: t.get('test_deps', []))
+	test(
+		t.get('name'),
+		t_exe,
+		depends: t.get('test_deps', []),
+		timeout: 120,
+		protocol: 'tap',
+		is_parallel: not run_exclusive
+	)
 endforeach
 
 # FIXME: the multiple loops is lame. rethink this.

@@ -130,6 +130,7 @@ pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
 	else
 		pointer->focus = NULL;
 
+	pointer->serial = serial;
 	pointer->x = wl_fixed_to_int(x);
 	pointer->y = wl_fixed_to_int(y);
 
@@ -143,6 +144,7 @@ pointer_handle_leave(void *data, struct wl_pointer *wl_pointer,
 {
 	struct pointer *pointer = data;
 
+	pointer->serial = serial;
 	pointer->focus = NULL;
 
 	testlog("test-client: got pointer leave, surface %p\n",
@@ -172,6 +174,7 @@ pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 {
 	struct pointer *pointer = data;
 
+	pointer->serial = serial;
 	pointer->button = button;
 	pointer->state = state;
 	pointer->button_time_msec = time_msec;
@@ -540,17 +543,20 @@ test_handle_pointer_position(void *data, struct weston_test *weston_test,
 }
 
 static void
-test_handle_capture_screenshot_done(void *data, struct weston_test *weston_test)
+test_handle_capture_screenshot_done(void *data, struct weston_screenshooter *screenshooter)
 {
-	struct test *test = data;
+	struct client *client = data;
 
 	testlog("Screenshot has been captured\n");
-	test->buffer_copy_done = 1;
+	client->buffer_copy_done = true;
 }
+
+static const struct weston_screenshooter_listener screenshooter_listener = {
+	test_handle_capture_screenshot_done
+};
 
 static const struct weston_test_listener test_listener = {
 	test_handle_pointer_position,
-	test_handle_capture_screenshot_done,
 };
 
 static void
@@ -792,8 +798,12 @@ handle_global(void *data, struct wl_registry *registry,
 					 &weston_test_interface, version);
 		weston_test_add_listener(test->weston_test, &test_listener, test);
 		client->test = test;
-	} else if (strcmp(interface, "wl_drm") == 0) {
-		client->has_wl_drm = true;
+	} else if (strcmp(interface, "weston_screenshooter") == 0) {
+		client->screenshooter =
+			wl_registry_bind(registry, id,
+					 &weston_screenshooter_interface, 1);
+		weston_screenshooter_add_listener(client->screenshooter,
+						  &screenshooter_listener, client);
 	}
 }
 
@@ -920,6 +930,8 @@ expect_protocol_error(struct client *client,
 	/* all OK */
 	testlog("Got expected protocol error on '%s' (object id: %d) "
 		"with code %d\n", interface->name, id, errcode);
+
+	client->errored_ok = true;
 }
 
 static void
@@ -1039,6 +1051,8 @@ create_client_and_test_surface(int x, int y, int width, int height)
 void
 client_destroy(struct client *client)
 {
+	int ret;
+
 	if (client->surface)
 		surface_destroy(client->surface);
 
@@ -1062,6 +1076,8 @@ client_destroy(struct client *client)
 		free(client->test);
 	}
 
+	if (client->screenshooter)
+		weston_screenshooter_destroy(client->screenshooter);
 	if (client->wl_shm)
 		wl_shm_destroy(client->wl_shm);
 	if (client->wl_compositor)
@@ -1069,10 +1085,12 @@ client_destroy(struct client *client)
 	if (client->wl_registry)
 		wl_registry_destroy(client->wl_registry);
 
-	client_roundtrip(client);
-
-	if (client->wl_display)
+	if (client->wl_display) {
+		ret = wl_display_roundtrip(client->wl_display);
+		assert(client->errored_ok || ret >= 0);
 		wl_display_disconnect(client->wl_display);
+	}
+
 	free(client);
 }
 
@@ -1616,17 +1634,18 @@ capture_screenshot_of_output(struct client *client)
 {
 	struct buffer *buffer;
 
+	assert(client->screenshooter);
+
 	buffer = create_shm_buffer_a8r8g8b8(client,
 					    client->output->width,
 					    client->output->height);
 
-	client->test->buffer_copy_done = 0;
-	weston_test_capture_screenshot(client->test->weston_test,
+	client->buffer_copy_done = false;
+	weston_screenshooter_take_shot(client->screenshooter,
 				       client->output->wl_output,
 				       buffer->proxy);
-	while (client->test->buffer_copy_done == 0)
-		if (wl_display_dispatch(client->wl_display) < 0)
-			break;
+	while (client->buffer_copy_done == false)
+		assert(wl_display_dispatch(client->wl_display) >= 0);
 
 	/* FIXME: Document somewhere the orientation the screenshot is taken
 	 * and how the clip coords are interpreted, in case of scaling/transform.
@@ -1663,52 +1682,50 @@ write_visual_diff(pixman_image_t *ref_image,
 }
 
 /**
- * Take a screenshot and verify its contents
+ * Verify image contents
  *
- * Takes a screenshot and writes the image into a PNG file named with
- * get_test_name() and seq_no. Compares the contents to the given reference
+ * Compares the contents of the given shot to the given reference
  * image over the given clip rectangle, reports whether they match to the
- * test log, and if they do not match writes a visual diff into a PNG file.
+ * test log, and if they do not match writes a visual diff into a PNG file
+ * and the screenshot into another PNG file named with get_test_name() and
+ * seq_no.
  *
- * The compositor output size and the reference image size must both contain
+ * The shot image size and the reference image size must both contain
  * the clip rectangle.
  *
- * This function uses the pixel value allowed fuzz approriate for GL-renderer
+ * This function uses the pixel value allowed fuzz appropriate for GL-renderer
  * with 8 bits per channel data.
  *
- * \param client The client, for connecting to the compositor.
+ * \param shot The image to be verified, usually a screenshot.
  * \param ref_image The reference image file basename, without sequence number
  * and .png suffix.
  * \param ref_seq_no The reference image sequence number.
  * \param clip The region of interest, or NULL for comparing the whole
  * images.
  * \param seq_no Test sequence number, for writing output files.
- * \return True if the screen contents matches the reference image,
- * false otherwise.
+ * \return True if the shot matches the reference image, false otherwise.
  *
  * For bootstrapping, ref_image can be NULL or the file can be missing.
  * In that case the screenshot file is written but no comparison is performed,
  * and false is returned.
+ *
+ * \sa verify_screen_content
  */
 bool
-verify_screen_content(struct client *client,
-		      const char *ref_image,
-		      int ref_seq_no,
-		      const struct rectangle *clip,
-		      int seq_no)
+verify_image(struct buffer *shot,
+	     const char *ref_image,
+	     int ref_seq_no,
+	     const struct rectangle *clip,
+	     int seq_no)
 {
 	const char *test_name = get_test_name();
 	const struct range gl_fuzz = { -3, 4 };
-	struct buffer *shot;
 	pixman_image_t *ref = NULL;
 	char *ref_fname = NULL;
 	char *shot_fname;
-	bool match;
+	bool match = false;
 
-	shot = capture_screenshot_of_output(client);
-	assert(shot);
 	shot_fname = screenshot_output_filename(test_name, seq_no);
-	write_image_as_png(shot->image, shot_fname);
 
 	if (ref_image) {
 		ref_fname = screenshot_reference_filename(ref_image, ref_seq_no);
@@ -1728,12 +1745,44 @@ verify_screen_content(struct client *client,
 		pixman_image_unref(ref);
 	} else {
 		testlog("No reference image, shot %s: FAIL\n", shot_fname);
-		match = false;
 	}
 
+	if (!match)
+		write_image_as_png(shot->image, shot_fname);
+
 	free(ref_fname);
-	buffer_destroy(shot);
 	free(shot_fname);
+
+	return match;
+}
+
+/**
+ * Take a screenshot and verify its contents
+ *
+ * Takes a screenshot and calls verify_image() with it.
+ *
+ * \param client The client, for connecting to the compositor.
+ * \param ref_image See verify_image().
+ * \param ref_seq_no See verify_image().
+ * \param clip See verify_image().
+ * \param seq_no See verify_image().
+ * \return True if the screen contents matches the reference image,
+ * false otherwise.
+ */
+bool
+verify_screen_content(struct client *client,
+		      const char *ref_image,
+		      int ref_seq_no,
+		      const struct rectangle *clip,
+		      int seq_no)
+{
+	struct buffer *shot;
+	bool match;
+
+	shot = capture_screenshot_of_output(client);
+	assert(shot);
+	match = verify_image(shot, ref_image, ref_seq_no, clip, seq_no);
+	buffer_destroy(shot);
 
 	return match;
 }
@@ -1857,7 +1906,7 @@ client_create_viewport(struct client *client)
  * \param color The color to use.
  */
 void
-fill_image_with_color(pixman_image_t *image, pixman_color_t *color)
+fill_image_with_color(pixman_image_t *image, const pixman_color_t *color)
 {
 	pixman_image_t *solid;
 	int width;

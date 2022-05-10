@@ -47,7 +47,7 @@ struct test_context;
 struct runner_test {
 	const char *name;
 	void (*run)(struct test_context *);
-} __attribute__ ((aligned (32)));
+} __attribute__ ((aligned (64)));
 
 #define RUNNER_TEST(name)					\
 	static void runner_func_##name(struct test_context *);	\
@@ -90,6 +90,7 @@ struct test_context {
 
 struct test_launcher {
 	struct weston_compositor *compositor;
+	struct wl_listener destroy_listener;
 	struct test_context context;
 	const struct ivi_layout_interface *layout_interface;
 };
@@ -179,6 +180,16 @@ bind_runner(struct wl_client *client, void *data,
 	}
 }
 
+static void
+test_launcher_destroy(struct wl_listener *l, void *data)
+{
+	struct test_launcher *launcher;
+
+	launcher = wl_container_of(l, launcher, destroy_listener);
+
+	free(launcher);
+}
+
 WL_EXPORT int
 wet_module_init(struct weston_compositor *compositor,
 		       int *argc, char *argv[])
@@ -200,10 +211,20 @@ wet_module_init(struct weston_compositor *compositor,
 	launcher->compositor = compositor;
 	launcher->layout_interface = iface;
 
+	if (!weston_compositor_add_destroy_listener_once(compositor,
+							 &launcher->destroy_listener,
+							 test_launcher_destroy)) {
+		free(launcher);
+		return -1;
+	}
+
 	if (wl_global_create(compositor->wl_display,
 			     &weston_test_runner_interface, 1,
-			     launcher, bind_runner) == NULL)
+			     launcher, bind_runner) == NULL) {
+		wl_list_remove(&launcher->destroy_listener.link);
+		free(launcher);
 		return -1;
+	}
 
 	return 0;
 }

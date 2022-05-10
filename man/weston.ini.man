@@ -78,6 +78,7 @@ The section headers are:
 .BR "terminal       " "Terminal application options"
 .BR "xwayland       " "XWayland options"
 .BR "screen-share   " "Screen sharing options"
+.BR "autolaunch     " "Autolaunch options"
 .fi
 .RE
 .PP
@@ -207,6 +208,20 @@ Enables pixman-based rendering for all outputs on backends that support it.
 Boolean, defaults to
 .BR false .
 There is also a command line option to do the same.
+.RE
+.TP 7
+.BI "color-management=" true
+Enables color management and requires using GL-renderer.
+Boolean, defaults to
+.BR false .
+
+.I TENTATIVE, EXPERIMENTAL, WORK IN PROGRESS:
+Color management enables the use of ICC files to describe monitor color
+behavior, Wayland protocol extensions for clients to describe their color
+spaces and perform monitor profiling, and tone mapping required to enable HDR
+video modes. This extended functionality comes at the cost of heavier image
+processing and sometimes a loss of some hardware off-loading features like
+composite-bypass.
 
 .SH "LIBINPUT SECTION"
 The
@@ -364,7 +379,9 @@ digit pairs are in order alpha, red, green, and blue.
 sets the panel clock format (string). Can be
 .BR "none" ","
 .BR "minutes" ","
-.BR "seconds" "."
+.BR "seconds" ","
+.BR "minutes-24h" ","
+.BR "seconds-24h" "."
 By default, minutes format is used.
 .TP 7
 .BI "panel-color=" 0xAARRGGBB
@@ -437,15 +454,6 @@ sets the cursor theme (string).
 .TP 7
 .BI "cursor-size=" 24
 sets the cursor size (unsigned integer).
-.TP 7
-.BI "lockscreen-icon=" path
-sets the path to lock screen icon image (string). (tablet shell only)
-.TP 7
-.BI "lockscreen=" path
-sets the path to lock screen background image (string). (tablet shell only)
-.TP 7
-.BI "homescreen=" path
-sets the path to home screen background image (string). (tablet shell only)
 .RE
 .SH "LAUNCHER SECTION"
 There can be multiple launcher sections, one for each launcher.
@@ -537,6 +545,14 @@ An integer, 1 by default, typically configured as 2 or higher when needed,
 denoting the scaling multiplier for the output.
 .RE
 .TP 7
+.BI "icc_profile=" file
+If option
+.B color-management
+is true, load the given ICC file as the output color profile. This works only
+on DRM, headless, wayland, and x11 backends, and for remoting and pipewire
+outputs.
+.RE
+.TP 7
 .BI "seat=" name
 The logical seat name that this output should be associated with. If this
 is set then the seat's input will be confined to the output that has the seat
@@ -564,6 +580,11 @@ request. Currently, this option is supported by kiosk-shell.
 .TP 7
 .BI "path=" "@weston_libexecdir@/weston-keyboard"
 sets the path of the on screen keyboard input method (string).
+.RE
+.RE
+.TP 7
+.BI "overlay-keyboard=" false
+sets weston-keyboard as overlay panel.
 .RE
 .RE
 .SH "KEYBOARD SECTION"
@@ -654,6 +675,24 @@ sets the path to the xserver to run (string).
 .BI "command=" "@weston_bindir@/weston --backend=rdp-backend.so \
 --shell=fullscreen-shell.so --no-clients-resize"
 sets the command to start a fullscreen-shell server for screen sharing (string).
+.RE
+.RE
+.TP 7
+.BI "start-on-startup=" "false"
+If set to true, start screen sharing of all outputs available on Weston startup.
+Set to false by default.
+.RE
+.RE
+.SH "AUTOLAUNCH SECTION"
+.TP 7
+.BI "path=" "/usr/bin/echo"
+Path to an executable file to run after startup. This file is executed in
+parallel to Weston, so it does not have to immediately exit. Defaults to empty.
+.RE
+.TP 7
+.BI "watch=" "false"
+If set to true, quit Weston after the auto-launched executable exits. Set to false
+by default.
 .RE
 .RE
 .SH "SEE ALSO"

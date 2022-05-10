@@ -35,6 +35,7 @@
 #include <signal.h>
 #include <getopt.h>
 
+#include "test-config.h"
 #include "weston-test-runner.h"
 #include "weston-testsuite-data.h"
 #include "shared/string-helpers.h"
@@ -105,6 +106,31 @@ testlog(const char *fmt, ...)
 	va_end(argp);
 }
 
+static const void *
+fixture_setup_array_get_arg(const struct fixture_setup_array *fsa, int findex)
+{
+	const char *array_data = fsa->array;
+
+	if (array_data)
+		return array_data + findex * fsa->element_size;
+
+	return NULL;
+}
+
+static const char *
+fixture_setup_array_get_name(const struct fixture_setup_array *fsa, int findex)
+{
+	const char *element_data = fixture_setup_array_get_arg(fsa, findex);
+	const struct fixture_metadata *meta;
+
+	if (!element_data)
+		return "";
+
+	meta = (const void *)(element_data + fsa->meta_offset);
+
+	return meta->name;
+}
+
 static const struct weston_test_entry *
 find_test(const char *name)
 {
@@ -149,11 +175,21 @@ list_tests(void)
 {
 	const struct fixture_setup_array *fsa;
 	const struct weston_test_entry *t;
+	int i;
 
 	fsa = fixture_setup_array_get_();
 
-	printf("Fixture setups: %d\n", fsa->n_elements);
+	if (fsa->n_elements > 1) {
+		printf("Fixture setups:\n");
+		for (i = 0; i < fsa->n_elements; i++) {
+			printf("%2d: %s\n", i + 1,
+			       fixture_setup_array_get_name(fsa, i));
+		}
+	} else {
+		printf("One fixture setup.\n");
+	}
 
+	printf("Test names:\n");
 	for (t = &__start_test_section; t < &__stop_test_section; t++) {
 		printf("  %s\n", t->name);
 		if (t->n_elements > 1)
@@ -208,7 +244,11 @@ result_to_str(enum test_result_code ret)
 		[RESULT_FAIL] = "fail",
 		[RESULT_HARD_ERROR] = "hard error",
 		[RESULT_OK] = "ok",
+#if WESTON_TEST_SKIP_IS_FAILURE
+		[RESULT_SKIP] = "skip error",
+#else
 		[RESULT_SKIP] = "skip",
+#endif
 	};
 
 	assert(ret >= 0 && ret < ARRAY_LENGTH(names));
@@ -227,8 +267,8 @@ run_case(struct wet_testsuite_data *suite_data,
 	int fixture_nr = suite_data->fixture_iteration + 1;
 	int iteration_nr = iteration + 1;
 
-	testlog("*** Run fixture %d, %s/%d\n",
-		fixture_nr, t->name, iteration_nr);
+	testlog("*** Run %s %s/%d\n",
+		suite_data->fixture_name, t->name, iteration_nr);
 
 	if (suite_data->type == TEST_TYPE_PLUGIN) {
 		ret = run_test(fixture_nr, t, suite_data->compositor,
@@ -249,15 +289,19 @@ run_case(struct wet_testsuite_data *suite_data,
 	case RESULT_SKIP:
 		suite_data->skipped++;
 		skip = " # SKIP";
+#if WESTON_TEST_SKIP_IS_FAILURE
+		fail = "not ";
+#endif
 		break;
 	}
 
-	testlog("*** Result fixture %d, %s/%d: %s\n",
-		fixture_nr, t->name, iteration_nr, result_to_str(ret));
+	testlog("*** Result %s %s/%d: %s\n",
+		suite_data->fixture_name, t->name, iteration_nr,
+		result_to_str(ret));
 
 	suite_data->counter++;
-	printf("%sok %d fixture %d %s/%d%s\n", fail, suite_data->counter,
-	       fixture_nr, t->name, iteration_nr, skip);
+	printf("%sok %d %s %s/%d%s\n", fail, suite_data->counter,
+	       suite_data->fixture_name, t->name, iteration_nr, skip);
 }
 
 /* This function might run in a new thread */
@@ -291,12 +335,17 @@ skip_case(struct wet_testsuite_data *suite_data,
 	  const void *test_data,
 	  int iteration)
 {
-	int fixture_nr = suite_data->fixture_iteration + 1;
+	const char *skip_error = "";
 	int iteration_nr = iteration + 1;
 
+#if WESTON_TEST_SKIP_IS_FAILURE
+	skip_error = "not ";
+#endif
+
 	suite_data->counter++;
-	printf("ok %d fixture %d %s/%d # SKIP fixture\n", suite_data->counter,
-	       fixture_nr, t->name, iteration_nr);
+	printf("%sok %d %s %s/%d # SKIP fixture\n",
+	       skip_error, suite_data->counter,
+	       suite_data->fixture_name, t->name, iteration_nr);
 }
 
 static void
@@ -309,15 +358,16 @@ static void
 help(const char *exe)
 {
 	printf(
-		"Usage: %s [options] [testname [index]]\n"
+		"Usage: %s [options] [testname [number]]\n"
 		"\n"
 		"This is a Weston test suite executable that runs some tests.\n"
 		"Options:\n"
-		"  -f, --fixture N  Run only fixture index N. Indices start from 1.\n"
+		"  -f, --fixture N  Run only fixture number N. 0 runs all (default).\n"
 		"  -h, --help       Print this help and exit with success.\n"
 		"  -l, --list       List all tests in this executable and exit with success.\n"
 		"testname:          Optional; name of the test to execute instead of all tests.\n"
-		"index:             Optional; for a multi-case test, run the given case only.\n",
+		"number:            Optional; for a multi-case test, run the given case only.\n"
+		"Both fixture and case numbering starts from 1.\n",
 		exe);
 }
 
@@ -441,6 +491,11 @@ weston_test_harness_destroy(struct weston_test_harness *harness)
 static enum test_result_code
 counts_to_result(const struct wet_testsuite_data *data)
 {
+#if WESTON_TEST_SKIP_IS_FAILURE
+	if (data->skipped > 0)
+		return RESULT_FAIL;
+#endif
+
 	/* RESULT_SKIP is reserved for fixture setup itself skipping everything */
 	if (data->total == data->passed + data->skipped)
 		return RESULT_OK;
@@ -534,6 +589,7 @@ fixture_setup_array_get_(void)
 		.array = NULL,
 		.element_size = 0,
 		.n_elements = 1,
+		.meta_offset = 0,
 	};
 
 	return &default_fsa;
@@ -559,8 +615,8 @@ fixture_report(const struct wet_testsuite_data *d, enum test_result_code ret)
 {
 	int fixture_nr = d->fixture_iteration + 1;
 
-	testlog("--- Fixture %d %s: passed %d, skipped %d, failed %d, total %d\n",
-		fixture_nr, result_to_str(ret),
+	testlog("--- Fixture %d (%s) %s: passed %d, skipped %d, failed %d, total %d\n",
+		fixture_nr, d->fixture_name, result_to_str(ret),
 		d->passed, d->skipped, d->failed, d->total);
 }
 
@@ -571,14 +627,12 @@ main(int argc, char *argv[])
 	enum test_result_code ret;
 	enum test_result_code result = RESULT_OK;
 	const struct fixture_setup_array *fsa;
-	const char *array_data;
 	int fi;
 	int fi_end;
 
 	harness = weston_test_harness_create(argc, argv);
 
 	fsa = fixture_setup_array_get_();
-	array_data = fsa->array;
 
 	if (harness->fixt_ind == -1) {
 		fi = 0;
@@ -592,20 +646,28 @@ main(int argc, char *argv[])
 	testlog("Iterating through %d fixtures.\n", fi_end - fi);
 
 	for (; fi < fi_end; fi++) {
-		const void *arg = array_data + fi * fsa->element_size;
+		const void *arg = fixture_setup_array_get_arg(fsa, fi);
 
-		testlog("--- Fixture %d...\n", fi + 1);
 		harness->data.fixture_iteration = fi;
+		harness->data.fixture_name = fixture_setup_array_get_name(fsa,
+									  fi);
 		harness->data.passed = 0;
 		harness->data.skipped = 0;
 		harness->data.failed = 0;
+
+		testlog("--- Fixture %d (%s)...\n",
+			fi + 1, harness->data.fixture_name);
 
 		ret = fixture_setup_run_(harness, arg);
 		fixture_report(&harness->data, ret);
 
 		if (ret == RESULT_SKIP) {
 			tap_skip_fixture(&harness->data);
+#if WESTON_TEST_SKIP_IS_FAILURE
+			ret = RESULT_FAIL;
+#else
 			continue;
+#endif
 		}
 
 		if (ret != RESULT_OK && result != RESULT_HARD_ERROR)

@@ -1497,7 +1497,7 @@ weston_wm_window_create(struct weston_wm *wm,
 	geometry_cookie = xcb_get_geometry(wm->conn, id);
 
 	values[0] = XCB_EVENT_MASK_PROPERTY_CHANGE |
-                    XCB_EVENT_MASK_FOCUS_CHANGE;
+	            XCB_EVENT_MASK_FOCUS_CHANGE;
 	xcb_change_window_attributes(wm->conn, id, XCB_CW_EVENT_MASK, values);
 
 	window->wm = wm;
@@ -1554,6 +1554,10 @@ weston_wm_window_destroy(struct weston_wm_window *window)
 
 	if (window->surface)
 		wl_list_remove(&window->surface_destroy_listener.link);
+
+	free(window->class);
+	free(window->name);
+	free(window->machine);
 
 	hash_table_remove(window->wm->window_hash, window->id);
 	free(window);
@@ -2668,6 +2672,7 @@ weston_wm_destroy(struct weston_wm *wm)
 	/* FIXME: Free windows in hash. */
 	hash_table_destroy(wm->window_hash);
 	weston_wm_destroy_cursors(wm);
+	theme_destroy(wm->theme);
 	xcb_disconnect(wm->conn);
 	wl_event_source_remove(wm->source);
 	wl_list_remove(&wm->selection_listener.link);
@@ -2779,6 +2784,16 @@ send_configure(struct weston_surface *surface, int32_t width, int32_t height)
 }
 
 static void
+send_close(struct weston_surface *surface)
+{
+	struct weston_wm_window *window = get_wm_window(surface);
+	if (!window || !window->wm)
+		return;
+	weston_wm_window_close(window, XCB_CURRENT_TIME);
+	xcb_flush(window->wm->conn);
+}
+
+static void
 send_position(struct weston_surface *surface, int32_t x, int32_t y)
 {
 	struct weston_wm_window *window = get_wm_window(surface);
@@ -2807,6 +2822,7 @@ send_position(struct weston_surface *surface, int32_t x, int32_t y)
 
 static const struct weston_xwayland_client_interface shell_client = {
 	send_configure,
+	send_close,
 };
 
 static int
