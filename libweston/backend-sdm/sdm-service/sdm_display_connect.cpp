@@ -74,10 +74,12 @@ int CreateCore()
 #ifdef MULTI_DISPLAY
     SetProperty(DISABLE_MULTIRECT_PROP, "1");
 #endif
+    std::shared_ptr<IPCIntf> ipc_intf = nullptr;
 
     error = CoreInterface::CreateCore(buffer_allocator_,
                                       &buffer_sync_handler_,
                                       &socket_handler_,
+                                      ipc_intf,
                                       &core_intf_);
     if (!core_intf_) {
         DLOGE("function failed. Error = %d", error);
@@ -372,7 +374,7 @@ int get_drm_master_fd(void) {
 int SetDisplayState(int display_id, int power_mode) {
     DisplayError error = kErrorNone;
     bool teardown;
-    int release_fence = -1;
+    shared_ptr<Fence> release_fence;
     sdm::DisplayState disp_state;
 
     if (display_id >= kDisplayMax || display_id < 0) {

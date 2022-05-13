@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017, 2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -45,16 +45,16 @@ class SdmDisplayBufferAllocator : public BufferAllocator {
     gbm_ = NULL;
   };
 
-  DisplayError AllocateBuffer(BufferInfo *buffer_info);
-  DisplayError FreeBuffer(BufferInfo *buffer_info);
+  int AllocateBuffer(BufferInfo *buffer_info);
+  int FreeBuffer(BufferInfo *buffer_info);
   uint32_t GetBufferSize(BufferInfo *buffer_info);
 
-  DisplayError GetAllocatedBufferInfo(const BufferConfig &buffer_config,
-                                      AllocatedBufferInfo *allocated_buffer_info);
+  int GetAllocatedBufferInfo(const BufferConfig &buffer_config,
+                             AllocatedBufferInfo *allocated_buffer_info);
   int SetBufferInfo(LayerBufferFormat format, uint32_t *target, uint64_t *flags);
-  DisplayError GetBufferLayout(const AllocatedBufferInfo &buf_info,
-                               uint32_t stride[4], uint32_t offset[4],
-                               uint32_t *num_planes);
+  int GetBufferLayout(const AllocatedBufferInfo &buf_info,
+                      uint32_t stride[4], uint32_t offset[4],
+                      uint32_t *num_planes);
   void GetGbmDeviceHandle(void **userdata);
  private:
   bool IsFormatVideo(uint32_t fmt);
