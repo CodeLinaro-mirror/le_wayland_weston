@@ -182,8 +182,8 @@ DisplayError SdmDisplay::CECMessage(char *message) {
     return kErrorNone;
 }
 
-DisplayError SdmDisplay::SetDisplayState(DisplayState state,
-					 bool teardown, int *release_fence) {
+DisplayError SdmDisplay::SetDisplayState(DisplayState state, bool teardown,
+                                         shared_ptr<Fence> *release_fence) {
     DisplayError error;
 
     error = display_intf_->SetDisplayState(state, teardown, release_fence);
@@ -228,7 +228,7 @@ void SdmDisplay::HandlePanelDead()
     }
 
     esd_reset_panel_ = true;
-    int release_fence = -1;
+    shared_ptr<Fence> *release_fence;
     DisplayError error = kErrorNone;
 
     DisplayState last_display_state = {};
@@ -238,13 +238,13 @@ void SdmDisplay::HandlePanelDead()
         return;
     }
 
-    error = SetDisplayState(kStateOff, true, &release_fence);
+    error = SetDisplayState(kStateOff, true, release_fence);
     if (error != kErrorNone) {
         DLOGE("Failed to power off the display with error %d", error);
         return;
     }
 
-    error = SetDisplayState(last_display_state, false, &release_fence);
+    error = SetDisplayState(last_display_state, false, release_fence);
     if (error != kErrorNone) {
         DLOGE("Failed to SetDisplayState with error %d", error);
         return;
@@ -893,18 +893,12 @@ DisplayError SdmDisplay::PostCommit(int *retire_fence_fd)
     for (uint32_t i = 0; i < layer_stack_.layers.size(); i++) {
         Layer *layer = layer_stack_.layers.at(i);
         LayerBuffer *layer_buffer = &layer->input_buffer;
-
-        if (layer_buffer->release_fence_fd > 0) {
-          close(layer_buffer->release_fence_fd);
-          layer_buffer->release_fence_fd = -1;
-        }
     }
 
     //close release fence fds
-    if (layer_stack_.retire_fence_fd > 0) {
+    if (layer_stack_.retire_fence) {
       *retire_fence_fd = previous_retire_fence_fd_;
-      previous_retire_fence_fd_ = layer_stack_.retire_fence_fd;
-      layer_stack_.retire_fence_fd = -1;
+      previous_retire_fence_fd_ = Fence::Dup(layer_stack_.retire_fence);
     }
 
     return error;
@@ -1359,8 +1353,8 @@ DisplayError SdmNullDisplay::Commit(struct drm_output *output) {
    */
   return kErrorNone;
 }
-DisplayError SdmNullDisplay::SetDisplayState(DisplayState state,
-					bool teardown, int *release_fence) {
+DisplayError SdmNullDisplay::SetDisplayState(DisplayState state, bool teardown,
+                                             shared_ptr<Fence> *release_fence) {
   return kErrorNone;
 }
 
@@ -1442,7 +1436,7 @@ SdmDisplayProxy::~SdmDisplayProxy () {
 
 int SdmDisplayProxy::HandleHotplug(bool connected) {
   DisplayError error = kErrorNone;
-  int release_fence = -1;
+  shared_ptr<Fence> release_fence;
 
   DLOGI("HandleHotplug = %d", connected);
 

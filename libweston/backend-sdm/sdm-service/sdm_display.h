@@ -70,8 +70,8 @@ class SdmDisplayInterface {
     virtual DisplayError DestroyDisplay() = 0;
     virtual DisplayError Prepare(struct drm_output *output) = 0;
     virtual DisplayError Commit(struct drm_output *output) = 0;
-    virtual DisplayError SetDisplayState(DisplayState state,
-					 bool teardown, int *release_fence) = 0;
+    virtual DisplayError SetDisplayState(DisplayState state, bool teardown,
+                                         shared_ptr<Fence> *release_fence) = 0;
     virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
     virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
     virtual DisplayError RegisterCb(int display_id, vblank_cb_t vbcb) = 0;
@@ -93,8 +93,8 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError DestroyDisplay();
     DisplayError Prepare(struct drm_output *output);
     DisplayError Commit(struct drm_output *output);
-    DisplayError SetDisplayState(DisplayState state,
-				 bool teardown, int *release_fence);
+    DisplayError SetDisplayState(DisplayState state, bool teardown,
+                                 shared_ptr<Fence> *release_fence);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
@@ -117,8 +117,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError DestroyDisplay();
     DisplayError Prepare(struct drm_output *output);
     DisplayError Commit(struct drm_output *output);
-    DisplayError SetDisplayState(DisplayState state,
-				 bool teardown, int *release_fence);
+    DisplayError SetDisplayState(DisplayState state, bool teardown,
+                                 shared_ptr<Fence> *release_fence);
     DisplayError SetVSyncState(bool enable, struct drm_output *output);
     DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
@@ -141,6 +141,9 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     /*! @brief Event handler for events received by Display HAL. */
     virtual DisplayError HandleEvent(DisplayEvent event);
     virtual DisplayError Refresh();
+    virtual void MMRMEvent(bool restricted){
+      return;
+    }
 
  private:
     static const int kBufferDepth = 2;
@@ -230,7 +233,8 @@ class SdmDisplayProxy {
     DisplayError Commit(struct drm_output *output) {
       return display_intf_->Commit(output);
     }
-    DisplayError SetDisplayState(DisplayState state, bool teardown, int *release_fence) {
+    DisplayError SetDisplayState(DisplayState state, bool teardown,
+                                 shared_ptr<Fence> *release_fence) {
       return display_intf_->SetDisplayState(state, teardown, release_fence);
     }
     DisplayError SetVSyncState(bool enable, struct drm_output *output) {

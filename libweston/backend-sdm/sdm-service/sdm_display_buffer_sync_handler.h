@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017, 2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -24,6 +24,7 @@
 
 #ifndef __SDM_DISPLAY_BUFFER_SYNC_HANDLER_H__
 #define __SDM_DISPLAY_BUFFER_SYNC_HANDLER_H__
+#include <sstream>
 #include <core/buffer_sync_handler.h>
 
 namespace sdm {
@@ -32,10 +33,11 @@ class SdmDisplayBufferSyncHandler : public BufferSyncHandler {
  public:
   SdmDisplayBufferSyncHandler();
 
-  DisplayError SyncWait(int fd, int timeout);
-  DisplayError SyncWait(int fd);
-  DisplayError SyncMerge(int fd1, int fd2, int *merged_fd);
-  bool IsSyncSignaled(int fd);
+  int SyncWait(int fd, int timeout);
+  int SyncMerge(int fd1, int fd2, int *merged_fd);
+  void GetSyncInfo(int fd, std::ostringstream *os) {
+    return;
+  }
 };
 
 }  // namespace sdm
