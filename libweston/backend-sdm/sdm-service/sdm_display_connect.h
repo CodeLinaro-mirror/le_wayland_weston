@@ -88,6 +88,19 @@ int GetFirstDisplayType(int *display_id);
 */
 int CreateDisplay(int display_id);
 
+/*! @brief Method to create a display device for a given display id with dynamic type.
+
+    @details Client shall use this method to create each of the display id.
+    display_id must be valid to create display.
+
+    @param[in] display_id \link int \endlink
+    @param[in] ext_disp_type \link int \endlink
+    @return \link DisplayError \endlink
+
+    @sa DestroyDisplay
+*/
+int CreateDisplayWithType(int display_id, int ext_disp_type);
+
 /*! @brief Method to destroy a display device.
 
     @details Client shall use this method to destroy each of the created
@@ -253,6 +266,18 @@ int GetDisplayInfos(void);
 char* GetConnectorName(uint32_t display_id);
 
 uint32_t GetConnectorId(uint32_t display_id);
+
+/*! @brief Method to get display type with display id.
+
+    @details tpye with id is configed by CreateDisplayWithType
+
+    @param[in] display_id \link int \endlink
+
+    @return \link display type \endlink
+
+    @sa
+*/
+uint32_t GetDisplayType(int display_id);
 
 #ifdef __cplusplus
 }

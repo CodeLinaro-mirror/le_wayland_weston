@@ -79,6 +79,8 @@ class SdmDisplayInterface {
     virtual DisplayError SetPanelBrightness(float brightness) = 0;
     virtual DisplayError GetPanelBrightness(float *brightness) = 0;
     static int GetDrmMasterFd();
+    struct drm_output *drm_output_;
+    struct drm_output *prev_output_;
 };
 
 class SdmNullDisplay : public SdmDisplayInterface {

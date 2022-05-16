@@ -73,8 +73,6 @@
 
 #define __CLASS__ "SdmDisplay"
 extern "C" void NotifyOnRefresh(struct drm_output *);
-struct drm_output *drm_output_;
-struct drm_output *prev_output_;
 vblank_cb_t vblank_cb_;
 
 namespace sdm {
@@ -1458,10 +1456,10 @@ int SdmDisplayProxy::HandleHotplug(bool connected) {
 
       DLOGI("Display Vsync State = %d\n", kStateOn);
       display_intf_->SetDisplayState(kStateOn, false, &release_fence);
-      display_intf_->SetVSyncState(true, drm_output_);
+      display_intf_->SetVSyncState(true, display_intf_->drm_output_);
 
       if (hotplug_cb_) {
-        hotplug_cb_(disp_type_, connected, drm_output_);
+        hotplug_cb_(disp_type_, connected, display_intf_->drm_output_);
       }
 
       DLOGI("Display is connected successfully.");
@@ -1471,10 +1469,10 @@ int SdmDisplayProxy::HandleHotplug(bool connected) {
   } else {
     if (display_intf_->GetDisplayIntfType() == sdm_disp) {
       if (hotplug_cb_) {
-        hotplug_cb_(disp_type_, connected, drm_output_);
+        hotplug_cb_(disp_type_, connected, display_intf_->drm_output_);
       }
 
-      display_intf_->SetVSyncState(false, drm_output_);
+      display_intf_->SetVSyncState(false, display_intf_->drm_output_);
       display_intf_->DestroyDisplay();
 
       display_intf_ = &null_disp_;

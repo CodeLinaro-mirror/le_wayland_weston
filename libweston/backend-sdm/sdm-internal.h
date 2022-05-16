@@ -293,9 +293,7 @@ struct drm_head {
 
 	drmModeModeInfo inherited_mode;	/**< Original mode on the connector */
 	uint32_t inherited_crtc_id;	/**< Original CRTC assignment */
-#ifdef MULTI_DISPLAY
-	int display_id; // to support multiple displays.
-#endif
+	int display_id;
 };
 
 struct drm_output {
@@ -345,8 +343,8 @@ struct drm_output {
 	int view_count; //counts number of sdm layers created
 	struct wl_list sdm_layer_list;  /* sdm_layer::link      */
 	enum dpms_enum dpms; //tracks dpms level of output
+	int display_id;
 #ifdef MULTI_DISPLAY
-	int display_id; // to support multiple displays.
 	struct wl_event_source *retire_fence_source;
 #endif
 	int retire_fence_fd;

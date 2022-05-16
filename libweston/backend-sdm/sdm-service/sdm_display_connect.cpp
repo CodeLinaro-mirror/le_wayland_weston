@@ -201,6 +201,54 @@ int CreateDisplay(int display_id)
     return kErrorNone;
 }
 
+int CreateDisplayWithType(int display_id, int ext_disp_type)
+{
+    DisplayError error = kErrorNone;
+
+    if (display_id >= kDisplayMax || display_id < 0) {
+        DLOGE("Display id(%d) out of range.", display_id);
+        return kErrorParameters;
+    }
+
+    if (display_[display_id] != NULL) {
+        DLOGE("Display(%d) was already created.", display_id);
+        return kErrorNone;
+    }
+
+    if (core_intf_ == NULL) {
+        DLOGE("Core is not created yet.");
+        return kErrorNotSupported;
+    }
+
+    SetProperty(DISABLE_SINGLE_LM_SPLIT_PROP, "1");
+
+    enum DisplayType display_type;
+    switch(ext_disp_type) {
+       case 0:  display_type  = kPrimary;    break;
+       case 1:  display_type  = kPluggable;  break;
+       case 2:  display_type  = kVirtual;    break;
+       default: display_type  = kDisplayMax; break;
+    }
+
+    SdmDisplayProxy *sdm_display = new SdmDisplayProxy(display_type, core_intf_, buffer_allocator_);
+
+    display_[display_id] = sdm_display;
+    error = display_[display_id]->CreateDisplay();
+    if (error != kErrorNone) {
+        DLOGE("Failed to create display(%d) type(%d)", display_id, ext_disp_type);
+        delete display_[display_id];
+        display_[display_id] = NULL;
+
+        return error;
+    }
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGD("Display(%d) type(%d) created successfully.", display_id, ext_disp_type);
+    #endif
+
+    return kErrorNone;
+}
+
 int Prepare(int display_id, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
@@ -566,6 +614,12 @@ static HWDisplayInfo GetSdmDisplayInfo(int display_id) {
   auto iter = sdm_displays_info_.find(display_id);
 
   return iter->second;
+}
+
+uint32_t GetDisplayType(int display_id) {
+    auto iter = sdm_displays_info_.find(display_id);
+    DLOGI("id(%d) con(%d)", display_id, iter->second.is_connected);
+    return iter->second.display_type;
 }
 
 }// namespace sdm

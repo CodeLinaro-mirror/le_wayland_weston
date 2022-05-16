@@ -2749,7 +2749,7 @@ weston_output_repaint(struct weston_output *output, void *repaint_data)
 	return r;
 }
 
-static void
+WL_EXPORT void
 weston_output_schedule_repaint_reset(struct weston_output *output)
 {
 	output->repaint_status = REPAINT_NOT_SCHEDULED;
@@ -2783,6 +2783,9 @@ weston_output_maybe_repaint(struct weston_output *output, struct timespec *now,
 	 * repaint until something causes damage. */
 	if (!output->repaint_needed)
 		goto err;
+
+	/*Revisit: frame_time is needed by clients to track the presented time.*/
+	output->frame_time = *now;
 
 	/* If repaint fails, we aren't going to get weston_output_finish_frame
 	 * to trigger a new repaint, so drop it from repaint and hope
@@ -2899,10 +2902,8 @@ weston_output_finish_frame(struct weston_output *output,
 	struct timespec now;
 	int64_t msec_rel;
 
-#ifndef MULTI_DISPLAY
 	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
 	assert(stamp || (presented_flags & WP_PRESENTATION_FEEDBACK_INVALID));
-#endif
 
 	weston_compositor_read_presentation_clock(compositor, &now);
 
