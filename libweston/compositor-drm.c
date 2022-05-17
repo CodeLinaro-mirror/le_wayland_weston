@@ -865,7 +865,7 @@ drm_output_repaint(struct weston_output *output_base,
 	struct drm_mode *mode;
 	int ret = 0;
 
-	if (output->disable_pending || output->destroy_pending)
+	if (output->disable_pending || output->destroy_pending || output->restore_crtc)
 		return -1;
 
 	assert(!output->fb_last);
@@ -3001,7 +3001,6 @@ static int drm_output_plugout(struct weston_output *base)
 	int ret;
 
 	if (!output->restore_crtc) {
-		output->disable_pending = 1;
 		output->restore_crtc = drmModeGetCrtc(b->drm.fd, output->crtc_id);
 		tempcrtc = output->restore_crtc;
 
@@ -3038,7 +3037,6 @@ static int drm_output_plugin(struct weston_output *base)
 		}
 
 		output->restore_crtc = NULL;
-		output->disable_pending = 0;
 	}
 
 	return 0;
