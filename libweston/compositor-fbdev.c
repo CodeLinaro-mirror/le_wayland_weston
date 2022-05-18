@@ -791,8 +791,10 @@ out_free:
 static void
 fbdev_output_destroy(struct weston_output *base)
 {
-	fbdev_output_flush(base);;
 	struct fbdev_output *output = to_fbdev_output(base);
+
+	if (output->hw_surface)
+		fbdev_output_flush(base);
 
 #ifdef USE_SDM
 	SetVSyncState(false);
@@ -1341,9 +1343,10 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 	bool connected = ReadHDMISysfs();
 	if (udev_event_is_hotplug(b, dev)) {
 		if (!first_time && !connected) {
-			switch_display(SECONDARY_DISPLAY_ID, PRIMARY_DISPLAY_ID,
-						&b->output->base, b, PRIMARY_DISPLAY_NODE, false);
-			weston_compositor_schedule_repaint(b->compositor);
+			DestroyDisplay(SECONDARY_DISPLAY_ID);
+			CreateDisplay(PRIMARY_DISPLAY_ID);
+			display_id = PRIMARY_DISPLAY_ID;
+			fbdev_output_flush(&b->output->base);
 			b->secondary_connected = false;
 			weston_log("HDMI is disconnected\n");
 		}
