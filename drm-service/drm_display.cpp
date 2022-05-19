@@ -831,7 +831,7 @@ void early_drm_display_deinit(bool destroy) {
   /* DRM Manager is not destroied if sdm is still using it */
   if (destroy) {
     DRMLibLoader *drm_lib_loader = DRMLibLoader::GetInstance();
-    if (drm_lib_loader)
+    if (drm_lib_loader && drm_lib_loader->FuncDestroyDRMManager())
       drm_lib_loader->FuncDestroyDRMManager()();
   }
   drm_mgr_intf_ = nullptr;
