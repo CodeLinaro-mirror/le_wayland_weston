@@ -315,7 +315,7 @@ int early_create_display(uint32_t display_id, struct EarlyDisplayInfo *dispinfo)
       return -1;
   }
 
-  snprintf(name, sizeof name, "%s-%d", type_name, display_id);
+  snprintf(name, sizeof name, "%s-%d", type_name, info.type_id);
 
   dispinfo->name = strdup(name);
   dispinfo->x_pixels = current_mode_.hdisplay;
