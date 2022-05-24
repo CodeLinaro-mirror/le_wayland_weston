@@ -2,6 +2,7 @@
  * Copyright © 2008-2011 Kristian Høgsberg
  * Copyright © 2011 Intel Corporation
  * Copyright © 2015 Giulio Camuffo
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -223,6 +224,9 @@ struct weston_drm_backend_config {
 
 	/** Use shadow buffer if using Pixman-renderer. */
 	bool use_pixman_shadow;
+
+	/** Use dummydisplay to run weston. */
+	bool use_dummy_display;
 };
 
 #ifdef  __cplusplus

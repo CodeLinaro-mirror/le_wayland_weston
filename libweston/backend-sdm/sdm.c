@@ -5,6 +5,7 @@
  * Copyright © 2017, 2018 General Electric Company
  * Copyright (c) 2018 DisplayLink (UK) Ltd.
  * Copyright (c) 2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -1874,9 +1875,21 @@ drm_backend_create(struct weston_compositor *compositor,
 		goto err_udev;
 	}
 
-	if (init_kms_caps(b) < 0) {
-		weston_log("failed to initialize kms\n");
-		goto err_udev_dev;
+	if (config->use_dummy_display)
+		b->dummy_display = true;
+	else
+		b->dummy_display = false;
+
+	if (!b->dummy_display) {
+		if (drm_device == NULL)
+			goto err_udev;
+
+		if (init_kms_caps(b) < 0)
+			goto err_udev_dev;
+	} else {
+		int fd = open("/dev/ion",O_RDWR);
+		b->drm.fd = fd;
+		b->drm.filename = strdup("/dev/ion");
 	}
 
 	if (b->use_pixman) {
@@ -1943,23 +1956,38 @@ drm_backend_create(struct weston_compositor *compositor,
 	weston_compositor_add_debug_binding(compositor, KEY_W,
 					    renderer_switch_binding, b);
 
-	/* begin SDM initialization */
-	int rc = CreateCore();
-	if (rc != 0) {
-		weston_log("Creating SDM core failed");
-		return rc;
-	}
+	int rc = 1;
+	if (!b->dummy_display) {
+		/* begin SDM initialization */
+		rc = CreateCore();
+		if (rc != 0) {
+			weston_log("Creating SDM core failed");
+			return rc;
+		}
 #ifndef MULTI_DISPLAY
-	rc = GetFirstDisplayType(&display_id);
+		rc = GetFirstDisplayType(&display_id);
 #endif
-	if (rc != 0) {
-		weston_log("SDM failed to get First display type\n");
-		return rc;
-	}
+		if (rc != 0) {
+			weston_log("SDM failed to get First display type\n");
+			return rc;
+		}
 
-	if (drm_backend_create_heads(b, drm_device) < 0) {
-		weston_log("Failed to create heads for %s\n", b->drm.filename);
-		goto err_udev_input;
+		if (drm_backend_create_heads(b, drm_device) < 0) {
+			weston_log("Failed to create heads for %s\n", b->drm.filename);
+			goto err_udev_input;
+		}
+	} else if (b->dummy_display) {
+		display_id = PRIMARY_DISPLAY_ID;
+		rc = CreateDummyDisplay(display_id);
+		if (!rc)
+			weston_log("CreateDummyDisplay: successful %d\n", rc);
+		else
+			weston_log("CreateDummyDisplay: failed %d\n", rc);
+
+		if (drm_head_create(b, drm_device) < 0)
+			weston_log("failed to create dummydisplay head\n");
+
+		weston_log("create dummydisplay head successful\n");
 	}
 
 	if (compositor->renderer->import_dmabuf) {
