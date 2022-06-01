@@ -3438,9 +3438,9 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	}
 
 	if (weston_check_egl_extension(extensions, "GL_EXT_read_format_bgra"))
-		ec->read_format = PIXMAN_a8r8g8b8;
-	else
 		ec->read_format = PIXMAN_a8b8g8r8;
+	else
+		ec->read_format = PIXMAN_a8r8g8b8;
 
 	if (weston_check_egl_extension(extensions, "GL_EXT_unpack_subimage"))
 		gr->has_unpack_subimage = 1;
