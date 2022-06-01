@@ -26,6 +26,42 @@
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
+/*
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *    * Redistributions of source code must retain the above copyright
+ *      notice, this list of conditions and the following disclaimer.
+ *
+ *    * Redistributions in binary form must reproduce the above
+ *      copyright notice, this list of conditions and the following
+ *      disclaimer in the documentation and/or other materials provided
+ *      with the distribution.
+ *
+ *    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *      contributors may be used to endorse or promote products derived
+ *      from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #ifndef SDM_DISPLAY_CONNECT_H
 #define SDM_DISPLAY_CONNECT_H
 
@@ -90,7 +126,7 @@ int GetFirstDisplayType(int *display_id);
 
     @sa DestroyDisplay
 */
-int CreateDisplay(int display_id);
+int CreateDisplay(uint32_t display_id);
 
 /*! @brief Method to destroy a display device.
 
@@ -103,7 +139,7 @@ int CreateDisplay(int display_id);
 
     @sa CreateDisplay
 */
-int DestroyDisplay(int display_id);
+int DestroyDisplay(uint32_t display_id);
 
 /*! @brief Method to create a display device for a given display id even if
     display was already created. This method forces the display to be re-created
@@ -117,7 +153,7 @@ int DestroyDisplay(int display_id);
 
     @sa DestroyDisplay
 */
-int ReconfigureDisplay(int display_id);
+int ReconfigureDisplay(uint32_t display_id);
 
 /*! @brief Method to compose layers associated with given frame.
 
@@ -135,7 +171,7 @@ int ReconfigureDisplay(int display_id);
 
     @sa Commit
 */
-int Prepare(int display_id, struct drm_output *output);
+int Prepare(uint32_t display_id, struct drm_output *output);
 
 /*! @brief Method to commit layers of a frame submitted in a former call to Prepare().
 
@@ -155,7 +191,7 @@ int Prepare(int display_id, struct drm_output *output);
 
     @sa Prepare
 */
-int Commit(int display_id, struct drm_output *output);
+int Commit(uint32_t display_id, struct drm_output *output);
 
 /*! @brief Method to obtain display property for a display_id requested.
     @details Client shall use this method to display properties of requested
@@ -168,7 +204,7 @@ int Commit(int display_id, struct drm_output *output);
 
     @sa
 */
-bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_config);
+bool GetDisplayConfiguration(uint32_t display_id, struct DisplayConfigInfo *display_config);
 
 /*! @brief Method to register callbacks: VBlank Handler function to be called on
     enabling VBlank (VSync), and hotplug handler function to be called on hotplug
@@ -181,8 +217,7 @@ bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_c
 
     @sa
 */
-
-int RegisterCbs(int display_id, sdm_cbs_t *cbs);
+int RegisterCbs(uint32_t display_id, sdm_cbs_t *cbs);
 
 /*! @brief Method to turn on power of display
 
@@ -197,7 +232,7 @@ int RegisterCbs(int display_id, sdm_cbs_t *cbs);
 
     @sa
 */
-bool SetDisplayState(int display_id, int power_mode);
+bool SetDisplayState(uint32_t display_id, int power_mode);
 
 /*! @brief Method to enable VSync State, i.e. whether to generate callback
     on next frame.
@@ -212,7 +247,7 @@ bool SetDisplayState(int display_id, int power_mode);
 
     @sa
 */
-int SetVSyncState(int display_id, bool enable, struct drm_output *output);
+int SetVSyncState(uint32_t display_id, bool enable, struct drm_output *output);
 
 /*! @brief Method to set panel brightness..
 

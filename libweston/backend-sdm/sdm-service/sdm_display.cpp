@@ -111,8 +111,7 @@
 
 #define __CLASS__ "SdmDisplay"
 extern "C" void NotifyOnRefresh(struct drm_output *);
-struct drm_output *drm_output_;
-struct drm_output *prev_output_;
+
 vblank_cb_t vblank_cb_;
 
 namespace sdm {
@@ -156,7 +155,7 @@ const char * SdmDisplay::FourccToString(uint32_t fourcc)
     return s;
 }
 
-DisplayError SdmDisplay::CreateDisplay() {
+DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
     DisplayError error = kErrorNone;
 
     error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
@@ -369,7 +368,7 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
     return kErrorNone;
 }
 
-DisplayError SdmDisplay::RegisterCb(int display_id,       vblank_cb_t vbcb) {
+DisplayError SdmDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
     DisplayError error = kErrorNone;
 
     vblank_cb_   = vbcb;
@@ -1383,7 +1382,7 @@ SdmNullDisplay::SdmNullDisplay(DisplayType type, CoreInterface *core_intf) {
 SdmNullDisplay::~SdmNullDisplay() {
 }
 
-DisplayError SdmNullDisplay::CreateDisplay() {
+DisplayError SdmNullDisplay::CreateDisplay(uint32_t display_id) {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::DestroyDisplay() {
@@ -1482,50 +1481,7 @@ SdmDisplayProxy::~SdmDisplayProxy () {
 }
 
 int SdmDisplayProxy::HandleHotplug(bool connected) {
-  DisplayError error = kErrorNone;
-  shared_ptr<Fence> release_fence;
-
-  DLOGI("HandleHotplug = %d", connected);
-
-  if (connected) {
-    if (display_intf_->GetDisplayIntfType() == null_disp) {
-      display_intf_ = &sdm_disp_;
-      error = display_intf_->CreateDisplay();
-      if (error != kErrorNone) {
-        DLOGE("Failed to create display %d", error);
-        display_intf_ = &null_disp_;
-        return error;
-      }
-
-      DLOGI("Display Vsync State = %d\n", kStateOn);
-      display_intf_->SetDisplayState(kStateOn, false, &release_fence);
-      display_intf_->SetVSyncState(true, drm_output_);
-
-      if (hotplug_cb_) {
-        hotplug_cb_(disp_type_, connected, drm_output_);
-      }
-
-      DLOGI("Display is connected successfully.");
-    } else {
-      DLOGI("Display is already connected.");
-    }
-  } else {
-    if (display_intf_->GetDisplayIntfType() == sdm_disp) {
-      if (hotplug_cb_) {
-        hotplug_cb_(disp_type_, connected, drm_output_);
-      }
-
-      display_intf_->SetVSyncState(false, drm_output_);
-      display_intf_->DestroyDisplay();
-
-      display_intf_ = &null_disp_;
-
-      DLOGI("Display is disconnected successfully.");
-    } else {
-      DLOGI("Display is already disconnected.");
-    }
-  }
-  return error;
+  return kErrorNone;
 }
 
 void *SdmDisplayProxy::UeventThread(void *context) {
