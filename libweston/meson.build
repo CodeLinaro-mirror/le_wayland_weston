@@ -5,6 +5,7 @@ deps_libweston = [
 	dep_libdl,
 	dep_libdrm,
 	dep_xkbcommon,
+	dep_gbm,
 	dep_matrix_c
 ]
 srcs_libweston = [
