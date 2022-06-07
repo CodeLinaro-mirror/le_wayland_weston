@@ -44,6 +44,7 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <poll.h>
+#include <unistd.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -945,6 +946,8 @@ drm_output_enable(struct weston_output *base)
 {
 	struct drm_output *output = to_drm_output(base);
 	struct drm_backend *b = to_drm_backend(base->compositor);
+	int count = 10;
+	int ret = 0;
 
 	if (b->pageflip_timeout) {
 		drm_output_pageflip_timer_create(output);
@@ -974,8 +977,18 @@ drm_output_enable(struct weston_output *base)
 		return -1;
 	}
 
-	if (SetVSyncState(output->display_id, true, output) != 0)
+	do {
+		ret = SetVSyncState(output->display_id, true, output);
+		if (ret) {
+			count--;
+			usleep(5000);
+		}
+	} while (ret && (count > 0));
+
+	if (ret) {
+		weston_log("[%s]:Try 10 times still failed may something wrong!\n", __func__);
 		return -1;
+	}
 
 	drm_output_print_modes(output);
 
@@ -1080,6 +1093,7 @@ drm_head_create(struct drm_backend *backend, struct udev_device *drm_device, int
 	const char *make = "unknown";
 	const char *model = "unknown";
 	const char *serial_number = "unknown";
+	int width, height, refresh;
 
 	head = zalloc(sizeof *head);
 	if (!head)
@@ -1101,7 +1115,30 @@ drm_head_create(struct drm_backend *backend, struct udev_device *drm_device, int
 	weston_head_set_non_desktop(&head->base, false);
 	weston_head_set_subpixel(&head->base, WL_OUTPUT_SUBPIXEL_UNKNOWN);
 
-	weston_head_set_physical_size(&head->base, 1920, 1080);
+	struct DisplayConfigInfo display_config;
+	display_config.x_pixels        = 0;
+	display_config.y_pixels        = 0;
+	display_config.x_dpi           = 96.0f;
+	display_config.y_dpi           = 96.0f;
+	display_config.fps             = 0;
+	display_config.vsync_period_ns = 0;
+	display_config.is_yuv          = false;
+
+	bool rc = GetDisplayConfiguration(display_id, &display_config);
+
+	if (rc != 0) {
+		width   = display_config.x_pixels;
+		height  = display_config.y_pixels;
+		refresh = display_config.fps * 1000;
+		weston_log("Display configuration w*h:%d %d", width, height);
+	} else { /* default 1080p, 60 fps */
+		weston_log("Fail to get preferred mode, use default mode instead!");
+		width   = 1920;
+		height  = 1080;
+		refresh = 60 * 1000;
+	}
+
+	weston_head_set_physical_size(&head->base, width, height);
 
 	weston_head_set_connection_status(&head->base, true);
 
@@ -1272,7 +1309,7 @@ drm_backend_create_heads(struct drm_backend *b, struct udev_device *drm_device)
 	} else {
 		// need default output for avoid black screen with all resource plugout during weston create.
 		display_type = SDM_BuiltIn;
-		display_count = 1;
+		display_count = 0;
 	}
 	weston_log("head(%d) count(%d)\n", display_type, display_count);
 #endif
@@ -1408,6 +1445,7 @@ switch_display(struct drm_backend *b, struct udev_device *drm_device, int disp_t
 	int connector_id;
 	int display_idx = PRIMARY_DISPLAY_ID; // for single display, only primary switch with different output.
 	struct weston_output *output = NULL;
+	struct weston_head *base, *next;
 	int rc = 0;
 
 	if (display_pre_type != SDMDisplayTypeMax) {
@@ -1421,6 +1459,9 @@ switch_display(struct drm_backend *b, struct udev_device *drm_device, int disp_t
 
 		wl_list_for_each(output, &b->compositor->output_list, link)
 			weston_output_schedule_repaint_reset(output);
+
+		wl_list_for_each_safe(base, next, &b->compositor->head_list, compositor_link)
+			drm_head_destroy(to_drm_head(base));
 
 		display_pre_type = SDMDisplayTypeMax;
 	}
