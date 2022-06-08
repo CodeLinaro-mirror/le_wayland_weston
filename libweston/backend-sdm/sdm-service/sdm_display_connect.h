@@ -1,5 +1,6 @@
 /*
 * Copyright (c) 2017, The Linux Foundation. All rights reserved.
+* Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -253,6 +254,8 @@ int GetDisplayInfos(void);
 char* GetConnectorName(uint32_t display_id);
 
 uint32_t GetConnectorId(uint32_t display_id);
+
+int CreateDummyDisplay(int display_id);
 
 #ifdef __cplusplus
 }

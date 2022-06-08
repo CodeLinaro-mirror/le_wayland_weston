@@ -5,6 +5,7 @@
  * Copyright © 2017, 2018 General Electric Company
  * Copyright (c) 2018 DisplayLink (UK) Ltd.
  * Copyright (c) 2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -419,16 +420,18 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 		goto err_free;
 	}
 
-	if (is_opaque)
-		fb->format = pixel_format_get_opaque_substitute(fb->format);
+	if (!backend->dummy_display) {
+		if (is_opaque)
+			fb->format = pixel_format_get_opaque_substitute(fb->format);
 
-	if (drm_fb_addfb(backend, fb) != 0) {
-		weston_log("failed to create kms fb: %s\n",
-				   strerror(errno));
-		goto err_free;
+		if (drm_fb_addfb(backend, fb) != 0) {
+			weston_log("failed to create kms fb: %s\n",
+					   strerror(errno));
+			goto err_free;
+		}
+
+		gbm_bo_set_user_data(bo, fb, drm_fb_destroy_gbm);
 	}
-
-	gbm_bo_set_user_data(bo, fb, drm_fb_destroy_gbm);
 
 	return fb;
 

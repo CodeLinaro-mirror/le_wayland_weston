@@ -4,6 +4,7 @@
  * Copyright © 2017, 2018 Collabora, Ltd.
  * Copyright © 2017, 2018 General Electric Company
  * Copyright (c) 2018 DisplayLink (UK) Ltd.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -224,6 +225,8 @@ struct drm_backend {
 
 	/* SDM data */
 	struct DisplayConfigInfo display_config;
+
+	bool dummy_display;
 };
 
 struct drm_mode {

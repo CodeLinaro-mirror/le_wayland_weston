@@ -1,5 +1,6 @@
 /*
 * Copyright (c) 2017, 2021 The Linux Foundation. All rights reserved.
+* Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -225,6 +226,10 @@ class SdmDisplayProxy {
       if (rc != kErrorNone)
         display_intf_ = &null_disp_;
       return kErrorNone;
+    }
+    DisplayError CreateDummyDisplay() {
+        display_intf_ = &null_disp_;
+        return kErrorNone;
     }
     DisplayError DestroyDisplay() { return display_intf_->DestroyDisplay(); }
     DisplayError Prepare(struct drm_output *output) {
