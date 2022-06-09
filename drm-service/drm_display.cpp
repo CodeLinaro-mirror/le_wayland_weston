@@ -162,13 +162,19 @@ int early_drm_get_planes() {
 int early_drm_display_init(int drm_fd) {
   int ret = -1;
 
-  if(!DRMLibLoader::GetInstance()->IsLoaded()) {
+  DRMLibLoader *drm_lib_loader = DRMLibLoader::GetInstance();
+  if (drm_lib_loader == NULL) {
+    weston_log("drmlib instance fail\n");
+    return -1;
+  }
+
+  if (!drm_lib_loader->IsLoaded()) {
     weston_log("drm lib load failed\n");
     return -1;
   }
 
-  if (DRMLibLoader::GetInstance()->FuncGetDRMManager()) {
-    DRMLibLoader::GetInstance()->FuncGetDRMManager()(drm_fd, &drm_mgr_intf_);
+  if (drm_lib_loader->FuncGetDRMManager()) {
+    drm_lib_loader->FuncGetDRMManager()(drm_fd, &drm_mgr_intf_);
     if (!drm_mgr_intf_)
       return -1;
   }
@@ -824,8 +830,9 @@ void early_destroy_display(void *early_display_intf) {
 void early_drm_display_deinit(bool destroy) {
   /* DRM Manager is not destroied if sdm is still using it */
   if (destroy) {
-    if (DRMLibLoader::GetInstance()->FuncDestroyDRMManager())
-      DRMLibLoader::GetInstance()->FuncDestroyDRMManager()();
+    DRMLibLoader *drm_lib_loader = DRMLibLoader::GetInstance();
+    if (drm_lib_loader && drm_lib_loader->FuncDestroyDRMManager())
+      drm_lib_loader->FuncDestroyDRMManager()();
   }
   drm_mgr_intf_ = nullptr;
   plane_list.clear();
