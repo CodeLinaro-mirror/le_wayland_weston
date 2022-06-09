@@ -1326,6 +1326,7 @@ switch_display(int old_disp_id, int new_disp_id,
 		weston_log("update output\n");
 		fbdev_output_update(output, new_node);
 		fbdev_output_enable(output);
+		weston_output_enable(output);
 	}
 
 	/*turn on vsync for ext display*/
@@ -1347,6 +1348,7 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 			CreateDisplay(PRIMARY_DISPLAY_ID);
 			display_id = PRIMARY_DISPLAY_ID;
 			fbdev_output_flush(&b->output->base);
+			weston_output_disable(&b->output->base);
 			b->secondary_connected = false;
 			weston_log("HDMI is disconnected\n");
 		}
