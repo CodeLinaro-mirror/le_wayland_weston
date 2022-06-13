@@ -1,5 +1,6 @@
 /*
 * Copyright (c) 2017,2020-2021 The Linux Foundation. All rights reserved.
+* Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -568,6 +569,47 @@ static HWDisplayInfo GetSdmDisplayInfo(int display_id) {
   auto iter = sdm_displays_info_.find(display_id);
 
   return iter->second;
+}
+
+int CreateDummyDisplay(int display_id)
+{
+    DisplayError error = kErrorNone;
+
+    if (display_id >= kDisplayMax || display_id < 0) {
+        DLOGE("Display id(%d) out of range.", display_id);
+        return kErrorParameters;
+    }
+
+    if (display_[display_id] != NULL) {
+        DLOGE("Display(%d) was already created.", display_id);
+        return kErrorNone;
+    }
+
+    enum DisplayType display_type;
+    switch(display_id) {
+       case 0:  display_type  = kPrimary;    break;
+       case 1:  display_type  = kHDMI;       break;
+       case 2:  display_type  = kVirtual;    break;
+       default: display_type  = kDisplayMax; break;
+    }
+
+    SdmDisplayProxy *sdm_display = new SdmDisplayProxy(display_type, core_intf_, buffer_allocator_);
+
+    display_[display_id] = sdm_display;
+    error = display_[display_id]->CreateDummyDisplay() ;
+    if (error != kErrorNone) {
+        DLOGE("Failed to create display(%d)", display_id);
+        delete display_[display_id];
+        display_[display_id] = NULL;
+
+        return error;
+    }
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGD("Display(%d) created successfully.", display_id);
+    #endif
+
+    return kErrorNone;
 }
 
 }// namespace sdm

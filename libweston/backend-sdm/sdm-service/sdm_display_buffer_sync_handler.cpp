@@ -24,26 +24,56 @@
 
 #include "sdm-service/sdm_display_debugger.h"
 #include "sdm-service/sdm_display_buffer_sync_handler.h"
+#include "utils/fence.h"
+#include "libsync.h"
 
 #define __CLASS__ "SdmDisplayBufferSyncHandler"
 
 namespace sdm {
 
 SdmDisplayBufferSyncHandler::SdmDisplayBufferSyncHandler() {
-  DLOGW("Not supported.");
+  Fence::Set(this);
+  DLOGW("SdmDisplayBufferSyncHandler: set class point to fence");
 }
 
 int SdmDisplayBufferSyncHandler::SyncMerge(int fd1,
                                            int fd2,
                                            int *merged_fd) {
-  DLOGW("Not supported.");
+  DLOGI("SdmDisplayBufferSyncHandler::SyncMerge");
+  // Caller owns fds, hence, if
+  //  one of the fence fd is invalid, create dup of valid fd and set to merged fd.
+  //  both fence fds are same, create dup of one of the fd and set to merged fd.
+  *merged_fd = -1;
+  if (fd1 < 0) {
+    *merged_fd = dup(fd2);
+  } else if ((fd2 < 0) || (fd1 == fd2)) {
+    *merged_fd = dup(fd1);
+  } else {
+    *merged_fd = sync_merge("SyncMerge", fd1, fd2);
+  }
 
   return kErrorNone;
 }
 
 int SdmDisplayBufferSyncHandler::SyncWait(int fd, int timeout)
 {
-  DLOGW("Not supported.");
+  DLOGI("SdmDisplayBufferSyncHandler::SyncWait, fd = %d, timeout = %d", fd, timeout);
+  // Assume invalid fd as signaled.
+  if (fd < 0) {
+    return 0;
+  }
+
+  int error = 0;
+  if ((error = sync_wait(fd, timeout)) != 0) {
+    if (errno == ETIME) {
+      error = -ETIME;
+    }
+    if (timeout != 0) {
+      DLOGW("sync_wait fd = %d, timeout = %d ms, err = %d : %s", fd, timeout, errno,
+            strerror(errno));
+    }
+    return error;
+  }
 
   return kErrorNone;
 }

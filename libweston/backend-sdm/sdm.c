@@ -5,6 +5,7 @@
  * Copyright © 2017, 2018 General Electric Company
  * Copyright (c) 2018 DisplayLink (UK) Ltd.
  * Copyright (c) 2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -159,8 +160,10 @@ static int get_fence_timestamp(int fd, struct timespec *ts)
         return -1;
 
     ret = ioctl(fd, SYNC_IOC_FILE_INFO, info);
-    if (ret < 0)
+    if (ret < 0) {
+        free(info);
         return ret;
+    }
 
     if (info->num_fences) {
         info->flags = 0;
@@ -1085,6 +1088,7 @@ drm_head_create(struct drm_backend *backend, struct udev_device *drm_device)
 	const char *make = "unknown";
 	const char *model = "unknown";
 	const char *serial_number = "unknown";
+	int width = 0, height = 0, refresh = 0;
 
 	head = zalloc(sizeof *head);
 	if (!head)
@@ -1100,13 +1104,35 @@ drm_head_create(struct drm_backend *backend, struct udev_device *drm_device)
 
 	head->connector_id = GetConnectorId(display_id);
 	head->backend = backend;
-	weston_log("display_id:%d and connector id:%d", display_id, head->connector_id);
+	weston_log("display_id:%d and connector id:%d\n", display_id, head->connector_id);
 
 	weston_head_set_monitor_strings(&head->base, make, model, serial_number);
 	weston_head_set_non_desktop(&head->base, false);
 	weston_head_set_subpixel(&head->base, WL_OUTPUT_SUBPIXEL_UNKNOWN);
 
-	weston_head_set_physical_size(&head->base, 1920, 1080);
+	struct DisplayConfigInfo display_config;
+	display_config.x_pixels        = 0;
+	display_config.y_pixels        = 0;
+	display_config.x_dpi           = 96.0f;
+	display_config.y_dpi           = 96.0f;
+	display_config.fps             = 0;
+	display_config.vsync_period_ns = 0;
+	display_config.is_yuv          = false;
+
+	bool rc = GetDisplayConfiguration(display_id, &display_config);
+
+	if (rc != 0) {
+		width   = display_config.x_pixels;
+		height  = display_config.y_pixels;
+		refresh = display_config.fps*1000;
+		weston_log("Display configuration w*h:%d %d\n", width, height);
+	} else { /* default 1080p, 60 fps */
+		weston_log("Fail to get preferred mode, use default mode instead!\n");
+		width   = 1920;
+		height  = 1080;
+		refresh = 60*1000;
+	}
+	weston_head_set_physical_size(&head->base, width, height);
 
 	weston_head_set_connection_status(&head->base, true);
 
@@ -1134,7 +1160,7 @@ drm_head_create(struct drm_backend *backend, struct udev_device *drm_device, int
 	const char *make = "unknown";
 	const char *model = "unknown";
 	const char *serial_number = "unknown";
-	int width, height, refresh;
+	int width = 0, height = 0, refresh = 0;
 
 	head = zalloc(sizeof *head);
 	if (!head)
@@ -1143,7 +1169,7 @@ drm_head_create(struct drm_backend *backend, struct udev_device *drm_device, int
 	name = GetConnectorName(display_id);
 	if (!name)
 		goto err_alloc;
-	weston_log("display_id:%d and connector name:%s",display_id, name);
+	weston_log("display_id:%d and connector name:%s\n",display_id, name);
 
 	weston_head_init(&head->base, name);
 
@@ -1152,7 +1178,7 @@ drm_head_create(struct drm_backend *backend, struct udev_device *drm_device, int
 	head->connector_id = GetConnectorId(display_id);
 	head->backend = backend;
 	head->display_id = display_id;
-	weston_log("display_id:%d and connector id:%d",display_id, head->connector_id);
+	weston_log("display_id:%d and connector id:%d\n",display_id, head->connector_id);
 
 	weston_head_set_monitor_strings(&head->base, make, model, serial_number);
 	weston_head_set_non_desktop(&head->base, false);
@@ -1173,9 +1199,9 @@ drm_head_create(struct drm_backend *backend, struct udev_device *drm_device, int
 		width   = display_config.x_pixels;
 		height  = display_config.y_pixels;
 		refresh = display_config.fps*1000;
-		weston_log("Display configuration w*h:%d %d", width, height);
+		weston_log("Display configuration w*h:%d %d\n", width, height);
 	} else { /* default 1080p, 60 fps */
-		weston_log("Fail to get preferred mode, use default mode instead!");
+		weston_log("Fail to get preferred mode, use default mode instead!\n");
 		width   = 1920;
 		height  = 1080;
 		refresh = 60*1000;
@@ -1359,11 +1385,11 @@ udev_event_is_hotplug(struct drm_backend *b, struct udev_device *device)
 	if (!sysnum || atoi(sysnum) != b->drm.id)
 		return 0;
 
-	val = udev_device_get_property_value(device, "HOTPLUG");
+	val = udev_device_get_property_value(device, "ACTION");
 	if (!val)
 		return 0;
 
-	return strcmp(val, "1") == 0;
+	return strcmp(val, "change") == 0;
 }
 
 #ifndef MULTI_DISPLAY
@@ -1874,9 +1900,21 @@ drm_backend_create(struct weston_compositor *compositor,
 		goto err_udev;
 	}
 
-	if (init_kms_caps(b) < 0) {
-		weston_log("failed to initialize kms\n");
-		goto err_udev_dev;
+	if (config->use_dummy_display)
+		b->dummy_display = true;
+	else
+		b->dummy_display = false;
+
+	if (!b->dummy_display) {
+		if (drm_device == NULL)
+			goto err_udev;
+
+		if (init_kms_caps(b) < 0)
+			goto err_udev_dev;
+	} else {
+		int fd = open("/dev/ion",O_RDWR);
+		b->drm.fd = fd;
+		b->drm.filename = strdup("/dev/ion");
 	}
 
 	if (b->use_pixman) {
@@ -1943,23 +1981,38 @@ drm_backend_create(struct weston_compositor *compositor,
 	weston_compositor_add_debug_binding(compositor, KEY_W,
 					    renderer_switch_binding, b);
 
-	/* begin SDM initialization */
-	int rc = CreateCore();
-	if (rc != 0) {
-		weston_log("Creating SDM core failed");
-		return rc;
-	}
+	int rc = 1;
+	if (!b->dummy_display) {
+		/* begin SDM initialization */
+		rc = CreateCore();
+		if (rc != 0) {
+			weston_log("Creating SDM core failed");
+			return rc;
+		}
 #ifndef MULTI_DISPLAY
-	rc = GetFirstDisplayType(&display_id);
+		rc = GetFirstDisplayType(&display_id);
 #endif
-	if (rc != 0) {
-		weston_log("SDM failed to get First display type\n");
-		return rc;
-	}
+		if (rc != 0) {
+			weston_log("SDM failed to get First display type\n");
+			return rc;
+		}
 
-	if (drm_backend_create_heads(b, drm_device) < 0) {
-		weston_log("Failed to create heads for %s\n", b->drm.filename);
-		goto err_udev_input;
+		if (drm_backend_create_heads(b, drm_device) < 0) {
+			weston_log("Failed to create heads for %s\n", b->drm.filename);
+			goto err_udev_input;
+		}
+	} else if (b->dummy_display) {
+		display_id = PRIMARY_DISPLAY_ID;
+		rc = CreateDummyDisplay(display_id);
+		if (!rc)
+			weston_log("CreateDummyDisplay: successful %d\n", rc);
+		else
+			weston_log("CreateDummyDisplay: failed %d\n", rc);
+
+		if (drm_head_create(b, drm_device) < 0)
+			weston_log("failed to create dummydisplay head\n");
+
+		weston_log("create dummydisplay head successful\n");
 	}
 
 	if (compositor->renderer->import_dmabuf) {
