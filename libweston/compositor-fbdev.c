@@ -1341,8 +1341,8 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 	struct udev_device *dev;
 	static bool first_time = true;
 	dev = udev_monitor_receive_device(b->udev_monitor);
-	bool connected = ReadHDMISysfs();
 	if (udev_event_is_hotplug(b, dev)) {
+		bool connected = ReadHDMISysfs();
 		if (!first_time && !connected) {
 			DestroyDisplay(SECONDARY_DISPLAY_ID);
 			CreateDisplay(PRIMARY_DISPLAY_ID);
@@ -1389,6 +1389,7 @@ udev_event_is_hotplug(struct fbdev_backend *backend, struct udev_device *dev)
 
 	devpath = udev_device_get_devpath(dev);
 	devname = udev_device_get_sysname(dev);
+
 	int hpd = (strcmp(devpath, HDMI_SYSFS_NODE) == 0) &&
 			  (strcmp(devname, "fb1")==0);
 	if(hpd) {
