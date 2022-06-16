@@ -1343,12 +1343,13 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 	dev = udev_monitor_receive_device(b->udev_monitor);
 	if (udev_event_is_hotplug(b, dev)) {
 		bool connected = ReadHDMISysfs();
-		if (!first_time && !connected) {
+		if (!first_time && !connected && b->secondary_connected) {
 			DestroyDisplay(SECONDARY_DISPLAY_ID);
 			CreateDisplay(PRIMARY_DISPLAY_ID);
 			display_id = PRIMARY_DISPLAY_ID;
 			fbdev_output_flush(&b->output->base);
 			weston_output_disable(&b->output->base);
+			usleep(100 * 1000);
 			b->secondary_connected = false;
 			weston_log("HDMI is disconnected\n");
 		}
