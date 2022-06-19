@@ -208,7 +208,7 @@ char *GetConnectorName(uint32_t display_id) {
       break;
   }
 
-  snprintf(name, sizeof name, "%s-%d", type_name, display_id);
+  snprintf(name, sizeof name, "%s-%d", type_name, iter->second.display_type_id);
   return strdup(name);
 }
 
