@@ -87,7 +87,7 @@ enum {
 
 enum SDMDisplayType {
 	SDM_PRIMARY,
-	SDM_BuiltIn = SDM_PRIMARY,
+	SDM_BUILTIN = SDM_PRIMARY,
 
 	SDM_PLUGGABLE,
 	SDM_EXT_HDMI = SDM_PLUGGABLE,
@@ -1308,7 +1308,7 @@ drm_backend_create_heads(struct drm_backend *b, struct udev_device *drm_device)
 		display_count = 1;
 	} else {
 		// need default output for avoid black screen with all resource plugout during weston create.
-		display_type = SDM_BuiltIn;
+		display_type = SDM_BUILTIN;
 		display_count = 0;
 	}
 	weston_log("head(%d) count(%d)\n", display_type, display_count);
@@ -1325,7 +1325,8 @@ drm_backend_create_heads(struct drm_backend *b, struct udev_device *drm_device)
 #ifndef MULTI_DISPLAY
 		rc = CreateDisplayWithType(idx, display_type);
 		if (rc != 0) {
-			weston_log("SDM failed to create display %d, error = %d\n", display_type, rc);
+			weston_log("SDM failed to create display %d, error = %d\n",
+				display_type, rc);
 			return rc;
 		} else {
 			weston_log("%s: display(%d) created\n", __func__, display_type);
@@ -1435,25 +1436,20 @@ udev_event_is_hdmi(struct drm_backend *b, struct udev_device *device) {
 }
 
 static int
-switch_display(struct drm_backend *b, struct udev_device *drm_device, int disp_type)
+switch_free_resource(struct drm_backend *b, struct udev_device *drm_device, int disp_type)
 {
-	sdm_cbs_t sdm_cbs;
-
-	struct drm_head *head;
-	char *name;
-	int display_count;
-	int connector_id;
-	int display_idx = PRIMARY_DISPLAY_ID; // for single display, only primary switch with different output.
-	struct weston_output *output = NULL;
-	struct weston_head *base, *next;
 	int rc = 0;
+	/* for single display, only primary switch with different output. */
+	int display_idx = PRIMARY_DISPLAY_ID;
+	struct weston_output *output = NULL;
+	struct weston_head *base = NULL, *next = NULL;
 
 	if (display_pre_type != SDMDisplayTypeMax) {
 		weston_log("different source(%d)\n", disp_type);
 		SetDisplayState(display_idx, WESTON_DPMS_OFF);
 		rc = DestroyDisplay(display_idx);
 		if (rc) {
-			weston_log("DestroyDisplay: fail %d!\n", rc);
+			weston_log("destroyDisplay fail when free,%d!\n", rc);
 			return rc;
 		}
 
@@ -1464,6 +1460,29 @@ switch_display(struct drm_backend *b, struct udev_device *drm_device, int disp_t
 			drm_head_destroy(to_drm_head(base));
 
 		display_pre_type = SDMDisplayTypeMax;
+		weston_log("free resource done for switch (%d)\n", disp_type);
+	}
+	return rc;
+}
+
+static int
+switch_display(struct drm_backend *b, struct udev_device *drm_device, int disp_type)
+{
+	sdm_cbs_t sdm_cbs;
+
+	struct drm_head *head;
+	char *name;
+	int display_count;
+	int connector_id;
+	int display_idx = PRIMARY_DISPLAY_ID;
+	struct weston_output *output = NULL;
+	struct weston_head *base, *next;
+	int rc = 0;
+
+	rc = switch_free_resource(b, drm_device, disp_type);
+	if (rc) {
+		weston_log("fail to free resource during switch!\n");
+		return rc;
 	}
 
 	rc = GetDisplayInfos();
@@ -1486,7 +1505,7 @@ switch_display(struct drm_backend *b, struct udev_device *drm_device, int disp_t
 	name = GetConnectorName(display_idx);
 	connector_id = GetConnectorId(display_idx);
 	weston_log("%d displays are connected, connector_id:%d name:%s\n",
-				display_count, connector_id, name);
+		display_count, connector_id, name);
 
 	head = drm_head_find_by_connector(b, connector_id);
 	if (head) {
@@ -1495,7 +1514,7 @@ switch_display(struct drm_backend *b, struct udev_device *drm_device, int disp_t
 		head = drm_head_create(b, drm_device, display_idx);
 		if (!head)
 			weston_log("DRM: failed to create head for added connector %d.\n",
-						connector_id);
+				connector_id);
 	}
 
 	/* Now register callbacks with SDM services */
@@ -1518,7 +1537,7 @@ udev_drm_event(int fd, uint32_t mask, void *data)
 	struct drm_backend *b = data;
 	struct udev_device *event;
 	int display_ext_type = SDM_PLUGGABLE;
-	int rc;
+	int rc = 0;
 
 	event = udev_monitor_receive_device(b->udev_monitor);
 
@@ -1538,6 +1557,12 @@ udev_drm_event(int fd, uint32_t mask, void *data)
 			weston_log("%s: Disp(%d) CONNECT done\n", __func__, display_ext_type);
 		} else if (udev_event_is_disconnected(b, event)) {
 			b->display_config.is_connected = false;
+			rc = switch_free_resource(b, event, display_ext_type);
+			if (rc) {
+				weston_log("fail to free resource during disconnect!\n");
+				udev_device_unref(event);
+				return 0;
+			}
 			weston_log("%s: Disp(%d) DISCONNECT Done\n", __func__, display_ext_type);
 		}
 	}
