@@ -794,8 +794,9 @@ enum {
 	WESTON_COMPOSITOR_ACTIVE,	/* normal rendering and events */
 	WESTON_COMPOSITOR_IDLE,		/* shell->unlock called on activity */
 	WESTON_COMPOSITOR_OFFSCREEN,	/* no rendering, no frame events */
-	WESTON_COMPOSITOR_SLEEPING	/* same as offscreen, but also set dpms
+	WESTON_COMPOSITOR_SLEEPING,	/* same as offscreen, but also set dpms
                                          * to off */
+	WESTON_COMPOSITOR_RELEASE	/* release source when plug out */
 };
 
 struct weston_layer_entry {
@@ -1018,6 +1019,7 @@ struct weston_compositor {
 	struct wl_signal kill_signal;
 	struct wl_signal idle_signal;
 	struct wl_signal wake_signal;
+	struct wl_signal rls_signal;
 
 	struct wl_signal show_input_panel_signal;
 	struct wl_signal hide_input_panel_signal;
@@ -1055,6 +1057,7 @@ struct weston_compositor {
 	struct wl_list debug_binding_list;
 
 	uint32_t state;
+	uint32_t restore;
 	struct wl_event_source *idle_source;
 	uint32_t idle_inhibit;
 	int idle_time;			/* timeout, s */
@@ -1608,6 +1611,10 @@ void
 weston_compositor_damage_all(struct weston_compositor *compositor);
 void
 weston_compositor_wake(struct weston_compositor *compositor);
+void
+weston_compositor_release(struct weston_compositor *compositor);
+void
+weston_compositor_restore(struct weston_compositor *compositor);
 void
 weston_compositor_sleep(struct weston_compositor *compositor);
 struct weston_view *

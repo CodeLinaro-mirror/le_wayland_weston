@@ -4243,6 +4243,19 @@ wake_handler(struct wl_listener *listener, void *data)
 }
 
 static void
+rls_handler(struct wl_listener *listener, void *data)
+{
+	struct desktop_shell *shell =
+		container_of(listener, struct desktop_shell, rls_listener);
+	struct shell_output *shell_output;
+
+	wl_list_for_each(shell_output, &shell->output_list, link) {
+		weston_surface_destroy(shell_output->fade.view->surface);
+		shell_output->fade.view = NULL;
+	}
+}
+
+static void
 transform_handler(struct wl_listener *listener, void *data)
 {
 	struct weston_surface *surface = data;
@@ -5168,6 +5181,9 @@ wet_shell_init(struct weston_compositor *ec,
 	wl_signal_add(&ec->idle_signal, &shell->idle_listener);
 	shell->wake_listener.notify = wake_handler;
 	wl_signal_add(&ec->wake_signal, &shell->wake_listener);
+	shell->rls_listener.notify = rls_handler;
+	wl_signal_add(&ec->rls_signal, &shell->rls_listener);
+
 	shell->transform_listener.notify = transform_handler;
 	wl_signal_add(&ec->transform_signal, &shell->transform_listener);
 

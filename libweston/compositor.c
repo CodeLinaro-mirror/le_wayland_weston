@@ -2784,9 +2784,6 @@ weston_output_maybe_repaint(struct weston_output *output, struct timespec *now,
 	if (!output->repaint_needed)
 		goto err;
 
-	/*Revisit: frame_time is needed by clients to track the presented time.*/
-	output->frame_time = *now;
-
 	/* If repaint fails, we aren't going to get weston_output_finish_frame
 	 * to trigger a new repaint, so drop it from repaint and hope
 	 * something schedules a successful repaint later. As repainting may
@@ -4695,11 +4692,13 @@ weston_compositor_wake(struct weston_compositor *compositor)
 	 * signal because that may try to schedule a repaint which
 	 * will not work if the compositor is still sleeping */
 	compositor->state = WESTON_COMPOSITOR_ACTIVE;
+	compositor->restore =  compositor->state;
 
 	switch (old_state) {
 	case WESTON_COMPOSITOR_SLEEPING:
 	case WESTON_COMPOSITOR_IDLE:
 	case WESTON_COMPOSITOR_OFFSCREEN:
+	case WESTON_COMPOSITOR_RELEASE:
 		weston_compositor_dpms(compositor, WESTON_DPMS_ON);
 		wl_signal_emit(&compositor->wake_signal, compositor);
 		/* fall through */
@@ -4729,6 +4728,7 @@ weston_compositor_offscreen(struct weston_compositor *compositor)
 	case WESTON_COMPOSITOR_SLEEPING:
 	default:
 		compositor->state = WESTON_COMPOSITOR_OFFSCREEN;
+		compositor->restore =  compositor->state;
 		wl_event_source_timer_update(compositor->idle_source, 0);
 	}
 }
@@ -4753,6 +4753,7 @@ weston_compositor_sleep(struct weston_compositor *compositor)
 
 	wl_event_source_timer_update(compositor->idle_source, 0);
 	compositor->state = WESTON_COMPOSITOR_SLEEPING;
+	compositor->restore =  compositor->state;
 	weston_compositor_dpms(compositor, WESTON_DPMS_OFF);
 }
 
@@ -4777,9 +4778,53 @@ idle_handler(void *data)
 		return 1;
 
 	compositor->state = WESTON_COMPOSITOR_IDLE;
+	compositor->restore =  compositor->state;
 	wl_signal_emit(&compositor->idle_signal, compositor);
 
 	return 1;
+}
+
+WL_EXPORT void
+weston_compositor_release(struct weston_compositor *compositor)
+{
+	uint32_t old_state = compositor->state;
+
+	/* After plug-out release, fade black view is
+	 * destroyed and view status is similar with active.
+	 * Previous status active is no need to trigger rls*/
+	compositor->state = WESTON_COMPOSITOR_RELEASE;
+	compositor->restore = old_state;
+
+	switch (old_state) {
+	case WESTON_COMPOSITOR_SLEEPING:
+	case WESTON_COMPOSITOR_IDLE:
+	case WESTON_COMPOSITOR_OFFSCREEN:
+		wl_signal_emit(&compositor->rls_signal, compositor);
+	default:
+		wl_event_source_timer_update(compositor->idle_source,
+			compositor->idle_time * 1000);
+	}
+}
+
+WL_EXPORT void
+weston_compositor_restore(struct weston_compositor *compositor)
+{
+	switch (compositor->restore) {
+	case WESTON_COMPOSITOR_SLEEPING:
+		weston_compositor_sleep(compositor);
+		break;
+	case WESTON_COMPOSITOR_OFFSCREEN:
+		weston_compositor_offscreen(compositor);
+		break;
+	case WESTON_COMPOSITOR_ACTIVE:
+		weston_compositor_wake(compositor);
+		break;
+	case WESTON_COMPOSITOR_IDLE:
+		wl_event_source_timer_update(compositor->idle_source, 100);
+		break;
+	default:
+		weston_log("unexpected restore event(%d)\n", compositor->restore);
+	}
 }
 
 WL_EXPORT void
@@ -7239,6 +7284,7 @@ weston_compositor_create(struct wl_display *display,
 	wl_signal_init(&ec->kill_signal);
 	wl_signal_init(&ec->idle_signal);
 	wl_signal_init(&ec->wake_signal);
+	wl_signal_init(&ec->rls_signal);
 	wl_signal_init(&ec->show_input_panel_signal);
 	wl_signal_init(&ec->hide_input_panel_signal);
 	wl_signal_init(&ec->update_input_panel_signal);

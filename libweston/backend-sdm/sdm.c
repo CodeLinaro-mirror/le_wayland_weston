@@ -1446,6 +1446,7 @@ switch_free_resource(struct drm_backend *b, struct udev_device *drm_device, int 
 
 	if (display_pre_type != SDMDisplayTypeMax) {
 		weston_log("different source(%d)\n", disp_type);
+		weston_compositor_release(b->compositor);
 		SetDisplayState(display_idx, WESTON_DPMS_OFF);
 		rc = DestroyDisplay(display_idx);
 		if (rc) {
@@ -1524,6 +1525,7 @@ switch_display(struct drm_backend *b, struct udev_device *drm_device, int disp_t
 	SetDisplayState(display_idx, WESTON_DPMS_ON);
 
 	b->display_config.is_connected = true;
+	weston_compositor_restore(b->compositor);
 	weston_compositor_schedule_repaint(b->compositor);
 
 	weston_log("Switch display to (%d) done rc=%d\n", disp_type, rc);
