@@ -1898,10 +1898,6 @@ drm_backend_create(struct weston_compositor *compositor,
 		drm_device = open_specific_drm_device(b, config->specific_device);
 	else
 		drm_device = find_primary_gpu(b, seat_id);
-	if (drm_device == NULL) {
-		weston_log("no drm device found\n");
-		goto err_udev;
-	}
 
 	if (config->use_dummy_display)
 		b->dummy_display = true;
@@ -1909,8 +1905,10 @@ drm_backend_create(struct weston_compositor *compositor,
 		b->dummy_display = false;
 
 	if (!b->dummy_display) {
-		if (drm_device == NULL)
+		if (drm_device == NULL) {
+			weston_log("no drm device found\n");
 			goto err_udev;
+		}
 
 		if (init_kms_caps(b) < 0)
 			goto err_udev_dev;
