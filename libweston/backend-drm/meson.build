@@ -2,7 +2,7 @@ if not get_option('backend-drm')
 	subdir_done()
 endif
 
-lib_backlight = static_library(
+lib_backlight = shared_library(
 	'backlight',
 	'libbacklight.c',
 	dependencies: [
