@@ -1283,6 +1283,7 @@ static void
 fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 {
 	weston_log("fbdev_set_dpms: Calling SetDisplayState weston dpms level = %d \n",level);
+	return;
 	fbdev_set_wakelock(level);
 
 	/* Turn OFF HW Vsync before suspend
