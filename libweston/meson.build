@@ -258,6 +258,8 @@ install_headers(
 	'libweston-internal.h',
 	'linux-dmabuf.h',
 	'color.h',
+	'launcher-util.h',
+	'pixman-renderer.h',
 	subdir: dir_include_libweston_private_install
 )
 
