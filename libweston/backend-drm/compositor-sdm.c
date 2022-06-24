@@ -46,6 +46,9 @@
 * RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
 * CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #include "config.h"
@@ -734,7 +737,9 @@ output_repaint(struct weston_output *output_base,
 	}
 	assert(wl_list_empty(&output->plane_flip_list));
 
-	sdm_service->SetVSyncState(output->display_id, ENABLE, output);
+	/* comment out SetVSyncState to disable vsync
+	 * sdm_service->SetVSyncState(output->display_id, ENABLE, output);
+	 */
 	if (output->prev_layer_none_commit && output->layer_none_commit)
 		weston_log("skip commit if two consecutive frames have no layers\n");
 	else if (output->layer_none_commit){
