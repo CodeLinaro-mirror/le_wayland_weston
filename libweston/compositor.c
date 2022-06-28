@@ -2923,6 +2923,10 @@ weston_output_finish_frame(struct weston_output *output,
 						  output->msc,
 						  presented_flags);
 
+	if (stamp->tv_sec == 0 && stamp->tv_nsec == 0) {
+		stamp = &now;
+	}
+
 	output->frame_time = *stamp;
 
 	timespec_add_nsec(&output->next_repaint, stamp, refresh_nsec);
