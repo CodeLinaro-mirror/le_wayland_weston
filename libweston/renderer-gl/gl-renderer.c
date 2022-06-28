@@ -1831,12 +1831,6 @@ gl_renderer_repaint_output(struct weston_output *output,
 
 	go->begin_render_sync = create_render_sync(gr);
 
-	/* Clear all unknown regions */
-	if (output->need_gpu_composition) {
-		glClearColor(0,0,0,0);
-		glClear(GL_COLOR_BUFFER_BIT);
-	}
-
 	/* Calculate the global GL matrix */
 	go->output_matrix = output->matrix;
 	weston_matrix_translate(&go->output_matrix,
