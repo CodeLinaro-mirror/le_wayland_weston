@@ -1345,6 +1345,7 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 	if (udev_event_is_hotplug(b, dev)) {
 		bool connected = ReadHDMISysfs();
 		if (!first_time && !connected && b->secondary_connected) {
+			weston_compositor_release(b->compositor);
 			DestroyDisplay(SECONDARY_DISPLAY_ID);
 			CreateDisplay(PRIMARY_DISPLAY_ID);
 			display_id = PRIMARY_DISPLAY_ID;
@@ -1359,6 +1360,7 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 			switch_display(PRIMARY_DISPLAY_ID, SECONDARY_DISPLAY_ID,
 						&b->output->base, b, SECONDARY_DISPLAY_NODE, first_time);
 			weston_compositor_schedule_repaint(b->compositor);
+			weston_compositor_restore(b->compositor);
 			b->secondary_connected = true;
 			first_time = false;
 			weston_log("HDMI is connected\n");

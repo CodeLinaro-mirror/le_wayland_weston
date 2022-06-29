@@ -4049,6 +4049,7 @@ idle_handler(struct wl_listener *listener, void *data)
 	wl_list_for_each(seat, &shell->compositor->seat_list, link)
 		weston_seat_break_desktop_grabs(seat);
 
+	weston_log("idle fade out\n");
 	shell_fade(shell, FADE_OUT);
 	/* lock() is called from shell_fade_done_for_output() */
 }
@@ -4059,7 +4060,22 @@ wake_handler(struct wl_listener *listener, void *data)
 	struct desktop_shell *shell =
 		container_of(listener, struct desktop_shell, wake_listener);
 
+	weston_log("wake from idle\n");
 	unlock(shell);
+}
+
+static void
+rls_handler(struct wl_listener *listener, void *data)
+{
+	struct desktop_shell *shell =
+		container_of(listener, struct desktop_shell, rls_listener);
+	struct shell_output *shell_output;
+
+	wl_list_for_each(shell_output, &shell->output_list, link) {
+		weston_log("rls idle surface\n");
+		weston_surface_destroy(shell_output->fade.view->surface);
+		shell_output->fade.view = NULL;
+	}
 }
 
 static void
@@ -4819,6 +4835,7 @@ shell_destroy(struct wl_listener *listener, void *data)
 
 	wl_list_remove(&shell->idle_listener.link);
 	wl_list_remove(&shell->wake_listener.link);
+	wl_list_remove(&shell->rls_listener.link);
 	wl_list_remove(&shell->transform_listener.link);
 
 	text_backend_destroy(shell->text_backend);
@@ -4967,6 +4984,9 @@ wet_shell_init(struct weston_compositor *ec,
 	wl_signal_add(&ec->idle_signal, &shell->idle_listener);
 	shell->wake_listener.notify = wake_handler;
 	wl_signal_add(&ec->wake_signal, &shell->wake_listener);
+	shell->rls_listener.notify = rls_handler;
+	wl_signal_add(&ec->rls_signal, &shell->rls_listener);
+
 	shell->transform_listener.notify = transform_handler;
 	wl_signal_add(&ec->transform_signal, &shell->transform_listener);
 
