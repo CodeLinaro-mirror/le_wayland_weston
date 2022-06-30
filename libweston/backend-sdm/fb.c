@@ -26,6 +26,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -419,16 +423,18 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 		goto err_free;
 	}
 
-	if (is_opaque)
-		fb->format = pixel_format_get_opaque_substitute(fb->format);
+	if (!backend->dummy_display) {
+		if (is_opaque)
+			fb->format = pixel_format_get_opaque_substitute(fb->format);
 
-	if (drm_fb_addfb(backend, fb) != 0) {
-		weston_log("failed to create kms fb: %s\n",
-				   strerror(errno));
-		goto err_free;
+		if (drm_fb_addfb(backend, fb) != 0) {
+			weston_log("failed to create kms fb: %s\n",
+					   strerror(errno));
+			goto err_free;
+		}
+
+		gbm_bo_set_user_data(bo, fb, drm_fb_destroy_gbm);
 	}
-
-	gbm_bo_set_user_data(bo, fb, drm_fb_destroy_gbm);
 
 	return fb;
 

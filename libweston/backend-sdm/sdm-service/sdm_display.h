@@ -20,6 +20,10 @@
 * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifndef __SDM_DISPLAY_H__
@@ -225,6 +229,10 @@ class SdmDisplayProxy {
       if (rc != kErrorNone)
         display_intf_ = &null_disp_;
       return kErrorNone;
+    }
+    DisplayError CreateDummyDisplay() {
+        display_intf_ = &null_disp_;
+        return kErrorNone;
     }
     DisplayError DestroyDisplay() { return display_intf_->DestroyDisplay(); }
     DisplayError Prepare(struct drm_output *output) {
