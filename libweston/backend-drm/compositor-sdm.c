@@ -586,8 +586,9 @@ static int
 drm_output_init_pixman(struct drm_output *output, struct drm_backend *b);
 
 static int
-finish_init(struct drm_backend *b)
+finish_init(void *data)
 {
+	struct drm_backend *b = data;
 	struct drm_output *output;
 	int fd;
 	bool handoff = false;
@@ -787,7 +788,6 @@ static void
 do_screen_capture(struct screen_capture *screen_cap,
 		pixman_region32_t *damage)
 {
-	struct drm_backend *backend = screen_cap->compositor->backend;
 	struct screen_capture_buffer *cap_buf = screen_cap->next;
 
 	/*
@@ -833,7 +833,7 @@ drm_output_repaint(struct weston_output *output_base,
 	return 0;
 }
 
-static void
+static int
 drm_output_start_repaint_loop(struct weston_output *output_base)
 {
 	struct drm_output *output = (struct drm_output *) output_base;
@@ -851,7 +851,7 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
 	};
 
 	if (output->destroy_pending || output->disable_pending)
-		return;
+		return 0;
 
 	if (!output->current) {
 		/* We can't page flip if there's no mode set */
@@ -871,6 +871,7 @@ finish_frame:
 	weston_compositor_read_presentation_clock(output_base->compositor, &ts);
 	weston_output_finish_frame(output_base, &ts,
 			WP_PRESENTATION_FEEDBACK_INVALID);
+	return 0;
 }
 
 /**
@@ -2088,13 +2089,15 @@ get_gbm_format_from_section(struct weston_config_section *section,
 	return ret;
 }
 
-static void
+static int
 headless_output_start_repaint_loop(struct weston_output *output)
 {
 	struct timespec ts;
 
 	weston_compositor_read_presentation_clock(output->compositor, &ts);
 	weston_output_finish_frame(output, &ts, WP_PRESENTATION_FEEDBACK_INVALID);
+
+	return 0;
 }
 
 static int
@@ -2122,9 +2125,8 @@ headless_output_repaint(struct weston_output *output_base,
 }
 
 static void
-hotplug_handler(int disp, bool connected, void *data)
+hotplug_handler(int disp, bool connected, struct drm_output *output)
 {
-	struct drm_output *output = (struct drm_output *) data;
 	struct timespec ts;
 
 	if (connected) {
@@ -2902,7 +2904,7 @@ session_notify(struct wl_listener *listener, void *data)
 }
 
 static void
-switch_vt_binding(struct weston_keyboard *keyboard, uint32_t time,
+switch_vt_binding(struct weston_keyboard *keyboard, const struct timespec *time,
 		uint32_t key, void *data)
 {
 	struct weston_compositor *compositor = data;
@@ -2971,7 +2973,7 @@ create_recorder(struct drm_backend *b, int width, int height,
 }
 
 static void
-recorder_binding(struct weston_keyboard *keyboard, uint32_t time, uint32_t key,
+recorder_binding(struct weston_keyboard *keyboard, const struct timespec *time, uint32_t key,
 		void *data)
 {
 	struct drm_backend *b = data;
@@ -3013,7 +3015,7 @@ recorder_binding(struct weston_keyboard *keyboard, uint32_t time, uint32_t key,
 }
 #else
 static void
-recorder_binding(struct weston_keyboard *keyboard, uint32_t time, uint32_t key,
+recorder_binding(struct weston_keyboard *keyboard, const struct timespec *time, uint32_t key,
 		void *data)
 {
 	weston_log("Compiled without libva support\n");
@@ -3065,7 +3067,7 @@ switch_to_gl_renderer(struct drm_backend *b)
 }
 
 static void
-renderer_switch_binding(struct weston_keyboard *keyboard, uint32_t time,
+renderer_switch_binding(struct weston_keyboard *keyboard, const struct timespec *time,
 		uint32_t key, void *data)
 {
 	struct drm_backend *b =
@@ -3141,7 +3143,7 @@ struct full_init_param {
 	bool success;
 };
 
-static void full_init_main(void *arg){
+static void *full_init_main(void *arg) {
 	struct full_init_param *param =
 			(struct full_init_param *)arg;
 	struct drm_backend *b = param->b;
@@ -3268,7 +3270,7 @@ static void full_init_main(void *arg){
 		wl_event_source_timer_update(b->finish_full_init, 1);
 
 		free(param);
-		return;
+		return NULL;
 	}
 
 	if (udev_input_init(&b->input, b->compositor, b->udev, param->seat_id, param->configure_device) < 0) {
@@ -3279,7 +3281,7 @@ static void full_init_main(void *arg){
 	if (finish_init(b))
 		goto err_udev_input;
 	param->success = true;
-	return;
+	return NULL;
 
 err_udev_input:
 	udev_input_destroy(&b->input);
@@ -3302,7 +3304,7 @@ err_base:
 		free(param);
 	else
 		param->success = false;
-	return;
+	return NULL;
 }
 
 static struct drm_backend *

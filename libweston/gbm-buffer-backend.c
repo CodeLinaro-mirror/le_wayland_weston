@@ -77,7 +77,7 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
 		uint32_t width,
 		uint32_t height,
 		uint32_t format,
-		uint32_t flags);
+		int32_t flags);
 
 static void
 gbm_buffer_backend_destroy(struct wl_client *client,
@@ -258,7 +258,7 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
 		uint32_t width,
 		uint32_t height,
 		uint32_t format,
-		uint32_t flags)
+		int32_t flags)
 {
 	struct gbm_buffer *buffer;
 	bool ret = true;
