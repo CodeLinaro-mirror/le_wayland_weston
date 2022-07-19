@@ -100,8 +100,6 @@ enum SdmDisplayIntfType {null_disp, sdm_disp};
 
 typedef std::map<uint32_t, HWDisplayInfo> SdmDisplaysInfo;
 
-// map<display_id, sdm_display>
-typedef std::map<uint32_t, SdmDisplayProxy *> CreatedDisplaysInfo;
 
 class SdmDisplayInterface {
   public:

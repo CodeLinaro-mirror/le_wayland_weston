@@ -85,23 +85,18 @@ SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
 
-CreatedDisplaysInfo displays_;
+SdmDisplayProxy *display_ = NULL;
 
 HWDisplaysInfo hw_displays_info_ = {};
 // ordered by output id
 SdmDisplaysInfo sdm_displays_info_ = {};
 
-SdmDisplayProxy *GetDisplayFromId(uint32_t display_id) {
-    auto it = displays_.find(display_id);
-    if (it == displays_.end()) {
-        DLOGE("No display available with display_id: %d.", display_id);
-        return NULL;
-    }
-    return it->second;
-}
 
 bool IsDisplayCreated(uint32_t display_id) {
-    return displays_.find(display_id) != displays_.end();
+    if (display_) {
+        return true;
+    }
+    return false;
 }
 
 int GetConnectedDisplaysIds(int num_displays, uint32_t *connector_ids) {
@@ -170,14 +165,8 @@ int DestroyCore()
         DLOGE("Core was already destroyed => core_intf_ = NULL");
         return kErrorNone;
     }
-
-    auto it = displays_.begin();
-    for (it; it != displays_.end(); ++it) {
-        uint32_t connector_id = it->first;
-        delete displays_[connector_id];
-        displays_[connector_id] = NULL;
-        displays_.erase(connector_id);
-    }
+   delete display_;
+   display_ = NULL;
 
     error = CoreInterface::DestroyCore();
     if (error != kErrorNone) {
@@ -245,18 +234,15 @@ int CreateDisplay(uint32_t display_id)
 
     enum DisplayType display_type = hw_display_info.display_type;
 
-    SdmDisplayProxy *sdm_display = new SdmDisplayProxy(display_type, core_intf_, buffer_allocator_);
+    display_ = new SdmDisplayProxy(display_type, core_intf_, buffer_allocator_);
 
-    displays_[display_id] = sdm_display;
-    error = displays_[display_id]->CreateDisplay(display_id) ;
+    error = display_->CreateDisplay(display_id) ;
     if (error != kErrorNone) {
         DLOGE("Failed to create display(%d)", display_id);
-        delete displays_[display_id];
-        displays_[display_id] = NULL;
-        displays_.erase(display_id);
+        delete display_;
+        display_ = NULL;
         return error;
     }
-
     #if SDM_DISPLAY_DEBUG
     DLOGD("Display(%d) created successfully.", display_id);
     #endif
@@ -267,7 +253,7 @@ int CreateDisplay(uint32_t display_id)
 int Prepare(uint32_t display_id, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
-    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    SdmDisplayProxy *dpy = display_;
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
@@ -289,7 +275,7 @@ int Prepare(uint32_t display_id, struct drm_output *output)
 int Commit(uint32_t display_id, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
-    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    SdmDisplayProxy *dpy = display_;
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
@@ -309,7 +295,7 @@ int Commit(uint32_t display_id, struct drm_output *output)
 int DestroyDisplay(uint32_t display_id)
 {
     DisplayError error = kErrorNone;
-    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    SdmDisplayProxy *dpy = display_;
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
@@ -321,9 +307,8 @@ int DestroyDisplay(uint32_t display_id)
         return error;
     }
 
-    delete displays_[display_id];
-    displays_[display_id] = NULL;
-    displays_.erase(display_id);
+    delete display_;
+    display_ = NULL;
 
     #if SDM_DISPLAY_DEBUG
     DLOGD("function successful.");
@@ -335,7 +320,7 @@ int DestroyDisplay(uint32_t display_id)
 bool GetDisplayConfiguration(uint32_t display_id, struct DisplayConfigInfo *display_config)
 {
     DisplayError error = kErrorNone;
-    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    SdmDisplayProxy *dpy = display_;
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
@@ -357,7 +342,7 @@ bool GetDisplayConfiguration(uint32_t display_id, struct DisplayConfigInfo *disp
 
 bool GetDisplayHdrInfo(uint32_t display_id, struct DisplayHdrInfo *display_hdr_info)
 {
-    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    SdmDisplayProxy *dpy = display_;
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
@@ -372,7 +357,7 @@ bool GetDisplayHdrInfo(uint32_t display_id, struct DisplayHdrInfo *display_hdr_i
 
 int RegisterCbs(uint32_t display_id, sdm_cbs *cbs) {
     DisplayError error = kErrorNone;
-    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    SdmDisplayProxy *dpy = display_;
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
@@ -404,7 +389,7 @@ int SetDisplayState(uint32_t display_id, int power_mode) {
     bool teardown;
     int release_fence = -1;
     sdm::DisplayState disp_state;
-    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    SdmDisplayProxy *dpy = display_;
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
@@ -439,7 +424,7 @@ int SetDisplayState(uint32_t display_id, int power_mode) {
 int SetVSyncState(uint32_t display_id, bool state, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
-    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    SdmDisplayProxy *dpy = display_;
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
@@ -461,7 +446,7 @@ int SetVSyncState(uint32_t display_id, bool state, struct drm_output *output)
 int SetPanelBrightness(int display_id, float brightness)
 {
     DisplayError error = kErrorNone;
-    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    SdmDisplayProxy *dpy = display_;
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
@@ -473,7 +458,7 @@ int SetPanelBrightness(int display_id, float brightness)
 int GetPanelBrightness(int display_id, float *brightness)
 {
     DisplayError error = kErrorNone;
-    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    SdmDisplayProxy *dpy = display_;
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
