@@ -377,6 +377,7 @@ drm_output_update_complete(struct drm_output *output, uint32_t flags,
 {
 	struct timespec ts;
 	struct sdm_layer *sdm_layer, *tmp_layer;
+	uint32_t state = output->base.compositor->state;
 
 	/* Stop the pageflip timer instead of rearming it here */
 	if (output->pageflip_timer)
@@ -391,7 +392,7 @@ drm_output_update_complete(struct drm_output *output, uint32_t flags,
 
 	wl_list_init(&output->sdm_layer_list);
 
-	if (output->dpms != WESTON_DPMS_ON) {
+	if (output->dpms != WESTON_DPMS_ON || state == WESTON_COMPOSITOR_RELEASE) {
 		if (output->destroy_pending) {
 			output->destroy_pending = false;
 			output->disable_pending = false;
@@ -1029,7 +1030,7 @@ drm_output_destroy(struct weston_output *base)
 
 	if (output->pageflip_timer)
 		wl_event_source_remove(output->pageflip_timer);
-    
+
 	drm_output_disable_vblank(output);
     	weston_output_release(&output->base);
 
