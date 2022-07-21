@@ -2567,6 +2567,7 @@ load_sdm_backend(struct weston_compositor *c,
 		{ WESTON_OPTION_BOOLEAN, "current-mode", 0, &wet->drm_use_current_mode },
 		{ WESTON_OPTION_BOOLEAN, "use-pixman", 0, &config.use_pixman },
 		{ WESTON_OPTION_BOOLEAN, "dummydisplay", 0, &config.use_dummy_display },
+		{ WESTON_OPTION_STRING, "device", 0, &config.device },
 	};
 
 	parse_options(options, ARRAY_LENGTH(options), argc, argv);

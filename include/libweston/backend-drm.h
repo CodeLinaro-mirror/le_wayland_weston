@@ -230,6 +230,9 @@ struct weston_drm_backend_config {
 
 	/** Use dummydisplay to run weston. */
 	bool use_dummy_display;
+
+	char *device;
+
 };
 
 #ifdef  __cplusplus
