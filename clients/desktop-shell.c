@@ -51,7 +51,7 @@
 
 #include "weston-desktop-shell-client-protocol.h"
 
-#define DEFAULT_CLOCK_FORMAT CLOCK_FORMAT_MINUTES
+#define DEFAULT_CLOCK_FORMAT CLOCK_FORMAT_SECONDS
 #define DEFAULT_SPACING 10
 
 extern char **environ; /* defined by libc */
@@ -1503,6 +1503,7 @@ parse_clock_format(struct desktop *desktop, struct weston_config_section *s)
 		desktop->clock_format = CLOCK_FORMAT_NONE;
 	else
 		desktop->clock_format = DEFAULT_CLOCK_FORMAT;
+
 	free(clock_format);
 }
 
