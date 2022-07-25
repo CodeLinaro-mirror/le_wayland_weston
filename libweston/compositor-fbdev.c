@@ -138,6 +138,7 @@ static void fbdev_output_fini_egl(struct fbdev_output *output);
 static void fbdev_set_dpms(struct weston_output *output_base, enum dpms_enum level);
 static void fbdev_set_backlight(struct weston_output *output_base, uint32_t value);
 static int fbdev_get_backlight();
+static void fbdev_frame_buffer_destroy(struct fbdev_output *output);
 static void fbdev_output_flush(struct weston_output *base);
 static int fbdev_output_update(struct weston_output *base, const char *device);
 static int udev_fb_event(int fd, uint32_t mask, void *data);
@@ -465,7 +466,6 @@ fbdev_set_screen_info(struct fbdev_output *output, int fd,
 	return 1;
 }
 
-static void fbdev_frame_buffer_destroy(struct fbdev_output *output);
 
 /* Returns an FD for the frame buffer device. */
 static int
@@ -815,12 +815,15 @@ fbdev_output_flush(struct weston_output *base)
 
 	/* Close the frame buffer. */
 	fbdev_output_disable(base);
+	weston_log("Disable fbdev output.\n");
 	if (base->renderer_state != NULL) {
 		if (output->backend->use_pixman) {
 			pixman_renderer_output_destroy(base);
+			weston_log("Destroy pixman renderer output.\n");
 		}
 		else {
 			fbdev_output_fini_egl(output);
+			weston_log("Destroy fb fini egl\n");
 		}
 	}
 	close(output->fb_device_fd);
@@ -1018,7 +1021,7 @@ init_egl(struct fbdev_backend *b)
 					 "gl_renderer_interface");
 	if (!gl_renderer) {
 		weston_log("Unable to load gl-renderer \n");
-		return;
+		return -1;
 	}
 	int fd = ion_open();
 	create_buff_alloc_device(fd, b);
@@ -1326,7 +1329,6 @@ switch_display(int old_disp_id, int new_disp_id,
 	} else {
 		weston_log("update output\n");
 		fbdev_output_update(output, new_node);
-		fbdev_output_enable(output);
 		weston_output_enable(output);
 	}
 
