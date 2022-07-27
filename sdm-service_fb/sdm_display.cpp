@@ -79,7 +79,6 @@ DisplayError SdmDisplay::CreateDisplay() {
     }
     display_intf_->GetFrameBufferConfig(&fb_config_);
     display_intf_->SetDisplayState(kStateOn);
-    display_intf_->SetPanelBrightness(255);
     layer_stack_.layers.clear();
     gpu_target_layer_ = new Layer();
     dummy_layer_ = new Layer();

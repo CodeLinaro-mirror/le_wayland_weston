@@ -62,7 +62,7 @@
 #include "presentation-time-server-protocol.h"
 #include "gl-renderer.h"
 
-
+#define DEFAULT_BRIGHTNESS (255)
 struct fbdev_backend {
 	struct weston_backend base;
 	struct weston_compositor *compositor;
@@ -655,6 +655,8 @@ fbdev_output_enable(struct weston_output *base)
 		weston_log("Failed to create vsync event\n");
 		goto out_hw_surface;
 	}
+
+	fbdev_set_backlight(base, DEFAULT_BRIGHTNESS);
 
 	loop = wl_display_get_event_loop(backend->compositor->wl_display);
 
@@ -1421,6 +1423,7 @@ static void fbdev_set_backlight(struct weston_output *output_base, uint32_t valu
 		return;
 
 	SetBrightness(value);
+	output_base->backlight_current = value;
 }
 
 static int fbdev_get_backlight()
