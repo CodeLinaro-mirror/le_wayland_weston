@@ -247,8 +247,6 @@ on_vblank(int fd, uint32_t mask, void *data)
 		usec = output->last_vblank.usec;
 		sec = output->last_vblank.sec;
 		drm_output_update_complete(output, flags, sec, usec);
-	} else {
-		weston_log("%s: Atomic complete pending is not set yet\n", __func__);
 	}
 }
 
@@ -1308,32 +1306,40 @@ drm_backend_create_heads(struct drm_backend *b, struct udev_device *drm_device)
 	weston_log("%d displays are connected\n", display_count);
 
 	for (idx = 0; idx < display_count; idx++) {
+
+		int display_idx = 0;
+
+		if (display_count == 1)
+			display_idx = display_id;
+		else
+			display_idx = idx;
+
 		sdm_cbs_t sdm_cbs;
-		rc = CreateDisplay(idx);
+		rc = CreateDisplay(display_idx);
 
 		if (rc != 0) {
-			weston_log("SDM failed to create display %d, error = %d\n", idx, rc);
+			weston_log("SDM failed to create display %d, error = %d\n", display_idx, rc);
 			return rc;
 		} else {
-			weston_log("%s: %d display created\n", __func__, idx);
+			weston_log("%s: %d display created\n", __func__, display_idx);
 		}
 
 	    /* Now register callbacks with SDM services */
 		sdm_cbs.vblank_cb = vblank_handler;
 		sdm_cbs.hotplug_cb = hotplug_handler;
-		RegisterCbs(idx, &sdm_cbs);
+		RegisterCbs(display_idx, &sdm_cbs);
 		b->display_config.is_connected = true;
 #ifndef MULTI_DISPLAY
 		head = drm_head_create(b, drm_device);
 #else
-		head = drm_head_create(b, drm_device, idx);
+		head = drm_head_create(b, drm_device, display_idx);
 #endif
 		if (!head) {
 			weston_log("DRM: failed to create head\n");
 			return -1;
 		}
 
-		rc = SetDisplayState(idx, WESTON_DPMS_ON);
+		rc = SetDisplayState(display_idx, WESTON_DPMS_ON);
 		if (rc) {
 			weston_log("%s: SDM failed to turn on display, error=%d\n", __func__, rc);
 			return rc;
@@ -1991,7 +1997,10 @@ drm_backend_create(struct weston_compositor *compositor,
 			return rc;
 		}
 #ifndef MULTI_DISPLAY
-		rc = GetFirstDisplayType(&display_id);
+		if(config->device != NULL && strcmp(config->device, "displayport") == 0)
+			display_id = EXTERNAL_DISPLAY_ID;
+		else
+			rc = GetFirstDisplayType(&display_id);
 #endif
 		if (rc != 0) {
 			weston_log("SDM failed to get First display type\n");
