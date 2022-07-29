@@ -184,12 +184,23 @@ int DestroyDisplay(int display_id)
 
 void SetLineLength(int line_length)
 {
+    if (!display_) {
+        DLOGW("Display not create when set len.");
+        return;
+    }
+
     display_->SetFBTStride(line_length);
 }
 
 int SetDisplayState(int power_mode) {
     DisplayError error = kErrorNone;
     DisplayState state = kStateOff;
+
+    if (!display_) {
+        DLOGW("Display not create when set state.");
+        return kErrorParameters;
+    }
+
     if (power_mode == kDisplayStateOn) {
         state = kStateOn;
     }
@@ -206,21 +217,41 @@ int SetDisplayState(int power_mode) {
 
 void SetVSyncState(bool state)
 {
+    if (!display_) {
+        DLOGW("Display not create when set vsync.");
+        return;
+    }
+
     display_->SetVSyncState(state);
 }
 
 void RegisterVSyncCb(int display_id, vsync_cb_t vsync_cb)
 {
+    if (!display_) {
+        DLOGW("Display not create when set cb.");
+        return;
+    }
+
     display_->RegisterVSyncCb(vsync_cb);
 }
 
 void SetBrightness(int brightness)
 {
+    if (!display_) {
+        DLOGW("Display not create when set bl.");
+        return;
+    }
+
     display_->SetBrightness(brightness);
 }
 
 void GetBrightness(int* brightness)
 {
+    if (!display_) {
+        DLOGW("Display not create when get bl.");
+        return;
+    }
+
     display_->GetBrightness(brightness);
 }
 

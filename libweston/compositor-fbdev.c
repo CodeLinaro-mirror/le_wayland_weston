@@ -1360,7 +1360,7 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 			weston_log("HDMI is disconnected\n");
 		}
 
-		if (connected) {
+		if (connected & !b->secondary_connected) {
 			switch_display(PRIMARY_DISPLAY_ID, SECONDARY_DISPLAY_ID,
 						&b->output->base, b, SECONDARY_DISPLAY_NODE, first_time);
 			weston_compositor_schedule_repaint(b->compositor);
