@@ -3795,7 +3795,7 @@ lock(struct desktop_shell *shell)
 {
 	struct workspace *ws = get_current_workspace(shell);
 
-    weston_log("Disable lock \n",__FUNCTION__);
+    weston_log("Disable lock\n");
     return;
 
 	if (shell->locked) {

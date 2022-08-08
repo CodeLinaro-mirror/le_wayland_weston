@@ -1319,6 +1319,7 @@ switch_display(int old_disp_id, int new_disp_id,
 {
 	DestroyDisplay(old_disp_id);
 	CreateDisplay(new_disp_id);
+
 	weston_log("switch display (%d)->(%d) is_new(%d)\n", old_disp_id, new_disp_id, is_new);
 	display_id = new_disp_id;
 
@@ -1339,6 +1340,21 @@ switch_display(int old_disp_id, int new_disp_id,
 	RegisterVSyncCb(display_id, vsync_handler);
 }
 
+static void
+switch_release(struct weston_output * output,
+			struct fbdev_backend *backend)
+{
+	weston_compositor_release(backend->compositor);
+	DestroyDisplay(SECONDARY_DISPLAY_ID);
+	CreateDisplay(PRIMARY_DISPLAY_ID);
+	display_id = PRIMARY_DISPLAY_ID;
+	fbdev_output_flush(&backend->output->base);
+	weston_output_disable(&backend->output->base);
+	usleep(100 * 1000);
+	backend->secondary_connected = false;
+	weston_log("Switch display release done\n");
+}
+
 static int
 udev_fb_event(int fd, uint32_t mask, void *data)
 {
@@ -1349,18 +1365,14 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 	if (udev_event_is_hotplug(b, dev)) {
 		bool connected = ReadHDMISysfs();
 		if (!first_time && !connected && b->secondary_connected) {
-			weston_compositor_release(b->compositor);
-			DestroyDisplay(SECONDARY_DISPLAY_ID);
-			CreateDisplay(PRIMARY_DISPLAY_ID);
-			display_id = PRIMARY_DISPLAY_ID;
-			fbdev_output_flush(&b->output->base);
-			weston_output_disable(&b->output->base);
-			usleep(100 * 1000);
-			b->secondary_connected = false;
+			switch_release(&b->output->base, b);
 			weston_log("HDMI is disconnected\n");
 		}
 
-		if (connected & !b->secondary_connected) {
+		if (connected) {
+			if(b->secondary_connected) {
+				switch_release(&b->output->base, b);
+			}
 			switch_display(PRIMARY_DISPLAY_ID, SECONDARY_DISPLAY_ID,
 						&b->output->base, b, SECONDARY_DISPLAY_NODE, first_time);
 			weston_compositor_schedule_repaint(b->compositor);
