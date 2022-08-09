@@ -43,6 +43,7 @@
 #include <malloc.h>
 #include <string.h>
 #include <errno.h>
+#include <wayland-util.h>
 
 #include "shared/string-helpers.h"
 
@@ -81,22 +82,22 @@ out:
 	return ret;
 }
 
-long backlight_get_brightness(struct backlight *backlight)
+WL_EXPORT long backlight_get_brightness(struct backlight *backlight)
 {
 	return backlight_get(backlight, "brightness");
 }
 
-long backlight_get_max_brightness(struct backlight *backlight)
+WL_EXPORT long backlight_get_max_brightness(struct backlight *backlight)
 {
 	return backlight_get(backlight, "max_brightness");
 }
 
-long backlight_get_actual_brightness(struct backlight *backlight)
+WL_EXPORT long backlight_get_actual_brightness(struct backlight *backlight)
 {
 	return backlight_get(backlight, "actual_brightness");
 }
 
-long backlight_set_brightness(struct backlight *backlight, long brightness)
+WL_EXPORT long backlight_set_brightness(struct backlight *backlight, long brightness)
 {
 	char *path;
 	char *buffer = NULL;
@@ -139,7 +140,7 @@ out:
 	return ret;
 }
 
-void backlight_destroy(struct backlight *backlight)
+WL_EXPORT void backlight_destroy(struct backlight *backlight)
 {
 	if (!backlight)
 		return;
@@ -150,7 +151,7 @@ void backlight_destroy(struct backlight *backlight)
 	free(backlight);
 }
 
-struct backlight *backlight_init(struct udev_device *drm_device,
+WL_EXPORT struct backlight *backlight_init(struct udev_device *drm_device,
 				 uint32_t connector_type)
 {
 	const char *syspath = NULL;

@@ -5,6 +5,7 @@ deps_libweston = [
 	dep_libdl,
 	dep_libdrm,
 	dep_xkbcommon,
+	dep_gbm,
 	dep_matrix_c
 ]
 srcs_libweston = [
@@ -148,7 +149,10 @@ srcs_session_helper = [
 	'launcher-util.c',
 	'launcher-weston-launch.c',
 ]
-deps_session_helper = [ dep_libweston_private_h ]
+deps_session_helper = [
+	dep_libweston_private_h,
+	dep_libweston_private,
+]
 
 if get_option('backend-drm')
 	deps_session_helper += dep_libdrm
@@ -194,7 +198,7 @@ if get_option('launcher-libseat')
 	]
 endif
 
-lib_session_helper = static_library(
+lib_session_helper = shared_library(
 	'session-helper',
 	srcs_session_helper,
 	include_directories: common_inc,
@@ -204,7 +208,7 @@ lib_session_helper = static_library(
 dep_session_helper = declare_dependency(link_with: lib_session_helper)
 
 
-lib_libinput_backend = static_library(
+lib_libinput_backend = shared_library(
 	'libinput-backend',
 	[
 		'libinput-device.c',
@@ -212,6 +216,7 @@ lib_libinput_backend = static_library(
 	],
 	dependencies: [
 		dep_libweston_private,
+		dep_session_helper,
 		dep_libinput,
 		dependency('libudev', version: '>= 136')
 	],
@@ -253,6 +258,8 @@ install_headers(
 	'libweston-internal.h',
 	'linux-dmabuf.h',
 	'color.h',
+	'launcher-util.h',
+	'pixman-renderer.h',
 	subdir: dir_include_libweston_private_install
 )
 
