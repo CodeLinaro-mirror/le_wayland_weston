@@ -1523,4 +1523,8 @@ void *SdmDisplayProxy::UeventThreadHandler() {
   return NULL;
 }
 
+void SdmDisplay::ShutdownUnuseConnector(int32_t conn_id) {
+  display_intf_->ShutdownUnuseConnector(conn_id);
+}
+
 }  // namespace sdm

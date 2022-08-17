@@ -78,6 +78,7 @@ class SdmDisplayInterface {
     virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
     virtual DisplayError SetPanelBrightness(float brightness) = 0;
     virtual DisplayError GetPanelBrightness(float *brightness) = 0;
+    virtual void ShutdownUnuseConnector(int32_t conn_id) = 0;
     static int GetDrmMasterFd();
     struct drm_output *drm_output_;
     struct drm_output *prev_output_;
@@ -102,6 +103,7 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
     DisplayError SetPanelBrightness(float brightness);
     DisplayError GetPanelBrightness(float *brightness);
+    void ShutdownUnuseConnector(int32_t conn_id) {}
 };
 
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
@@ -128,6 +130,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError GetPanelBrightness(float *brightness);
 
     int OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level);
+    void ShutdownUnuseConnector(int32_t conn_id);
 
  protected:
     virtual DisplayError VSync(const DisplayEventVSync &vsync);
@@ -255,6 +258,9 @@ class SdmDisplayProxy {
     int HandleHotplug(bool connected);
 
     DisplayError OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level);
+    void ShutdownUnuseConnector(int32_t conn_id) {
+      display_intf_->ShutdownUnuseConnector(conn_id);
+    }
 
   private:
     // Uevent thread

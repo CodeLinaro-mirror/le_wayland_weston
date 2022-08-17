@@ -610,6 +610,17 @@ uint32_t GetConnectorId(uint32_t display_id) {
   return iter->second.display_id;
 }
 
+int32_t GetPreConnectorId(int32_t type) {
+  HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
+
+  for (iter; iter != hw_displays_info_.end(); ++iter) {
+    if (iter->second.display_type != type)
+      continue;
+    else
+      return iter->second.display_id;
+  }
+}
+
 static HWDisplayInfo GetSdmDisplayInfo(int display_id) {
   auto iter = sdm_displays_info_.find(display_id);
 
@@ -620,6 +631,23 @@ uint32_t GetDisplayType(int display_id) {
     auto iter = sdm_displays_info_.find(display_id);
     DLOGI("id(%d) con(%d)", display_id, iter->second.is_connected);
     return iter->second.display_type;
+}
+
+void ShutdownUnuseConnector(int display_id, int32_t conn_id) {
+
+  if (display_id >= kDisplayMax || display_id < 0) {
+    DLOGE("Display id(%d) out of range.", display_id);
+      return;
+  }
+
+  if (!display_[display_id]) {
+    DLOGE("function failed as Display(%d) not created yet.", display_id);
+    return;
+  }
+
+  display_[display_id]->ShutdownUnuseConnector(conn_id);
+
+  return;
 }
 
 }// namespace sdm

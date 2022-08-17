@@ -1480,6 +1480,7 @@ switch_display(struct drm_backend *b, struct udev_device *drm_device, int disp_t
 	struct weston_output *output = NULL;
 	struct weston_head *base, *next;
 	int rc = 0;
+	int pre_conn_id = 0;
 
 	rc = switch_free_resource(b, drm_device, disp_type);
 	if (rc) {
@@ -1500,7 +1501,12 @@ switch_display(struct drm_backend *b, struct udev_device *drm_device, int disp_t
 	} else {
 		weston_log("display type(%d) created\n", disp_type);
 	}
+	if (disp_type == SDM_PLUGGABLE)
+		pre_conn_id = GetPreConnectorId(SDM_PRIMARY);
+	else
+		pre_conn_id = GetPreConnectorId(SDM_PLUGGABLE);
 
+	ShutdownUnuseConnector(display_idx, pre_conn_id);
 	display_pre_type = disp_type;
 
 	display_count = GetDisplayCount();

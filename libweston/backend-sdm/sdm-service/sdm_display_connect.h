@@ -267,6 +267,8 @@ char* GetConnectorName(uint32_t display_id);
 
 uint32_t GetConnectorId(uint32_t display_id);
 
+void ShutdownUnuseConnector(uint32_t display_id, int32_t conn_id);
+
 /*! @brief Method to get display type with display id.
 
     @details tpye with id is configed by CreateDisplayWithType
