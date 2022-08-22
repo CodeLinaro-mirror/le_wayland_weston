@@ -1557,6 +1557,10 @@ udev_drm_event(int fd, uint32_t mask, void *data)
 			display_ext_type = SDM_PRIMARY;
 
 		if (udev_event_is_connected(b, event)) {
+
+			if(display_ext_type == display_pre_type)
+				return 0;
+
 			rc = switch_display(b, event, display_ext_type);
 			if (rc) {
 				weston_log("switch_display: fail %d!\n", rc);
