@@ -3540,6 +3540,8 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 			ret = egl_image_unref(image->images[i]);
 			assert(ret == 0);
 		}
+		image->num_images = 0;
+
 		if (!import_known_gbmbuf(gr, image)) {
 			gbm_buffer_backend->send_server_error(gbmbuf, "EGL gbmbuf import failed");
 			return;
