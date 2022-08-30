@@ -264,7 +264,8 @@ desktop_shell_destroy_surface(struct shell_surface *shsurf)
 
 	wl_signal_emit(&shsurf->destroy_signal, shsurf);
 
-	weston_view_destroy(shsurf->view);
+	if (shsurf->view->surface)
+		weston_surface_destroy(shsurf->view->surface);
 	if (shsurf->output_destroy_listener.notify) {
 		wl_list_remove(&shsurf->output_destroy_listener.link);
 		shsurf->output_destroy_listener.notify = NULL;
