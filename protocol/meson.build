@@ -11,6 +11,7 @@ install_data(
 		'gbm-buffer-backend.xml',
 		'screen-capture.xml',
 		'pll.xml',
+		'pp-control.xml',
 	],
 	install_dir: join_paths(dir_data, dir_protocol_libweston)
 )
@@ -40,6 +41,7 @@ generated_protocols = [
 	[ 'gbm-buffer-backend', 'internal' ],
 	[ 'screen-capture', 'internal' ],
 	[ 'pll', 'internal' ],
+	[ 'pp-control', 'internal' ],
 	[ 'xdg-output', 'v1' ],
 	[ 'xdg-shell', 'v6' ],
 	[ 'xdg-shell', 'stable' ],

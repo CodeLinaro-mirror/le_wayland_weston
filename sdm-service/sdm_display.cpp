@@ -50,6 +50,11 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 #include <assert.h>
 #include <stdarg.h>
@@ -72,6 +77,7 @@
 #include <sys/resource.h>
 #include "sdm_display.h"
 #include "uevent.h"
+#include "sdm_color_manager.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -1532,6 +1538,104 @@ DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
   return error;
 }
 
+DisplayError SdmDisplay::ColorSVCRequestRoute(uint32_t feature, void *in_params, void *out_params) {
+  DisplayError ret = kErrorNone;
+  PPPendingParams pending_action;
+  PPDisplayAPIPayload out_payload;
+  uint32_t size;
+
+  pending_action.action = kNoAction;
+  pending_action.params = NULL;
+
+  if (!in_params) {
+    DLOGE("Invalid input params\n");
+    return kErrorParameters;
+  }
+
+  switch (feature) {
+    case DISP_USER_INIT + DISP_USER_OFFSET:
+    {
+      struct disp_user_init init_data;
+      struct disp_user_init_out init_out;
+      struct control_init_input *input_params = reinterpret_cast<control_init_input *>(in_params);
+      struct control_init_output *output_params = reinterpret_cast<control_init_output *>(out_params);
+
+      if (!out_params) {
+        DLOGE("Invalid output params\n");
+        return kErrorParameters;
+      }
+
+      size = sizeof(struct disp_user_init);
+      init_data.req_id = feature;
+      init_data.init_req.flags = input_params->flags;
+      const PPDisplayAPIPayload in_payload(size, reinterpret_cast<uint8_t *>(&init_data));
+
+      ret = display_intf_->ColorSVCRequestRoute(in_payload, &out_payload, &pending_action);
+      if (out_payload.payload == NULL)
+        DLOGE("Failed to get disp api handle\n");
+      else {
+        init_out.init_res = *(reinterpret_cast<disp_user_init_res *>(out_payload.payload));
+        output_params->handle = init_out.init_res.hctx;
+        DLOGI("in_playload size=%d, handle=0x%llx\n", in_payload.size, output_params->handle);
+      }
+      break;
+    }
+    case DISP_USER_DEINIT + DISP_USER_OFFSET:
+    {
+      struct disp_user_deinit dinit_data;
+      struct control_deinit_input *input_params = reinterpret_cast<control_deinit_input *>(in_params);
+
+      size = sizeof(struct disp_user_deinit);
+      dinit_data.req_id = feature;
+      dinit_data.deinit_req.flags = input_params->flags;
+      dinit_data.deinit_req.hctx = input_params->handle;
+
+      const PPDisplayAPIPayload in_payload(size, reinterpret_cast<uint8_t *>(&dinit_data));
+      ret = display_intf_->ColorSVCRequestRoute(in_payload, &out_payload, &pending_action);
+      break;
+    }
+    case DISP_USER_PRIV_SET_GLOBAL_PCC_CONFIG + DISP_USER_PRIV_OFFSET:
+    {
+      struct control_pcc_input* input_params = reinterpret_cast<control_pcc_input *>(in_params);
+
+      size = sizeof(struct disp_user_set_global_pcc_config_input);
+      struct disp_user_set_global_pcc_config_input pcc_input(feature,
+                              input_params->handle, 0, 1, input_params->cfg);
+      const PPDisplayAPIPayload in_payload(size, reinterpret_cast<uint8_t *>(&pcc_input));
+
+      DLOGI("--- The input PCC coefficient ---");
+      DLOGI("R component: %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf", input_params->cfg.r.c,
+            input_params->cfg.r.r, input_params->cfg.r.g, input_params->cfg.r.b,
+            input_params->cfg.r.rr, input_params->cfg.r.gg, input_params->cfg.r.bb,
+            input_params->cfg.r.rg, input_params->cfg.r.gb, input_params->cfg.r.rb, input_params->cfg.r.rgb);
+      DLOGI("G component: %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf", input_params->cfg.g.c,
+            input_params->cfg.g.r, input_params->cfg.g.g, input_params->cfg.g.b,
+            input_params->cfg.g.rr, input_params->cfg.g.gg, input_params->cfg.g.bb,
+            input_params->cfg.g.rg, input_params->cfg.g.gb, input_params->cfg.g.rb, input_params->cfg.g.rgb);
+      DLOGI("B component: %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf\n", input_params->cfg.b.c,
+            input_params->cfg.b.r, input_params->cfg.b.g, input_params->cfg.b.b,
+            input_params->cfg.b.rr, input_params->cfg.b.gg, input_params->cfg.b.bb,
+            input_params->cfg.b.rg, input_params->cfg.b.gb, input_params->cfg.b.rb, input_params->cfg.b.rgb);
+
+      ret = display_intf_->ColorSVCRequestRoute(in_payload, &out_payload, &pending_action);
+      break;
+    }
+    case DISP_USER_PRIV_GET_GLOBAL_PCC_CONFIG + DISP_USER_PRIV_OFFSET:
+    {
+      //ToDo: Implement it as a debug feature
+      break;
+    }
+    default:
+      DLOGE("Invalid color process feature\n");
+      ret = kErrorParameters;
+      break;
+  }
+
+  out_payload.DestroyPayload();
+
+  return ret;
+}
+
 SdmNullDisplay::SdmNullDisplay(int32_t display_id, DisplayType type, CoreInterface *core_intf) {
 }
 
@@ -1571,6 +1675,10 @@ DisplayError SdmNullDisplay::UpdateDisplayPll(int32_t ppm) {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::ColorSVCRequestRoute(uint32_t feature, void* in, void* out) {
   return kErrorNone;
 }
 

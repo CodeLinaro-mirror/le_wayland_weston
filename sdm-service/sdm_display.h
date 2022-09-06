@@ -25,6 +25,11 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifndef __SDM_DISPLAY_H__
@@ -114,6 +119,7 @@ public:
   virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
   virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
   virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
+  virtual DisplayError ColorSVCRequestRoute(uint32_t feature, void *in_params, void *out_params) = 0;
 
   virtual struct drm_output * GetOutput() = 0;
 
@@ -139,6 +145,7 @@ public:
   DisplayError EnablePllUpdate(int32_t enable);
   DisplayError UpdateDisplayPll(int32_t ppm);
   DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
+  DisplayError ColorSVCRequestRoute(uint32_t feature, void *in_params, void *out_params);
 
   struct drm_output * GetOutput() { return NULL; };
 };
@@ -164,6 +171,7 @@ public:
   DisplayError UpdateDisplayPll(int32_t ppm);
 
   DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
+  DisplayError ColorSVCRequestRoute(uint32_t feature, void *in_params, void *out_params);
 
   struct drm_output * GetOutput() { return drm_output_; };
 
@@ -278,6 +286,9 @@ public:
   }
   DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
     return display_intf_->GetHdrInfo(display_hdr_info);
+  }
+  DisplayError ColorSVCRequestRoute(uint32_t feature, void *in_params, void *out_params) {
+    return display_intf_->ColorSVCRequestRoute(feature, in_params, out_params);
   }
 
   int HandleHotplug(bool connected);
