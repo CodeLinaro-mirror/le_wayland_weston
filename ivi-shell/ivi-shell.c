@@ -517,6 +517,8 @@ desktop_surface_removed(struct weston_desktop_surface *surface,
 
 	if (ivisurf->layout_surface)
 		layout_surface_cleanup(ivisurf);
+
+	free(ivisurf);
 }
 
 static void
