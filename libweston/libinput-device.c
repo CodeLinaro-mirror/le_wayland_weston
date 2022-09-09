@@ -419,6 +419,15 @@ evdev_device_process_event(struct libinput_event *event)
 }
 
 static void
+remove_output_destroy_listener(struct evdev_device *device)
+{
+	if (device->output_destroy_listener.notify) {
+		wl_list_remove(&device->output_destroy_listener.link);
+		device->output_destroy_listener.notify = NULL;
+	}
+}
+
+static void
 notify_output_destroy(struct wl_listener *listener, void *data)
 {
 	struct evdev_device *device =
@@ -432,7 +441,10 @@ notify_output_destroy(struct wl_listener *listener, void *data)
 				      struct weston_output, link);
 		evdev_device_set_output(device, output);
 	} else {
+		remove_output_destroy_listener(device);
 		device->output = NULL;
+		weston_log("output for input device removed dev-name:[%s] \n",
+				   libinput_device_get_name(device->device));
 	}
 }
 
@@ -524,10 +536,7 @@ void
 evdev_device_set_output(struct evdev_device *device,
 			struct weston_output *output)
 {
-	if (device->output_destroy_listener.notify) {
-		wl_list_remove(&device->output_destroy_listener.link);
-		device->output_destroy_listener.notify = NULL;
-	}
+	remove_output_destroy_listener(device);
 
 	device->output = output;
 	device->output_destroy_listener.notify = notify_output_destroy;
@@ -549,7 +558,6 @@ evdev_device_create(struct libinput_device *libinput_device,
 	device->seat = seat;
 	wl_list_init(&device->link);
 	device->device = libinput_device;
-
 	if (libinput_device_has_capability(libinput_device,
 					   LIBINPUT_DEVICE_CAP_KEYBOARD)) {
 		weston_seat_init_keyboard(seat, NULL);
@@ -565,7 +573,6 @@ evdev_device_create(struct libinput_device *libinput_device,
 		weston_seat_init_touch(seat);
 		device->seat_caps |= EVDEV_SEAT_TOUCH;
 	}
-
 	libinput_device_set_user_data(libinput_device, device);
 	libinput_device_ref(libinput_device);
 
