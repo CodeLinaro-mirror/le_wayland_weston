@@ -23,6 +23,11 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -3535,6 +3540,8 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 			ret = egl_image_unref(image->images[i]);
 			assert(ret == 0);
 		}
+		image->num_images = 0;
+
 		if (!import_known_gbmbuf(gr, image)) {
 			gbm_buffer_backend->send_server_error(gbmbuf, "EGL gbmbuf import failed");
 			return;
