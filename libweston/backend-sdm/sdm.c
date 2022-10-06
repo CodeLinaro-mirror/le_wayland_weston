@@ -171,8 +171,8 @@ vblank_handler(int display_id, int64_t timestamp, void *data)
 		}
 	}
 
-	output->last_vblank.usec = timestamp/1000;
-	output->last_vblank.sec = output->last_vblank.usec/1000;
+	output->last_vblank.sec = timestamp / 1000000000LL;
+	output->last_vblank.usec = (timestamp % 1000000000LL) / 1000;
 
 	write(output->vblank_ev_fd, &v, sizeof v);
 }
