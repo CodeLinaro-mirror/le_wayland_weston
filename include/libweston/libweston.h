@@ -956,8 +956,9 @@ struct weston_renderer {
 	void (*repaint_output)(struct weston_output *output,
 			       pixman_region32_t *output_damage);
 	void (*capture_screen)(struct weston_output *output,
-                   struct weston_buffer *buffer,
-                   pixman_region32_t *output_damage);
+			       struct weston_buffer *buffer,
+			       pixman_region32_t *output_damage,
+			       struct weston_output *orig_output);
 	void (*flush_damage)(struct weston_surface *surface);
 	void (*attach)(struct weston_surface *es, struct weston_buffer *buffer);
 	void (*surface_set_color)(struct weston_surface *surface,
