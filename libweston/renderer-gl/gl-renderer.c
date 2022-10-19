@@ -1978,7 +1978,8 @@ gl_renderer_repaint_output(struct weston_output *output,
 static void
 gl_renderer_capture_screen(struct weston_output *output,
                               struct weston_buffer *buffer,
-                              pixman_region32_t *output_damage)
+                              pixman_region32_t *output_damage,
+                              struct weston_output *orig_output)
 {
 	struct gl_output_state *go = get_output_state(output);
 	struct weston_compositor *compositor = output->compositor;
@@ -2059,7 +2060,7 @@ gl_renderer_capture_screen(struct weston_output *output,
 	border_damage |= go->border_status;
 
 	/* Draw all views */
-	wl_list_for_each_reverse(pnode, &output->paint_node_z_order_list,
+	wl_list_for_each_reverse(pnode, &orig_output->paint_node_z_order_list,
 				 z_order_link) {
 		if (screen_capture_backend->is_screen_capture_view(pnode->view))
 			continue;
