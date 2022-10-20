@@ -4167,6 +4167,7 @@ weston_compositor_release(struct weston_compositor *compositor)
 	case WESTON_COMPOSITOR_SLEEPING:
 	case WESTON_COMPOSITOR_IDLE:
 	case WESTON_COMPOSITOR_OFFSCREEN:
+	case WESTON_COMPOSITOR_ACTIVE: // for fade view.
 		wl_signal_emit(&compositor->rls_signal, compositor);
 	default:
 		wl_event_source_timer_update(compositor->idle_source,

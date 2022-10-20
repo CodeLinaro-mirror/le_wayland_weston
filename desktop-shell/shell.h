@@ -128,6 +128,7 @@ struct shell_output {
 		struct weston_view_animation *animation;
 		enum fade_type type;
 		struct wl_event_source *startup_timer;
+		int destroy_lock;
 	} fade;
 };
 

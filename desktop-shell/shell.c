@@ -3863,8 +3863,13 @@ shell_fade_done_for_output(struct weston_view_animation *animation, void *data)
 	shell_output->fade.animation = NULL;
 	switch (shell_output->fade.type) {
 	case FADE_IN:
-		weston_surface_destroy(shell_output->fade.view->surface);
-		shell_output->fade.view = NULL;
+		if (shell_output->fade.view != NULL && !shell_output->fade.destroy_lock) {
+			shell_output->fade.destroy_lock = true;
+			weston_surface_destroy(shell_output->fade.view->surface);
+			shell_output->fade.view = NULL;
+			shell_output->fade.destroy_lock = false;
+		}
+
 		break;
 	case FADE_OUT:
 		lock(shell);
@@ -4028,6 +4033,8 @@ shell_fade_init(struct desktop_shell *shell)
 		if (!shell_output->fade.view)
 			continue;
 
+		shell_output->fade.destroy_lock = false;
+
 		weston_view_update_transform(shell_output->fade.view);
 		weston_surface_damage(shell_output->fade.view->surface);
 
@@ -4072,9 +4079,18 @@ rls_handler(struct wl_listener *listener, void *data)
 	struct shell_output *shell_output;
 
 	wl_list_for_each(shell_output, &shell->output_list, link) {
-		weston_log("rls idle surface\n");
-		weston_surface_destroy(shell_output->fade.view->surface);
-		shell_output->fade.view = NULL;
+		if (shell_output->fade.view != NULL && !shell_output->fade.destroy_lock) {
+			weston_log("rls idle surface\n");
+			shell_output->fade.destroy_lock = true;
+			weston_surface_destroy(shell_output->fade.view->surface);
+			shell_output->fade.view = NULL;
+			shell_output->fade.destroy_lock = false;
+		}
+
+		if (shell_output->fade.animation) {
+			weston_log("animation still exist\n");
+			shell_output->fade.animation = NULL;
+		}
 	}
 }
 
