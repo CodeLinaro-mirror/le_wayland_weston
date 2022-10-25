@@ -3094,8 +3094,8 @@ static int init_sdm(void) {
 
 	int rc = sdm_service->CreateCore();
 	if (rc) {
-		weston_log("failed to create SDM core\n");
-		return rc;
+		weston_log("failed to create SDM core, error = %d\n", rc);
+		return -1;
 	}
 
 	weston_log("SDM core created\n");
