@@ -28,6 +28,42 @@
  * SOFTWARE.
  */
 
+/*
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *    * Redistributions of source code must retain the above copyright
+ *      notice, this list of conditions and the following disclaimer.
+ *
+ *    * Redistributions in binary form must reproduce the above
+ *      copyright notice, this list of conditions and the following
+ *      disclaimer in the documentation and/or other materials provided
+ *      with the distribution.
+ *
+ *    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *      contributors may be used to endorse or promote products derived
+ *      from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #include "config.h"
 
 #include <xf86drm.h>
@@ -41,10 +77,6 @@
 
 #include "linux-dmabuf.h"
 #include "presentation-time-server-protocol.h"
-
-#ifndef MULTI_DISPLAY
-extern int display_id;
-#endif
 
 void
 destroy_sdm_layer(struct sdm_layer *layer)
@@ -90,7 +122,6 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 	struct weston_view *ev;
 	struct weston_plane *primary = &output_base->compositor->primary_plane, *next_plane;
 	struct sdm_layer *sdm_layer, *next_sdm_layer;
-	bool is_skip = false;
 	struct weston_surface *es;
 
 	pixman_region32_t overlap, surface_overlap;
@@ -100,6 +131,7 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 	output->view_count = 0;
 	wl_list_init(&output->sdm_layer_list);
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
+		bool is_skip = false;
 
 		/* If this view doesn't touch our output at all, there's no
 		 * reason to do anything with it. */
@@ -132,7 +164,7 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 		    is_skip = true;
 		} else if (linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource)) {
 		    is_skip = false;
-		}  else if (wl_shm_buffer_get(es->buffer_ref.buffer->resource)) {
+		} else if (wl_shm_buffer_get(es->buffer_ref.buffer->resource)) {
 		    is_skip = true;
 		}
 
@@ -146,11 +178,7 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 
 	output->view_count++;
 
-#ifndef MULTI_DISPLAY
-	int ret = Prepare(display_id, output);
-#else
 	int ret = Prepare(output->display_id, output);
-#endif
 	if (ret != 0) {
 		weston_log("%s: Assigning planes failed\n", __func__);
 		return;
