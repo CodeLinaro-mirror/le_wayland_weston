@@ -2030,10 +2030,8 @@ drm_head_update_info(struct drm_head *head)
 		return;
 	}
 
-#ifndef BUILD_DRM_COMPOSITOR
 	if (drm_head_assign_connector_info(head, connector) < 0)
 		drmModeFreeConnector(connector);
-#endif
 
 	if (head->base.device_changed)
 		drm_head_log_info(head, "updated");
