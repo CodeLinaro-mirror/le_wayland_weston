@@ -44,7 +44,7 @@ SdmDisplayBufferAllocator *buffer_allocator_;
 SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
-SdmDisplay *display_;
+SdmDisplay *display_[kDisplayMax] = {0};
 
 int CreateCore()
 {
@@ -65,19 +65,27 @@ int CreateCore()
         return error;
     }
 
-    #if SDM_DISPLAY_DEBUG
-    DLOGD("successfully created.");
-    #endif
+#if SDM_DISPLAY_DEBUG
+    DLOGI("successfully created.");
+#endif
 
     return kErrorNone;
 }
 
 int DestroyCore()
 {
-    if (core_intf_) {
-        core_intf_->DestroyCore();
+    if (!core_intf_) {
+        DLOGE("Core was already destroyed => core_intf_ = NULL");
+        return kErrorNone;
     }
 
+    core_intf_->DestroyCore();
+    core_intf_ = NULL;
+    delete buffer_allocator_;
+
+#if SDM_DISPLAY_DEBUG
+    DLOGI("Core was destroyed successfully");
+#endif
     return kErrorNone;
 }
 
@@ -99,9 +107,9 @@ int GetFirstDisplayType(int *display_id)
     }
     *display_id = hw_disp_info_.type;
 
-    #if SDM_DISPLAY_DEBUG
-    DLOGD("function successful: display id = %d", *display_id);
-    #endif
+#if SDM_DISPLAY_DEBUG
+    DLOGI("function successful: display id = %d", *display_id);
+#endif
 
     return kErrorNone;
 }
@@ -112,6 +120,10 @@ int CreateDisplay(int display_id)
     if (display_id >= kDisplayMax || display_id < 0) {
         DLOGE("Display id(%d) out of range.", display_id);
         return kErrorParameters;
+    }
+    if (display_[display_id] != NULL) {
+        DLOGE("Display(%d) was already created.", display_id);
+        return kErrorNone;
     }
     if (core_intf_ == NULL) {
         DLOGE("Core is not created yet.");
@@ -124,17 +136,18 @@ int CreateDisplay(int display_id)
        case 2:  display_type  = kVirtual;    break;
        default: display_type  = kDisplayMax; break;
     }
-    display_ = new SdmDisplay(display_type, core_intf_, buffer_allocator_);
-    error = display_->CreateDisplay();
+    display_[display_id] = new SdmDisplay(display_type, core_intf_, buffer_allocator_);
+
+    error = display_[display_id]->CreateDisplay();
     if (error != kErrorNone) {
         DLOGE("Failed to create display(%d)", display_id);
-        delete display_;
-        display_ = NULL;
+        delete display_[display_id];
+        display_[display_id] = NULL;
 
         return error;
     }
 
-    DLOGD("Display(%d) created successfully.", display_id);
+    DLOGI("Display(%d) created successfully.", display_id);
 
     return kErrorNone;
 }
@@ -149,13 +162,13 @@ int Commit(int display_id, int fd)
         return kErrorParameters;
     }
 
-    if (!display_) {
+    if (!display_[display_id]) {
         DLOGE("function failed as Display(%d) not created yet.",
               display_id);
         return kErrorNotSupported;
     }
 
-    error = display_->Commit(fd);
+    error = display_[display_id]->Commit(fd);
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
         return error;
@@ -170,33 +183,40 @@ int Commit(int display_id, int fd)
 
 int DestroyDisplay(int display_id)
 {
-    if (!display_) {
+    if (!display_[display_id]) {
         DLOGW("Display(%d) was already destroyed.", display_id);
         return kErrorNone;
     }
 
-    display_->DestroyDisplay();
-    delete display_;
-    display_ = NULL;
+    display_[display_id]->DestroyDisplay();
+    delete display_[display_id];
+    display_[display_id] = NULL;
+
+#if SDM_DISPLAY_DEBUG
+    DLOGI("function successful.");
+#endif
 
     return kErrorNone;
 }
 
-void SetLineLength(int line_length)
+void SetLineLength(int display_id, int line_length)
 {
-    if (!display_) {
+    if (!display_[display_id]) {
         DLOGW("Display not create when set len.");
         return;
     }
 
-    display_->SetFBTStride(line_length);
+    display_[display_id]->SetFBTStride(line_length);
+#if SDM_DISPLAY_DEBUG
+    DLOGI("function successful.");
+#endif
 }
 
-int SetDisplayState(int power_mode) {
+int SetDisplayState(int display_id, int power_mode) {
     DisplayError error = kErrorNone;
     DisplayState state = kStateOff;
 
-    if (!display_) {
+    if (!display_[display_id]) {
         DLOGW("Display not create when set state.");
         return kErrorParameters;
     }
@@ -204,55 +224,68 @@ int SetDisplayState(int power_mode) {
     if (power_mode == kDisplayStateOn) {
         state = kStateOn;
     }
-    error = display_->SetDisplayState(state);
+    error = display_[display_id]->SetDisplayState(state);
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
         return error;
     }
-    #if SDM_DISPLAY_DEBUG
-    DLOGD("function successful.");
-    #endif
+#if SDM_DISPLAY_DEBUG
+    DLOGI("function successful.");
+#endif
     return kErrorNone;
 }
 
-void SetVSyncState(bool state)
+void SetVSyncState(int display_id, bool state)
 {
-    if (!display_) {
+    if (!display_[display_id]) {
         DLOGW("Display not create when set vsync.");
         return;
     }
 
-    display_->SetVSyncState(state);
+    display_[display_id]->SetVSyncState(state);
+
+#if SDM_DISPLAY_DEBUG
+    DLOGI("function successful.");
+#endif
 }
 
 void RegisterVSyncCb(int display_id, vsync_cb_t vsync_cb)
 {
-    if (!display_) {
+    if (!display_[display_id]) {
         DLOGW("Display not create when set cb.");
         return;
     }
 
-    display_->RegisterVSyncCb(vsync_cb);
+    display_[display_id]->RegisterVSyncCb(vsync_cb);
+#if SDM_DISPLAY_DEBUG
+    DLOGI("function successful.");
+#endif
 }
 
-void SetBrightness(int brightness)
+void SetBrightness(int display_id, int brightness)
 {
-    if (!display_) {
+    if (!display_[display_id]) {
         DLOGW("Display not create when set bl.");
         return;
     }
 
-    display_->SetBrightness(brightness);
+    display_[display_id]->SetBrightness(brightness);
+#if SDM_DISPLAY_DEBUG
+    DLOGI("function successful.");
+#endif
 }
 
-void GetBrightness(int* brightness)
+void GetBrightness(int display_id, int* brightness)
 {
-    if (!display_) {
+    if (!display_[display_id]) {
         DLOGW("Display not create when get bl.");
         return;
     }
 
-    display_->GetBrightness(brightness);
+    display_[display_id]->GetBrightness(brightness);
+#if SDM_DISPLAY_DEBUG
+    DLOGI("function successful.");
+#endif
 }
 
 

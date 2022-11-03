@@ -46,9 +46,9 @@ struct libinput_device;
 
 enum {
 	PRIMARY_DISPLAY_ID,
-	SECONDARY_DISPLAY_ID
+	SECONDARY_DISPLAY_ID,
+	MAX_DISPLAY_ID
 };
-
 
 struct weston_fbdev_backend_config {
 	struct weston_backend_config base;

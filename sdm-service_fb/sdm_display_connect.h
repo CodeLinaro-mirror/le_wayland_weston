@@ -126,19 +126,19 @@ int DestroyDisplay(int display_id);
 
     @sa Prepare
 */
-int Commit(int display_id,int fd);
+int Commit(int display_id, int fd);
 
-void SetLineLength(int line_length);
+void SetLineLength(int display_id, int line_length);
 
-int SetDisplayState(int power_mode);
+int SetDisplayState(int display_id, int power_mode);
 
 typedef void (*vsync_cb_t)(int64_t timestamp);
 
 void RegisterVSyncCb(int display_id, vsync_cb_t vsync_cb);
 
-void SetBrightness(int brightness);
+void SetBrightness(int display_id, int brightness);
 
-void GetBrightness(int* brightness);
+void GetBrightness(int display_id, int* brightness);
 
 
 #ifdef __cplusplus

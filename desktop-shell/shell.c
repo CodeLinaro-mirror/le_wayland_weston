@@ -189,6 +189,13 @@ struct shell_seat {
 	struct wl_listener keyboard_focus_listener;
 };
 
+enum {
+	PRIMARY_DISPLAY_ID = 0,
+	BUILT_IN_DISPLAY_ID = PRIMARY_DISPLAY_ID,
+	SECONDARY_DISPLAY_ID = 1,
+	PLUGGABLE_DISPLAY_ID = SECONDARY_DISPLAY_ID,
+	MAX_DISPLAY_ID = 0xff
+};
 
 static struct desktop_shell *
 shell_surface_get_shell(struct shell_surface *shsurf);
@@ -4079,17 +4086,20 @@ rls_handler(struct wl_listener *listener, void *data)
 	struct shell_output *shell_output;
 
 	wl_list_for_each(shell_output, &shell->output_list, link) {
-		if (shell_output->fade.view != NULL && !shell_output->fade.destroy_lock) {
-			weston_log("rls idle surface\n");
-			shell_output->fade.destroy_lock = true;
-			weston_surface_destroy(shell_output->fade.view->surface);
-			shell_output->fade.view = NULL;
-			shell_output->fade.destroy_lock = false;
-		}
+		weston_log("rls idle surface disp(%d) name(%s)\n",shell_output->output->id, shell_output->output->name);
+		if (shell_output->output->id == PLUGGABLE_DISPLAY_ID) {
+			if (shell_output->fade.view != NULL && !shell_output->fade.destroy_lock) {
+				weston_log("rls idle surface\n");
+				shell_output->fade.destroy_lock = true;
+				weston_surface_destroy(shell_output->fade.view->surface);
+				shell_output->fade.view = NULL;
+				shell_output->fade.destroy_lock = false;
+			}
 
-		if (shell_output->fade.animation) {
-			weston_log("animation still exist\n");
-			shell_output->fade.animation = NULL;
+			if (shell_output->fade.animation) {
+				weston_log("animation still exist\n");
+				shell_output->fade.animation = NULL;
+			}
 		}
 	}
 }
