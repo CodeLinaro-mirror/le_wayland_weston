@@ -165,6 +165,9 @@ extern int early_renderer_init(struct weston_compositor *ec,
 static void
 drm_output_update_msc(struct drm_output *output, unsigned int seq);
 
+static int
+assign_planes(struct weston_output *output_base, bool is_virtual_output);
+
 static inline struct drm_head *
 to_drm_head(struct weston_head *base)
 {
@@ -727,8 +730,11 @@ output_repaint(struct weston_output *output_base,
 	if (output->destroy_pending || output->disable_pending)
 		return -1;
 
-	if (output_base->disable_planes)
-		output_base->need_gpu_composition = true;
+	if (output_base->disable_planes) {
+		drm_debug(backend, "disable planes happen\n");
+		/* disable planes force go through gpu composition*/
+		output_base->need_gpu_composition = assign_planes(output_base, is_virtual_output);
+	}
 
 	if (!is_virtual_output && !output->next && output_base->need_gpu_composition) {
 		drm_output_render(output, damage);
@@ -1262,7 +1268,11 @@ assign_planes(struct weston_output *output_base, bool is_virtual_output)
 			continue;
 		}
 
-		is_skip = is_skip_view(ev, output);
+		/* skip all the layers because disable_planes true has forced gpu composition*/
+		if (output_base->disable_planes)
+			is_skip = true;
+		else
+			is_skip = is_skip_view(ev, output);
 
 		sdm_layer = create_sdm_layer(output, ev, &above_opaque, is_cursor, is_skip);
 		wl_list_insert(output->sdm_layer_list.prev, &sdm_layer->link);
