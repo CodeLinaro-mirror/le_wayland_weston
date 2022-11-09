@@ -25,6 +25,11 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifndef SDM_DISPLAY_CONNECT_H
@@ -307,6 +312,22 @@ char* (*GetConnectorName)(uint32_t display_id);
     @sa
 */
 uint32_t (*GetConnectorId)(uint32_t display_id);
+
+/*! @brief Method to Sending Color control Request.
+
+    @details weston backend shall use this method to control color.
+
+    @param[in] display_id \link uint32_t \endlink
+    @param[in] feature \link uint32_t \endlink
+    @param[in] in_params \link void * \endlink
+    @param[out] out_params \link void * \endlink
+
+    @return \link int \endlink
+
+    @sa
+*/
+int (*ColorSVCRequestRoute)(uint32_t display_id, uint32_t feature,
+                void *in_params, void *out_params);
 };
 #ifdef __cplusplus
 }

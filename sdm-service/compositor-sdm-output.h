@@ -50,7 +50,16 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
+
+#ifndef __COMPOSITOR_SDM_OUTPUT_H__
+#define __COMPOSITOR_SDM_OUTPUT_H__
+
 #include "config.h"
 #include <errno.h>
 #include <stdlib.h>
@@ -124,7 +133,7 @@ extern "C" {
  * possible type and use a matching format specifier.
  */
 #define drm_debug(b, ...) \
-	weston_log_scope_printf((b)->debug, __VA_ARGS__)
+  weston_log_scope_printf((b)->debug, __VA_ARGS__)
 
 struct drm_backend {
   struct weston_backend base;
@@ -289,4 +298,19 @@ struct drm_output {
   bool layer_none_commit;
   // Indicate previous frame whether commit layers or not, record previous layer_none_commit
   bool prev_layer_none_commit;
+
+  /** Do color control operation on an output
+   *
+   * @param output The output to operate on.
+   * @param feature The feature to apply.
+   * @param in_params The input parameters.
+   * @param out_params The output parameters.
+   *
+   * Do color control operations on this specific output.
+   * The expected in_params and out_params depends on the feature selected.
+   */
+  int (*color_control)(struct drm_output *output, uint32_t feature,
+                  void *in_params, void* out_params);
 };
+
+#endif __COMPOSITOR_SDM_OUTPUT_H__

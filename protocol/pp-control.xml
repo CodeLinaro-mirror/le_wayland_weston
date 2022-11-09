@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="pp_control">
+
+  <copyright>
+    Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+    SPDX-License-Identifier: BSD-3-Clause-Clear
+  </copyright>
+
+  <interface name="pp_control" version="1">
+    <description summary="color control support interface">
+      A factory interface used to create control_managers per output.
+
+      This interface is exposed as a global singleton, it allows clients to control outputs'
+      color through display hardware color control modules.
+    </description>
+
+    <request name="create_control_manager">
+      <description summary="create control_manager per output">
+        Create a color control manager for the given wl_output(a wl_output corresponds to a
+        weston_head in the compositor, represents an output).
+
+        The display color APIs should be initialized when server side received this request.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="The specific wl_output"/>
+      <arg name="id" type="new_id" interface="control_manager" summary= "The newly created
+                                                                    control_manager"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="unbind the factory interface">
+        Unbind the color control factory interface.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="control_manager" version="1">
+    <description summary="color control manager of an output">
+      A color manager which would configure PCC (or other color control feature)
+      info on one output.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_size" value="1" summary="invalid buffer size"/>
+      <entry name="invalid_FD" value="2" summary="invalid buffer"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destory the color manager">
+        The display color APIs should be deinitialized when the control manager is no
+        longer needed and got destroyed.
+      </description>
+    </request>
+
+    <request name="set_pcc">
+      <description summary="set PCC configuration data for server to do color control">
+        Send the PCC configuration data to server side.
+
+        The PCC configuration data includes a 32-bit flag (reserved), and 3 x 11 double
+        type numbers to control r, g, b color. To avoid misaligned data, it is strongly
+        recommended for client to include a shared header file provided by server, and
+        construct the data based on the common structure.
+
+        The 'data' is the fd of a shared configuration file/buffer, which stores the PCC
+        configuration data with specified format as above. The client shall not change/delete
+        the data sent in the request before calling wl_display_roundtrip.
+
+        The 'size' is the size of PCC configuration data.
+      </description>
+      <arg name="data" type="fd" summary="PCC configuration data"/>
+      <arg name="size" type="uint" enum="PCC configuration data size"/>
+    </request>
+  </interface>
+
+</protocol>

@@ -46,6 +46,11 @@
 * RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
 * CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #include "config.h"
@@ -92,6 +97,7 @@
 #include "../sdm-service/sdm_display_connect.h"
 #include "../sdm-service/compositor-sdm-output.h"
 #include "../drm-service/drm_display.h"
+#include "pp-control.h"
 
 #ifndef DRM_CAP_TIMESTAMP_MONOTONIC
 #define DRM_CAP_TIMESTAMP_MONOTONIC 0x6
@@ -623,6 +629,9 @@ finish_init(struct drm_backend *b)
 				weston_log("Error: initializing screen_capture_setup "
 						"support failed.\n");
 
+		if (pp_control_setup(b->compositor) < 0)
+				weston_log("Error: initializing pp_control_setup "
+						"support failed.\n");
 	}
 
 	if (!b->early_boot)
@@ -2291,6 +2300,19 @@ drm_head_log_info(struct drm_head *head, const char *msg)
 	}
 }
 
+static int
+drm_output_color_control(struct drm_output *output,
+		uint32_t feature, void *in_params, void *out_params)
+{
+	int ret = 0;
+
+	if (sdm_service)
+		ret = sdm_service->ColorSVCRequestRoute(output->display_id,
+				feature, in_params, out_params);
+
+	return ret;
+}
+
 /**
  * Create a Weston head for a connector
  *
@@ -2578,6 +2600,7 @@ drm_output_create(struct weston_compositor *compositor, const char *name)
 	output->base.disable = drm_output_disable;
 	output->base.attach_head = drm_output_attach_head;
 	output->base.detach_head = drm_output_detach_head;
+	output->color_control = drm_output_color_control;
 
 	output->destroy_pending = 0;
 	output->disable_pending = 0;
