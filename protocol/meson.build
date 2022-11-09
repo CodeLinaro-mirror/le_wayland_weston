@@ -9,6 +9,7 @@ install_data(
 		'weston-debug.xml',
 		'weston-direct-display.xml',
 		'weston-qti-extn.xml',
+		'gbm-buffer-backend.xml',
 	],
 	install_dir: join_paths(dir_data, dir_protocol_libweston)
 )
