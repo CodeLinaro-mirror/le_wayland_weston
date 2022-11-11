@@ -130,6 +130,13 @@ early_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	if (!buffer)
 		return;
 
+	/* this is for other renderer to determine which is the latter one, buffer or color
+	 * of surface
+	 * is_pended = false means the buffer is the latest one
+	 * is_pended = true means the color is the latest one
+	 */
+	es->surf_color.is_pended = false;
+
 	shm_buffer = wl_shm_buffer_get(buffer->resource);
 	if (shm_buffer) {
 		buffer->shm_buffer = shm_buffer;
