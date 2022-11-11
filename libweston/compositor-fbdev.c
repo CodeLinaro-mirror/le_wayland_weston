@@ -762,7 +762,7 @@ fbdev_output_create(struct fbdev_backend *backend,
 	output->base.mm_width = output->fb_info.width_mm;
 	output->base.mm_height = output->fb_info.height_mm;
 	output->frame_pending = false;
-
+	output->base.no_fade = false;
 
 	weston_compositor_add_pending_output(&output->base, backend->compositor);
 
@@ -1432,6 +1432,21 @@ fbdev_output_release(struct fbdev_backend *backend, int disp_id)
 	weston_log("switch display release done\n");
 }
 
+static void
+fbdev_set_output_no_fade(struct fbdev_backend *backend, int disp_id, bool val)
+{
+	struct weston_output *output;
+
+	output = fbdev_search_output(backend->compositor, disp_id);
+
+	if(!output){
+		weston_log("%s: cannot find output[%d]\n", __func__, disp_id);
+		return;
+	}
+
+	weston_output_set_no_fade(output, val);
+}
+
 static int
 udev_fb_event(int fd, uint32_t mask, void *data)
 {
@@ -1456,6 +1471,9 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 				}
 				fbdev_output_acquire(b, SECONDARY_DISPLAY_ID, SECONDARY_DISPLAY_NODE);
 				weston_compositor_schedule_repaint(b->compositor);
+				if(!first_time){
+					fbdev_set_output_no_fade(b, PRIMARY_DISPLAY_ID, true);
+				}
 				weston_compositor_restore(b->compositor);
 				b->secondary_connected = true;
 				weston_log("HDMI is connected\n");

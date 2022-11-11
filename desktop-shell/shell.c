@@ -3920,6 +3920,7 @@ shell_fade(struct desktop_shell *shell, enum fade_type type)
 {
 	float tint;
 	struct shell_output *shell_output;
+	struct weston_output *weston_output;
 
 	switch (type) {
 	case FADE_IN:
@@ -3936,31 +3937,38 @@ shell_fade(struct desktop_shell *shell, enum fade_type type)
 	/* Create a separate fade surface for each output */
 	wl_list_for_each(shell_output, &shell->output_list, link) {
 		shell_output->fade.type = type;
+		weston_output = shell_output->output;
 
-		if (shell_output->fade.view == NULL) {
-			shell_output->fade.view = shell_fade_create_surface_for_output(shell, shell_output);
-			if (!shell_output->fade.view)
-				continue;
+		if (!weston_output->no_fade) {
+			if (shell_output->fade.view == NULL) {
+				shell_output->fade.view = shell_fade_create_surface_for_output(shell, shell_output);
+				if (!shell_output->fade.view)
+					continue;
 
-			shell_output->fade.view->alpha = 1.0 - tint;
-			weston_view_update_transform(shell_output->fade.view);
+				shell_output->fade.view->alpha = 1.0 - tint;
+				weston_view_update_transform(shell_output->fade.view);
+			}
+
+			if (shell_output->fade.view->output == NULL) {
+				/* If the black view gets a NULL output, we lost the
+				* last output and we'll just cancel the fade.  This
+				* happens when you close the last window under the
+				* X11 or Wayland backends. */
+				shell->locked = false;
+				weston_surface_destroy(shell_output->fade.view->surface);
+				shell_output->fade.view = NULL;
+			} else if (shell_output->fade.animation) {
+				weston_fade_update(shell_output->fade.animation, tint);
+			} else {
+				shell_output->fade.animation =
+					weston_fade_run(shell_output->fade.view,
+							1.0 - tint, tint, 300.0,
+							shell_fade_done_for_output, shell_output);
+			}
 		}
-
-		if (shell_output->fade.view->output == NULL) {
-			/* If the black view gets a NULL output, we lost the
-			 * last output and we'll just cancel the fade.  This
-			 * happens when you close the last window under the
-			 * X11 or Wayland backends. */
-			shell->locked = false;
-			weston_surface_destroy(shell_output->fade.view->surface);
-			shell_output->fade.view = NULL;
-		} else if (shell_output->fade.animation) {
-			weston_fade_update(shell_output->fade.animation, tint);
-		} else {
-			shell_output->fade.animation =
-				weston_fade_run(shell_output->fade.view,
-						1.0 - tint, tint, 300.0,
-						shell_fade_done_for_output, shell_output);
+		else{
+			/*reset no_fade flag everytime*/
+			weston_output->no_fade = false;
 		}
 	}
 }

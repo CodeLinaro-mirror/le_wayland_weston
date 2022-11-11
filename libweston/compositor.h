@@ -244,6 +244,8 @@ struct weston_output {
 
 	int (*enable)(struct weston_output *output);
 	int (*disable)(struct weston_output *output);
+
+	bool no_fade;
 };
 
 enum weston_pointer_motion_mask {

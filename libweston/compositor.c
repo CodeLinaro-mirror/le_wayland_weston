@@ -5642,3 +5642,9 @@ weston_compositor_load_xwayland(struct weston_compositor *compositor)
 		return -1;
 	return 0;
 }
+
+WL_EXPORT void
+weston_output_set_no_fade(struct weston_output *output, bool val)
+{
+    output->no_fade = val;
+}
