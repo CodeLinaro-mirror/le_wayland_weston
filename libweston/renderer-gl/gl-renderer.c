@@ -1215,6 +1215,7 @@ clear_paint_node(struct weston_paint_node *pnode,
 	enum gl_shader_texture_variant shader_variant;
 	int pitch, height;
 	enum buffer_type buffer_type;
+	int i;
 
 	if (gs->shader_variant == SHADER_VARIANT_NONE && !gs->direct_display)
 		return;
@@ -1247,11 +1248,13 @@ clear_paint_node(struct weston_paint_node *pnode,
 		goto out_clear_paint_node;
 	maybe_censor_override(&sconf, pnode->output, pnode->view);
 
-	struct gl_shader_config alt = sconf;
+	/* Reset sonf.input_tex since we have chosen SOLID shader */
+	for (i = 0; i < gs->num_textures; i++)
+		sconf.input_tex[i] = 0;
 
 	pixman_region32_init_rect(&surface_blend, 0, 0,
 				pnode->surface->width, pnode->surface->height);
-	repaint_region(gr, pnode->view, pnode->output, &repaint, &surface_blend, &alt);
+	repaint_region(gr, pnode->view, pnode->output, &repaint, &surface_blend, &sconf);
 
 	pixman_region32_fini(&surface_blend);
 
