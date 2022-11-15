@@ -22,6 +22,42 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *    * Redistributions of source code must retain the above copyright
+ *      notice, this list of conditions and the following disclaimer.
+ *
+ *    * Redistributions in binary form must reproduce the above
+ *      copyright notice, this list of conditions and the following
+ *      disclaimer in the documentation and/or other materials provided
+ *      with the distribution.
+ *
+ *    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *      contributors may be used to endorse or promote products derived
+ *      from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #include <display_properties.h>
 #include <cutils/properties.h>
 
@@ -48,10 +84,44 @@ SdmDisplayBufferAllocator *buffer_allocator_;
 SdmDisplayBufferSyncHandler buffer_sync_handler_;
 SdmDisplaySocketHandler socket_handler_;
 HWDisplayInterfaceInfo hw_disp_info_;
-SdmDisplayProxy *display_[kDisplayMax] = {0};
+
+CreatedDisplaysInfo displays_;
+
 HWDisplaysInfo hw_displays_info_ = {};
 // ordered by output id
 SdmDisplaysInfo sdm_displays_info_ = {};
+
+SdmDisplayProxy *GetDisplayFromId(uint32_t display_id) {
+    auto it = displays_.find(display_id);
+    if (it == displays_.end()) {
+        DLOGE("No display available with display_id: %d.", display_id);
+        return NULL;
+    }
+    return it->second;
+}
+
+bool IsDisplayCreated(uint32_t display_id) {
+    return displays_.find(display_id) != displays_.end();
+}
+
+int GetConnectedDisplaysIds(int num_displays, uint32_t *connector_ids) {
+    if (!connector_ids) {
+        return -1;
+    }
+    SdmDisplaysInfo::iterator iter = sdm_displays_info_.begin();
+    int idx = 0;
+
+    if (num_displays != sdm_displays_info_.size()) {
+        DLOGE("Connected display sizes doesn't match.");
+        return -1;
+    }
+
+    for (iter; iter != sdm_displays_info_.end(); ++iter) {
+        connector_ids[idx++] = iter->first;
+    }
+
+    return 0;
+}
 
 static DisplayError
 SetProperty(const char *property_name, const char *value)
@@ -71,6 +141,7 @@ int CreateCore()
     }
     buffer_allocator_ = new SdmDisplayBufferAllocator;
 
+    // TODO: Check the requirement for this property
 #ifdef MULTI_DISPLAY
     SetProperty(DISABLE_MULTIRECT_PROP, "1");
 #endif
@@ -100,17 +171,12 @@ int DestroyCore()
         return kErrorNone;
     }
 
-    for(int i = 0; i < kDisplayMax; i++) {
-        if (display_[i] != NULL) {
-            error = display_[i]->DestroyDisplay();
-            if (error != kErrorNone) {
-                DLOGE("Destroy action failed for display(%d). error = %d",
-                      i, error);
-                DLOGE("Trying to delete display(%d) anyways.", i);
-            }
-            delete display_[i];
-            display_[i] = NULL;
-        }
+    auto it = displays_.begin();
+    for (it; it != displays_.end(); ++it) {
+        uint32_t connector_id = it->first;
+        delete displays_[connector_id];
+        displays_[connector_id] = NULL;
+        displays_.erase(connector_id);
     }
 
     error = CoreInterface::DestroyCore();
@@ -153,19 +219,22 @@ int GetFirstDisplayType(int *display_id)
     return kErrorNone;
 }
 
-int CreateDisplay(int display_id)
+int CreateDisplay(uint32_t display_id)
 {
     DisplayError error = kErrorNone;
+    HWDisplayInfo hw_display_info;
 
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return kErrorParameters;
-    }
-
-    if (display_[display_id] != NULL) {
+    if (IsDisplayCreated(display_id)) {
         DLOGE("Display(%d) was already created.", display_id);
         return kErrorNone;
     }
+
+    auto it = hw_displays_info_.find(display_id);
+    if (it == hw_displays_info_.end()) {
+        DLOGE("No display information available for display_id: %d.", display_id);
+        return kErrorParameters;
+    }
+    hw_display_info = it->second;
 
     if (core_intf_ == NULL) {
         DLOGE("Core is not created yet.");
@@ -174,23 +243,17 @@ int CreateDisplay(int display_id)
 
     SetProperty(DISABLE_SINGLE_LM_SPLIT_PROP, "1");
 
-    enum DisplayType display_type;
-    switch(display_id) {
-       case 0:  display_type  = kPrimary;    break;
-       case 1:  display_type  = kHDMI;       break;
-       case 2:  display_type  = kVirtual;    break;
-       default: display_type  = kDisplayMax; break;
-    }
+    enum DisplayType display_type = hw_display_info.display_type;
 
     SdmDisplayProxy *sdm_display = new SdmDisplayProxy(display_type, core_intf_, buffer_allocator_);
 
-    display_[display_id] = sdm_display;
-    error = display_[display_id]->CreateDisplay() ;
+    displays_[display_id] = sdm_display;
+    error = displays_[display_id]->CreateDisplay(display_id) ;
     if (error != kErrorNone) {
         DLOGE("Failed to create display(%d)", display_id);
-        delete display_[display_id];
-        display_[display_id] = NULL;
-
+        delete displays_[display_id];
+        displays_[display_id] = NULL;
+        displays_.erase(display_id);
         return error;
     }
 
@@ -201,22 +264,16 @@ int CreateDisplay(int display_id)
     return kErrorNone;
 }
 
-int Prepare(int display_id, struct drm_output *output)
+int Prepare(uint32_t display_id, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
-
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return kErrorParameters;
-    }
-
-    if (!display_[display_id]) {
-        DLOGE("Failed as Display(%d) not created yet.",
-              display_id);
+    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    if (!dpy) {
+        DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
     }
 
-    error = display_[display_id]->Prepare(output);
+    error = dpy->Prepare(output);
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
         return error;
@@ -229,23 +286,16 @@ int Prepare(int display_id, struct drm_output *output)
     return kErrorNone;
 }
 
-int Commit(int display_id, struct drm_output *output)
+int Commit(uint32_t display_id, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
-
-    DLOGV("function successful.");
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return kErrorParameters;
-    }
-
-    if (!display_[display_id]) {
-        DLOGE("function failed as Display(%d) not created yet.",
-              display_id);
+    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    if (!dpy) {
+        DLOGE("Failed as Display (%d) not created yet.", display_id);
         return kErrorNotSupported;
     }
 
-    error = display_[display_id]->Commit(output);
+    error = dpy->Commit(output);
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
         return error;
@@ -256,29 +306,24 @@ int Commit(int display_id, struct drm_output *output)
     return kErrorNone;
 }
 
-int DestroyDisplay(int display_id)
+int DestroyDisplay(uint32_t display_id)
 {
     DisplayError error = kErrorNone;
-
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return kErrorParameters;
+    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    if (!dpy) {
+        DLOGE("Failed as Display (%d) not created yet.", display_id);
+        return kErrorNotSupported;
     }
 
-    if (!display_[display_id]) {
-        DLOGE("Display(%d) was already destroyed.", display_id);
-        return kErrorNone;
-    }
-
-    SdmDisplayProxy *temp_display = display_[display_id];
-    error = temp_display->DestroyDisplay();
-    delete temp_display;
-    display_[display_id] = NULL;
-
+    error = dpy->DestroyDisplay();
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
         return error;
     }
+
+    delete displays_[display_id];
+    displays_[display_id] = NULL;
+    displays_.erase(display_id);
 
     #if SDM_DISPLAY_DEBUG
     DLOGD("function successful.");
@@ -287,21 +332,16 @@ int DestroyDisplay(int display_id)
     return kErrorNone;
 }
 
-bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_config)
+bool GetDisplayConfiguration(uint32_t display_id, struct DisplayConfigInfo *display_config)
 {
     DisplayError error = kErrorNone;
-
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return FAIL;
+    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    if (!dpy) {
+        DLOGE("Failed as Display (%d) not created yet.", display_id);
+        return kErrorNotSupported;
     }
 
-    if (!display_[display_id]) {
-        DLOGE("function failed. Display(%d) not created yet.", display_id);
-        return FAIL;
-    }
-
-    error = display_[display_id]->GetDisplayConfiguration(display_config);
+    error = dpy->GetDisplayConfiguration(display_config);
 
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
@@ -315,16 +355,12 @@ bool GetDisplayConfiguration(int display_id, struct DisplayConfigInfo *display_c
     return SUCCESS;
 }
 
-bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info)
+bool GetDisplayHdrInfo(uint32_t display_id, struct DisplayHdrInfo *display_hdr_info)
 {
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return FAIL;
-    }
-
-    if (!display_[display_id]) {
-        DLOGE("function failed. Display(%d) not created yet.", display_id);
-        return FAIL;
+    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    if (!dpy) {
+        DLOGE("Failed as Display (%d) not created yet.", display_id);
+        return kErrorNotSupported;
     }
 
     #if SDM_DISPLAY_DEBUG
@@ -334,21 +370,15 @@ bool GetDisplayHdrInfo(int display_id, struct DisplayHdrInfo *display_hdr_info)
     return SUCCESS;
 }
 
-int RegisterCbs(int display_id, sdm_cbs *cbs) {
+int RegisterCbs(uint32_t display_id, sdm_cbs *cbs) {
     DisplayError error = kErrorNone;
-
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return kErrorParameters;
+    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    if (!dpy) {
+        DLOGE("Failed as Display (%d) not created yet.", display_id);
+        return kErrorNotSupported;
     }
 
-    if (!display_[display_id]) {
-        DLOGE("function failed. Display(%d) not created yet.",
-              display_id);
-        return kErrorParameters;
-    }
-
-    error = display_[display_id]->RegisterCbs(display_id, cbs);
+    error = dpy->RegisterCbs(display_id, cbs);
 
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
@@ -369,21 +399,15 @@ int get_drm_master_fd(void) {
     return fd;
 }
 
-int SetDisplayState(int display_id, int power_mode) {
+int SetDisplayState(uint32_t display_id, int power_mode) {
     DisplayError error = kErrorNone;
     bool teardown;
     int release_fence = -1;
     sdm::DisplayState disp_state;
-
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return kErrorParameters;
-    }
-
-    if (!display_[display_id]) {
-        DLOGE("function failed. Display(%d) not created yet.",
-              display_id);
-        return kErrorParameters;
+    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    if (!dpy) {
+        DLOGE("Failed as Display (%d) not created yet.", display_id);
+        return kErrorNotSupported;
     }
 
     if (power_mode == WESTON_DPMS_ON) {
@@ -398,7 +422,7 @@ int SetDisplayState(int display_id, int power_mode) {
     /* for all other power modes, i.e. WESTON_DPMS_STANDBY,  */
     /* WESTON_DPMS_SUSPEND, WESTON_DPMS_OFF turn off display */
     /* set state off (kStateOff)                             */
-    error = display_[display_id]->SetDisplayState(disp_state, teardown,
+    error = dpy->SetDisplayState(disp_state, teardown,
                                                   &release_fence);
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
@@ -412,22 +436,16 @@ int SetDisplayState(int display_id, int power_mode) {
     return kErrorNone;
 }
 
-int SetVSyncState(int display_id, bool state, struct drm_output *output)
+int SetVSyncState(uint32_t display_id, bool state, struct drm_output *output)
 {
     DisplayError error = kErrorNone;
-
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return kErrorParameters;
+    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    if (!dpy) {
+        DLOGE("Failed as Display (%d) not created yet.", display_id);
+        return kErrorNotSupported;
     }
 
-    if (!display_[display_id]) {
-        DLOGE("function failed. Display(%d) not created yet.",
-              display_id);
-        return kErrorParameters;
-    }
-
-    error = display_[display_id]->SetVSyncState(state, output);
+    error = dpy->SetVSyncState(state, output);
     if (error != kErrorNone) {
         DLOGE("function failed with error = %d", error);
         return error;
@@ -442,34 +460,25 @@ int SetVSyncState(int display_id, bool state, struct drm_output *output)
 
 int SetPanelBrightness(int display_id, float brightness)
 {
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return kErrorParameters;
+    DisplayError error = kErrorNone;
+    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    if (!dpy) {
+        DLOGE("Failed as Display (%d) not created yet.", display_id);
+        return kErrorNotSupported;
     }
 
-    if (!display_[display_id]) {
-        DLOGE("function failed. Display(%d) not created yet.",
-              display_id);
-        return kErrorParameters;
-    }
-
-    return display_[display_id]->SetPanelBrightness(brightness);
+    return dpy->SetPanelBrightness(brightness);
 }
 
 int GetPanelBrightness(int display_id, float *brightness)
 {
-    if (display_id >= kDisplayMax || display_id < 0) {
-        DLOGE("Display id(%d) out of range.", display_id);
-        return kErrorParameters;
+    DisplayError error = kErrorNone;
+    SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
+    if (!dpy) {
+        DLOGE("Failed as Display (%d) not created yet.", display_id);
+        return kErrorNotSupported;
     }
-
-    if (!display_[display_id]) {
-        DLOGE("function failed. Display(%d) not created yet.",
-              display_id);
-        return kErrorParameters;
-    }
-
-    return display_[display_id]->GetPanelBrightness(brightness);
+    return dpy->GetPanelBrightness(brightness);
 }
 
 uint32_t GetDisplayCount(void) {
@@ -484,7 +493,6 @@ uint32_t GetDisplayCount(void) {
 void HandlePrimaryDisplayInfo() {
   HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
   sdm_displays_info_.clear();
-  int slot = sdm_displays_info_.size();
 
   for (iter; iter != hw_displays_info_.end(); ++iter) {
     if (!iter->second.is_primary)
@@ -495,14 +503,13 @@ void HandlePrimaryDisplayInfo() {
       continue;
 
     // only one primary display
-    sdm_displays_info_[slot] = iter->second;
+    sdm_displays_info_[iter->first] = iter->second;
     break;
   }
 }
 
 void HandleNonPrimaryDisplayInfos(DisplayType type) {
   HWDisplaysInfo::iterator iter = hw_displays_info_.begin();
-  int slot = sdm_displays_info_.size();
 
   for (iter; iter != hw_displays_info_.end(); ++iter) {
     if (iter->second.is_primary)
@@ -512,8 +519,7 @@ void HandleNonPrimaryDisplayInfos(DisplayType type) {
     if (!iter->second.is_connected)
       continue;
 
-    sdm_displays_info_[slot] = iter->second;
-    slot++;
+    sdm_displays_info_[iter->first] = iter->second;
   }
 }
 
@@ -558,14 +564,10 @@ char *GetConnectorName(uint32_t display_id) {
 
 uint32_t GetConnectorId(uint32_t display_id) {
   auto iter = sdm_displays_info_.find(display_id);
-
+  if (iter == sdm_displays_info_.end()) {
+    return -1;
+  }
   return iter->second.display_id;
-}
-
-static HWDisplayInfo GetSdmDisplayInfo(int display_id) {
-  auto iter = sdm_displays_info_.find(display_id);
-
-  return iter->second;
 }
 
 }// namespace sdm

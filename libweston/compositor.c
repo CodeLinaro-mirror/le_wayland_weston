@@ -2899,10 +2899,8 @@ weston_output_finish_frame(struct weston_output *output,
 	struct timespec now;
 	int64_t msec_rel;
 
-#ifndef MULTI_DISPLAY
 	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
 	assert(stamp || (presented_flags & WP_PRESENTATION_FEEDBACK_INVALID));
-#endif
 
 	weston_compositor_read_presentation_clock(compositor, &now);
 
