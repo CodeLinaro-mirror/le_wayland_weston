@@ -2195,6 +2195,7 @@ notify_key(struct weston_seat *seat, const struct timespec *time, uint32_t key,
 	struct weston_keyboard_grab *grab = keyboard->grab;
 	uint32_t *k, *end;
 
+#ifndef DISABLE_POWER_KEY
 	/* When power button is pressed for one time, weston receives two events
 	for key KEY_POWER as below:-
 	1. WL_KEYBOARD_KEY_STATE_RELEASED
@@ -2216,6 +2217,8 @@ notify_key(struct weston_seat *seat, const struct timespec *time, uint32_t key,
 		weston_log("Display ON \n");
 		return;
 	}
+#endif
+
 	if (key == KEY_POWER) {
 		// ignore WL_KEYBOARD_KEY_STATE_RELEASED event.
 		return;

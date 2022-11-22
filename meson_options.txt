@@ -15,6 +15,12 @@ option(
 	description: 'Weston backend: multi display support'
 )
 option(
+	'disable-power-key',
+	type: 'boolean',
+	value: false,
+	description: 'Weston backend: disable power key handling'
+)
+option(
 	'backend-drm',
 	type: 'boolean',
 	value: true,
