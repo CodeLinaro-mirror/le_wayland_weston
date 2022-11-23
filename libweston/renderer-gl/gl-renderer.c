@@ -3501,7 +3501,10 @@ gl_renderer_create_surface(struct weston_surface *surface)
 	wl_signal_add(&gr->destroy_signal,
 		      &gs->renderer_destroy_listener);
 
-	if (surface->buffer_ref.buffer) {
+	/* if weston surface sets color and buffer both, need surf_color.is_pended to judge
+	 * which operation is the later one.
+	 */
+	if (surface->buffer_ref.buffer && !(surface->surf_color.is_pended)) {
 		gl_renderer_attach(surface, surface->buffer_ref.buffer);
 		gl_renderer_flush_damage(surface);
 	} else if (surface->surf_color.is_pended) {
