@@ -1146,6 +1146,19 @@ fbdev_backend_create(struct weston_compositor *compositor,
 		weston_log("udev_input_init: failed %d\n",rc);
 		goto out_compositor;
 	}
+	backend->udev_monitor = udev_monitor_new_from_netlink(backend->udev, "udev");
+	if (backend->udev_monitor == NULL) {
+		weston_log("failed to initialize udev monitor\n");
+		goto out_compositor;
+	}
+	struct wl_event_loop *loop = wl_display_get_event_loop(compositor->wl_display);
+	backend->udev_fb_source = wl_event_loop_add_fd(loop,
+				udev_monitor_get_fd(backend->udev_monitor),
+				WL_EVENT_READABLE, udev_fb_event, backend);
+	if (udev_monitor_enable_receiving(backend->udev_monitor) < 0) {
+		weston_log("failed to enable udev-monitor receiving\n");
+		goto out_compositor;
+	}
 
 #ifdef USE_SDM
     /* begin SDM initialization */
@@ -1184,25 +1197,6 @@ fbdev_backend_create(struct weston_compositor *compositor,
 	SetVSyncState(tmp_disp_id, true);
 	RegisterVSyncCb(tmp_disp_id, vsync_cb_primary);
 #endif
-
-	backend->udev_monitor = udev_monitor_new_from_netlink(backend->udev, "udev");
-	if (backend->udev_monitor == NULL) {
-		weston_log("failed to initialize udev monitor\n");
-		goto out_compositor;
-	}
-	struct wl_event_loop *loop = wl_display_get_event_loop(compositor->wl_display);
-	backend->udev_fb_source = wl_event_loop_add_fd(loop,
-				udev_monitor_get_fd(backend->udev_monitor),
-				WL_EVENT_READABLE, udev_fb_event, backend);
-	if (udev_monitor_enable_receiving(backend->udev_monitor) < 0) {
-		weston_log("failed to enable udev-monitor receiving\n");
-		goto out_compositor;
-	}
-
-	if(ReadHDMISysfs()) {
-		fbdev_output_acquire(backend, SECONDARY_DISPLAY_ID, SECONDARY_DISPLAY_NODE);
-		backend->secondary_connected = true;
-	}
 
 	compositor->backend = &backend->base;
 	return backend;
