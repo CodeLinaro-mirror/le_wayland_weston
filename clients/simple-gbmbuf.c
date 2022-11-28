@@ -26,7 +26,7 @@
 /*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -135,6 +135,7 @@ struct window {
 	struct buffer *prev_buffer;
 	struct wl_callback *callback;
 	bool wait_for_configure;
+	bool is_hdr_mode;
 };
 
 static int running = 1;
@@ -379,6 +380,24 @@ create_gbmbuf_buffer(struct display *display, struct buffer *buffer,
 	if (!map_bo(buffer)) {
 		fprintf(stderr, "map_bo failed\n");
 		goto error2;
+	}
+
+	if (buffer->bo && window->is_hdr_mode) {
+		struct ColorMetaData clr_mta;
+
+		if (GBM_ERROR_NONE !=
+				gbm_perform(GBM_PERFORM_DEFAULT_INIT_COLOR_META,
+					buffer->bo, &clr_mta)) {
+			fprintf(stderr, "error: Color metadata init failed\n");
+			goto error2;
+		}
+
+		if (GBM_ERROR_NONE !=
+				gbm_perform(GBM_PERFORM_SET_METADATA, buffer->bo,
+					GBM_METADATA_SET_COLOR_METADATA, &clr_mta)) {
+			fprintf(stderr, "error: Set color metadata failed\n");
+			goto error2;
+		}
 	}
 
 	if (format == GBM_FORMAT_NV12)
@@ -719,6 +738,16 @@ signal_int(int signum)
 	running = 0;
 }
 
+static void
+usage(int error_code)
+{
+	fprintf(stderr, "Usage: simple-gbmbuf [OPTIONS]\n\n"
+		"  --hdr\tRun in hdr mode\n"
+		"  -h\tThis help text\n\n");
+
+	exit(error_code);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -726,6 +755,16 @@ main(int argc, char **argv)
 	struct display *display;
 	struct window *window;
 	int width = 256, height = 256;
+	bool hdr_mode = false;
+
+	for (int i = 1; i < argc; i++) {
+		if (strcmp("--hdr", argv[i]) == 0)
+			hdr_mode = true;
+		else if (strcmp("-h", argv[i]) == 0)
+			usage(EXIT_SUCCESS);
+		else
+			usage(EXIT_FAILURE);
+	}
 
 	int ret = 0;
 	display = create_display();
@@ -737,6 +776,7 @@ main(int argc, char **argv)
 	window = create_window(display, width, height);
 	if (!window)
 		return 1;
+	window->is_hdr_mode = hdr_mode;
 
 	display->window = window;
 
