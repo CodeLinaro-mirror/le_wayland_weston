@@ -102,6 +102,7 @@ create_sdm_layer(struct drm_output *output, struct weston_view *ev,
 	}
 
 	layer->view = ev;
+	layer->acquire_fence_fd = ev->surface->acquire_fence_fd;
 	layer->is_cursor = is_cursor;
 	layer->is_skip = is_skip;
 	if (!is_skip)

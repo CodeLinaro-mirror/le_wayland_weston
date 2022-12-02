@@ -316,6 +316,7 @@ struct sdm_layer {
 	struct drm_fb *fb;
 	uint32_t composition_type; /* type: enum SDM_COMPOSITION_XXXXX */
 	pixman_region32_t overlap;
+	int acquire_fence_fd;
 };
 
 struct drm_head {
