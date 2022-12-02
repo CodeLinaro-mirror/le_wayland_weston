@@ -790,13 +790,16 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
             // Pass the wl_resource handle from sdm layer to layer stack
             // to use it for egl image creation in tone mapping
             layerBufferFlags = layer_stack_.layers.at(index)->input_buffer.flags;
+            layer_stack_.layers.at(index)->input_buffer.acquire_fence_fd =
+		                                                      sdm_layer->acquire_fence_fd;
+	    //Acquire fence fd is not received for frame buffer target layer as gl-renderer is not
+	    //sending it. Hence not adding acquire fence for frame buffer target
 
             index++;
             if (sdm_layer->is_skip)
                 layer_stack_.flags.skip_present = true;
         }
     }
-
     int err = PrepareFbLayerGeometry(output, &glayer);
     if (err) {
         DLOGE("failed to prepare Layer Geometry Fb target\n");
