@@ -25,7 +25,7 @@
 /*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -253,6 +253,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     float min_luminance_ = 0.0;
     int previous_retire_fence_fd_ = -1;
     bool esd_reset_panel_ = false;
+    int disable_hdr_handling_ = 1;
+    bool hdr_supported_ = false;
 };
 
 class SdmDisplayProxy {
