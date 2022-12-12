@@ -1215,6 +1215,7 @@ clear_paint_node(struct weston_paint_node *pnode,
 	enum gl_shader_texture_variant shader_variant;
 	int pitch, height;
 	enum buffer_type buffer_type;
+	int i;
 
 	if (gs->shader_variant == SHADER_VARIANT_NONE && !gs->direct_display)
 		return;
@@ -1247,11 +1248,13 @@ clear_paint_node(struct weston_paint_node *pnode,
 		goto out_clear_paint_node;
 	maybe_censor_override(&sconf, pnode->output, pnode->view);
 
-	struct gl_shader_config alt = sconf;
+	/* Reset sonf.input_tex since we have chosen SOLID shader */
+	for (i = 0; i < gs->num_textures; i++)
+		sconf.input_tex[i] = 0;
 
 	pixman_region32_init_rect(&surface_blend, 0, 0,
 				pnode->surface->width, pnode->surface->height);
-	repaint_region(gr, pnode->view, pnode->output, &repaint, &surface_blend, &alt);
+	repaint_region(gr, pnode->view, pnode->output, &repaint, &surface_blend, &sconf);
 
 	pixman_region32_fini(&surface_blend);
 
@@ -1978,8 +1981,7 @@ gl_renderer_repaint_output(struct weston_output *output,
 static void
 gl_renderer_capture_screen(struct weston_output *output,
                               struct weston_buffer *buffer,
-                              pixman_region32_t *output_damage,
-                              struct weston_output *orig_output)
+                              pixman_region32_t *output_damage)
 {
 	struct gl_output_state *go = get_output_state(output);
 	struct weston_compositor *compositor = output->compositor;
@@ -2060,7 +2062,7 @@ gl_renderer_capture_screen(struct weston_output *output,
 	border_damage |= go->border_status;
 
 	/* Draw all views */
-	wl_list_for_each_reverse(pnode, &orig_output->paint_node_z_order_list,
+	wl_list_for_each_reverse(pnode, &output->paint_node_z_order_list,
 				 z_order_link) {
 		if (screen_capture_backend->is_screen_capture_view(pnode->view))
 			continue;
