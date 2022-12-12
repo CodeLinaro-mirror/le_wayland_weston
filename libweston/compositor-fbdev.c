@@ -63,6 +63,8 @@
 #include "gl-renderer.h"
 
 #define DEFAULT_BRIGHTNESS (255)
+#define DEBOUNCE_PERIOD (500)
+
 struct fbdev_backend {
 	struct weston_backend base;
 	struct weston_compositor *compositor;
@@ -78,6 +80,7 @@ struct fbdev_backend {
 	struct wl_event_source *udev_fb_source;
 
 	bool secondary_connected;
+	uint32_t last_hpd_time;
 };
 
 struct fbdev_screeninfo {
@@ -146,7 +149,7 @@ static int fbdev_output_update(struct weston_output *base, const char *device);
 static int udev_fb_event(int fd, uint32_t mask, void *data);
 static int udev_event_is_hotplug(struct fbdev_backend *backend, struct udev_device *dev);
 static int ion_open();
-static bool ReadHDMISysfs();
+static bool fbdev_get_hdmi_connection_status();
 static void buffer_destroy(struct buffer_allocator buf_alloc);
 static void fbdev_output_acquire(struct fbdev_backend *backend, int disp_id,
 			const char * new_node);
@@ -1131,6 +1134,7 @@ fbdev_backend_create(struct weston_compositor *compositor,
 	backend->base.restore = fbdev_restore;
 
 	backend->prev_state = WESTON_COMPOSITOR_ACTIVE;
+	backend->last_hpd_time = 0;
 
 	weston_setup_vt_switch_bindings(compositor);
 
@@ -1441,22 +1445,45 @@ fbdev_set_output_no_fade(struct fbdev_backend *backend, int disp_id, bool val)
 	weston_output_set_no_fade(output, val);
 }
 
+static uint32_t
+fbdev_calculate_hpd_time_gap(struct fbdev_backend *b)
+{
+	struct timespec t;
+	uint32_t now,time_gap;
+
+	weston_compositor_read_presentation_clock(b->compositor, &t);
+	now = timespec_to_msec(&t);
+	time_gap = now - b->last_hpd_time;
+	b->last_hpd_time = now;
+	weston_log("%s: time_gap = %d\n", __func__, time_gap);
+
+	return time_gap;
+}
+
 static int
 udev_fb_event(int fd, uint32_t mask, void *data)
 {
 	struct fbdev_backend *b = data;
 	struct udev_device *dev;
 	static bool first_time = true;
+
 	dev = udev_monitor_receive_device(b->udev_monitor);
+
 	if (udev_event_is_hotplug(b, dev)) {
-		bool connected = ReadHDMISysfs();
+		bool connected = fbdev_get_hdmi_connection_status();
+		uint32_t time_gap = fbdev_calculate_hpd_time_gap(b);
+
+		if(time_gap < DEBOUNCE_PERIOD) {
+			weston_log("time gap too short,exit\n");
+			goto out;
+		}
 
 		if (first_time && connected && (b->secondary_connected)) {
 			weston_log("ignore 1st double connect event.\n");
 		} else {
 			if (!connected && b->secondary_connected) {
 				fbdev_output_release(b, SECONDARY_DISPLAY_ID);
-				weston_log("HDMI is disconnected\n");
+				weston_log("HDMI output has been released\n");
 			}
 
 			if (connected) {
@@ -1470,19 +1497,20 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 				}
 				weston_compositor_restore(b->compositor);
 				b->secondary_connected = true;
-				weston_log("HDMI is connected\n");
+				weston_log("HDMI output has been enabled\n");
 			}
 		}
-
 		first_time = false;
 	}
-	udev_device_unref(dev);
 
+out:
+	udev_device_unref(dev);
 	return 1;
 }
 
 static bool
-ReadHDMISysfs() {
+fbdev_get_hdmi_connection_status()
+{
 	int fd = open(HDMI_SYSFS_NODE_CONNECTED, O_RDONLY);
 	if (fd < 0) {
 		weston_log(" %s node open failed.\n",HDMI_SYSFS_NODE_CONNECTED);
@@ -1490,7 +1518,7 @@ ReadHDMISysfs() {
 	char line[32];
 	int read = pread(fd, line, sizeof(line),0);
 	int connected = atoi(line);
-	weston_log("HDMI connected = %d \n",connected);
+	weston_log("HDMI status = %s\n", connected ? "CONNECT" : "DISCONNECT");
 	close(fd);
 	return connected ? true : false;
 }
