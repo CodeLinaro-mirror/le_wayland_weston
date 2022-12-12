@@ -64,6 +64,7 @@
 
 #define DEFAULT_BRIGHTNESS (255)
 #define DEBOUNCE_PERIOD (500)
+#define CHECK_CONNECTION_PERIOD (1000)
 
 struct fbdev_backend {
 	struct weston_backend base;
@@ -78,6 +79,7 @@ struct fbdev_backend {
 	void *buffer_alloc_dev;
 	struct udev_monitor *udev_monitor;
 	struct wl_event_source *udev_fb_source;
+	struct wl_event_source *check_connection_timer;
 
 	bool secondary_connected;
 	uint32_t last_hpd_time;
@@ -154,6 +156,7 @@ static void buffer_destroy(struct buffer_allocator buf_alloc);
 static void fbdev_output_acquire(struct fbdev_backend *backend, int disp_id,
 			const char * new_node);
 static void fbdev_output_release(struct fbdev_backend *backend, int disp_id);
+static int fbdev_recheck_connection(void *data);
 static struct weston_output *fbdev_search_output(struct weston_compositor *compositor,
 			int disp_id);
 
@@ -969,6 +972,10 @@ fbdev_backend_destroy(struct weston_compositor *base)
 {
 	struct fbdev_backend *backend = to_fbdev_backend(base);
 
+	if(backend->check_connection_timer) {
+		wl_event_source_remove(backend->check_connection_timer);
+	}
+
 	udev_input_destroy(&backend->input);
 
 	/* Destroy the output. */
@@ -1164,6 +1171,8 @@ fbdev_backend_create(struct weston_compositor *compositor,
 		goto out_compositor;
 	}
 
+	backend->check_connection_timer = wl_event_loop_add_timer(loop,
+		fbdev_recheck_connection, backend);
 #ifdef USE_SDM
     /* begin SDM initialization */
 	rc = CreateCore();
@@ -1461,6 +1470,31 @@ fbdev_calculate_hpd_time_gap(struct fbdev_backend *b)
 }
 
 static int
+fbdev_recheck_connection(void *data)
+{
+	struct fbdev_backend *b = data;
+	bool current_status;
+
+	current_status = fbdev_get_hdmi_connection_status();
+
+	if(current_status && !b->secondary_connected) {
+		weston_log("%s: status[%d] was missged,reconfig hdmi output\n",
+		__func__, current_status);
+		fbdev_output_acquire(b, SECONDARY_DISPLAY_ID, SECONDARY_DISPLAY_NODE);
+		weston_compositor_schedule_repaint(b->compositor);
+		fbdev_set_output_no_fade(b, PRIMARY_DISPLAY_ID, true);
+		weston_compositor_restore(b->compositor);
+		b->secondary_connected = true;
+	}else if(!current_status && b->secondary_connected) {
+		weston_log("%s: status[%d] was missged,reconfig hdmi output\n",
+		__func__, current_status);
+		fbdev_output_release(b, SECONDARY_DISPLAY_ID);
+	}
+
+	return 1;
+}
+
+static int
 udev_fb_event(int fd, uint32_t mask, void *data)
 {
 	struct fbdev_backend *b = data;
@@ -1475,6 +1509,8 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 
 		if(time_gap < DEBOUNCE_PERIOD) {
 			weston_log("time gap too short,exit\n");
+			wl_event_source_timer_update(b->check_connection_timer,
+				CHECK_CONNECTION_PERIOD);
 			goto out;
 		}
 
