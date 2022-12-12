@@ -65,6 +65,7 @@
 #define DEFAULT_BRIGHTNESS (255)
 #define DEBOUNCE_PERIOD (500)
 #define CHECK_CONNECTION_PERIOD (1000)
+#define HANDLE_RESUME_PERIOD (750)
 
 struct fbdev_backend {
 	struct weston_backend base;
@@ -80,8 +81,10 @@ struct fbdev_backend {
 	struct udev_monitor *udev_monitor;
 	struct wl_event_source *udev_fb_source;
 	struct wl_event_source *check_connection_timer;
+	struct wl_event_source *rest_resume_timer;
 
 	bool secondary_connected;
+	bool resume_is_handled;
 	uint32_t last_hpd_time;
 };
 
@@ -153,12 +156,13 @@ static int udev_event_is_hotplug(struct fbdev_backend *backend, struct udev_devi
 static int ion_open();
 static bool fbdev_get_hdmi_connection_status();
 static void buffer_destroy(struct buffer_allocator buf_alloc);
-static void fbdev_output_acquire(struct fbdev_backend *backend, int disp_id,
-			const char * new_node);
+static void fbdev_output_acquire(struct fbdev_backend *backend, int disp_id);
 static void fbdev_output_release(struct fbdev_backend *backend, int disp_id);
 static int fbdev_recheck_connection(void *data);
+static int fbdev_reset_resume_flag(void *data);
 static struct weston_output *fbdev_search_output(struct weston_compositor *compositor,
 			int disp_id);
+static bool hpd_event_is_resume(struct udev_device *dev);
 
 static void
 vsync_handler(int disp_id, int64_t timestamp)
@@ -972,6 +976,10 @@ fbdev_backend_destroy(struct weston_compositor *base)
 {
 	struct fbdev_backend *backend = to_fbdev_backend(base);
 
+	if(backend->rest_resume_timer) {
+		wl_event_source_remove(backend->rest_resume_timer);
+	}
+
 	if(backend->check_connection_timer) {
 		wl_event_source_remove(backend->check_connection_timer);
 	}
@@ -1142,6 +1150,7 @@ fbdev_backend_create(struct weston_compositor *compositor,
 
 	backend->prev_state = WESTON_COMPOSITOR_ACTIVE;
 	backend->last_hpd_time = 0;
+	backend->resume_is_handled = false;
 
 	weston_setup_vt_switch_bindings(compositor);
 
@@ -1173,6 +1182,8 @@ fbdev_backend_create(struct weston_compositor *compositor,
 
 	backend->check_connection_timer = wl_event_loop_add_timer(loop,
 		fbdev_recheck_connection, backend);
+	backend->rest_resume_timer = wl_event_loop_add_timer(loop,
+		fbdev_reset_resume_flag, backend);
 #ifdef USE_SDM
     /* begin SDM initialization */
 	rc = CreateCore();
@@ -1396,11 +1407,18 @@ fbdev_search_output(struct weston_compositor *compositor, int disp_id)
 }
 
 static void
-fbdev_output_acquire(struct fbdev_backend *backend, int disp_id,
-			const char * new_node)
+fbdev_output_acquire(struct fbdev_backend *backend, int disp_id)
 {
 	struct weston_output *output = NULL;
+	const char *new_node = NULL;
+
 	weston_log("[%s] disp(%d)\n", __FUNCTION__, disp_id);
+
+	if(disp_id == PRIMARY_DISPLAY_ID) {
+		new_node = PRIMARY_DISPLAY_NODE;
+	} else if (disp_id == SECONDARY_DISPLAY_ID) {
+		new_node = SECONDARY_DISPLAY_NODE;
+	}
 	CreateDisplay(disp_id);
 
 	output = fbdev_search_output(backend->compositor, disp_id);
@@ -1416,7 +1434,13 @@ fbdev_output_acquire(struct fbdev_backend *backend, int disp_id,
 
 	/*turn on vsync for ext display*/
 	SetVSyncState(disp_id, true);
-	RegisterVSyncCb(disp_id, vsync_cb_secondary);
+	if(disp_id == PRIMARY_DISPLAY_ID) {
+		weston_log("%s: register vsync_cb_primary\n", __func__);
+		RegisterVSyncCb(disp_id, vsync_cb_primary);
+	} else if (disp_id == SECONDARY_DISPLAY_ID) {
+		weston_log("%s: register vsync_cb_secondary\n", __func__);
+		RegisterVSyncCb(disp_id, vsync_cb_secondary);
+	}
 }
 
 static void
@@ -1435,8 +1459,9 @@ fbdev_output_release(struct fbdev_backend *backend, int disp_id)
 	fbdev_output_flush(output);
 	weston_output_disable(output);
 	usleep(100 * 1000);
-	backend->secondary_connected = false;
-	weston_log("switch display release done\n");
+	if(disp_id == SECONDARY_DISPLAY_ID)
+		backend->secondary_connected = false;
+	weston_log("display[%d] release done\n", disp_id);
 }
 
 static void
@@ -1480,7 +1505,7 @@ fbdev_recheck_connection(void *data)
 	if(current_status && !b->secondary_connected) {
 		weston_log("%s: status[%d] was missged,reconfig hdmi output\n",
 		__func__, current_status);
-		fbdev_output_acquire(b, SECONDARY_DISPLAY_ID, SECONDARY_DISPLAY_NODE);
+		fbdev_output_acquire(b, SECONDARY_DISPLAY_ID);
 		weston_compositor_schedule_repaint(b->compositor);
 		fbdev_set_output_no_fade(b, PRIMARY_DISPLAY_ID, true);
 		weston_compositor_restore(b->compositor);
@@ -1495,6 +1520,33 @@ fbdev_recheck_connection(void *data)
 }
 
 static int
+fbdev_reset_resume_flag(void *data)
+{
+	struct fbdev_backend *b = data;
+	b->resume_is_handled = false;
+}
+
+static void
+fbdev_handle_resume(struct fbdev_backend *backend, bool is_connected)
+{
+	fbdev_output_release(backend, PRIMARY_DISPLAY_ID);
+	if(backend->secondary_connected)
+		fbdev_output_release(backend, SECONDARY_DISPLAY_ID);
+
+	fbdev_output_acquire(backend, PRIMARY_DISPLAY_ID);
+	if(is_connected && !backend->secondary_connected) {
+		fbdev_output_acquire(backend, SECONDARY_DISPLAY_ID);
+		backend->secondary_connected = true;
+		backend->compositor->state = WESTON_COMPOSITOR_ACTIVE;
+	}
+
+	wl_event_source_timer_update(backend->rest_resume_timer,
+		HANDLE_RESUME_PERIOD);
+
+	backend->resume_is_handled = true;
+}
+
+static int
 udev_fb_event(int fd, uint32_t mask, void *data)
 {
 	struct fbdev_backend *b = data;
@@ -1506,6 +1558,7 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 	if (udev_event_is_hotplug(b, dev)) {
 		bool connected = fbdev_get_hdmi_connection_status();
 		uint32_t time_gap = fbdev_calculate_hpd_time_gap(b);
+		bool is_resume = hpd_event_is_resume(dev);
 
 		if(time_gap < DEBOUNCE_PERIOD) {
 			weston_log("time gap too short,exit\n");
@@ -1517,6 +1570,15 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 		if (first_time && connected && (b->secondary_connected)) {
 			weston_log("ignore 1st double connect event.\n");
 		} else {
+			if (is_resume) {
+				if(b->resume_is_handled) {
+					weston_log("%s: resume event has benn handled in 0.75s\n", __func__);
+					goto out;
+				}
+				fbdev_handle_resume(b, connected);
+				goto out;
+			}
+
 			if (!connected && b->secondary_connected) {
 				fbdev_output_release(b, SECONDARY_DISPLAY_ID);
 				weston_log("HDMI output has been released\n");
@@ -1524,9 +1586,10 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 
 			if (connected) {
 				if(b->secondary_connected) {
-					fbdev_output_release(b, SECONDARY_DISPLAY_ID);
+					weston_log("secondary connected normal event\n");
+					goto out;
 				}
-				fbdev_output_acquire(b, SECONDARY_DISPLAY_ID, SECONDARY_DISPLAY_NODE);
+				fbdev_output_acquire(b, SECONDARY_DISPLAY_ID);
 				weston_compositor_schedule_repaint(b->compositor);
 				if(!first_time){
 					fbdev_set_output_no_fade(b, PRIMARY_DISPLAY_ID, true);
@@ -1557,6 +1620,24 @@ fbdev_get_hdmi_connection_status()
 	weston_log("HDMI status = %s\n", connected ? "CONNECT" : "DISCONNECT");
 	close(fd);
 	return connected ? true : false;
+}
+
+static bool
+hpd_event_is_resume(struct udev_device *dev)
+{
+	const char *event_type;
+
+	event_type = udev_device_get_property_value(dev, "event_type");
+
+	if(!event_type) {
+		weston_log("%s: ERROR:cannot find event_type string\n", __func__);
+		return false;
+	}
+	if(strncmp(event_type, "resume", 7) == 0) {
+		return true;
+	}else {
+		return false;
+	}
 }
 
 static int
