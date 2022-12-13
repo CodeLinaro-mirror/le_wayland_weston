@@ -12,6 +12,8 @@ srcs_drm = [
 	'sdm-service/sdm_display_buffer_allocator.h',
 	'sdm-service/sdm_display_buffer_sync_handler.cpp',
 	'sdm-service/sdm_display_buffer_sync_handler.h',
+	'sdm-service/sdm_display_tonemapper.cpp',
+	'sdm-service/sdm_display_tonemapper.h',
 	'sdm-service/sdm_display_connect.cpp',
 	'sdm-service/sdm_display_connect.h',
 	'sdm-service/sdm_display.cpp',
@@ -34,6 +36,7 @@ deps_drm = [
 	dep_libweston_private,
 	dep_session_helper,
 	dep_libdrm,
+	dep_libgputonemapper,
 	dep_libinput_backend,
 	dependency('libudev', version: '>= 136'),
 	dep_threads
