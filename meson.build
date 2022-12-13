@@ -1,6 +1,6 @@
 project('weston',
 	'c',
-        'cpp',
+	'cpp',
 	version: '10.0.2',
 	default_options: [
 		'warning_level=3',
@@ -124,7 +124,7 @@ config_h.set10('TEST_GL_RENDERER', get_option('test-gl-renderer'))
 
 backend_default = get_option('backend-default')
 if backend_default == 'auto'
-        foreach b : [ 'headless', 'x11', 'wayland', 'drm', 'sdm' ]
+	foreach b : [ 'headless', 'x11', 'wayland', 'drm', 'sdm' ]
 		if get_option('backend-' + b)
 			backend_default = b
 		endif
@@ -160,14 +160,18 @@ dep_libdrm_headers = dep_libdrm.partial_dependency(compile_args: true)
 dep_threads = dependency('threads')
 dep_gbm = dependency('gbm')
 if get_option('backend-sdm')
-        dep_libsdmcore = cc.find_library('sdmcore')
-        dep_libsdmutils = cc.find_library('sdmutils')
-        dep_libdrmutils = cc.find_library('drmutils')
+	dep_libsdmcore = cc.find_library('sdmcore')
+	dep_libsdmutils = cc.find_library('sdmutils')
+	dep_libdrmutils = cc.find_library('drmutils')
+	dep_libgputonemapper = cc.find_library('libgpu_tonemapper', required: false)
+	if dep_libgputonemapper.found()
+		config_h.set('HAS_HDR_SUPPORT', '1')
+	endif
 endif
 dep_libdrm_version = dep_libdrm.version()
 if dep_libdrm_version.version_compare('>=2.4.107')
-  message('Found libdrm with human format modifier support.')
-  config_h.set('HAVE_HUMAN_FORMAT_MODIFIER', '1')
+	message('Found libdrm with human format modifier support.')
+	config_h.set('HAVE_HUMAN_FORMAT_MODIFIER', '1')
 endif
 
 prog_python = import('python').find_installation('python3')
