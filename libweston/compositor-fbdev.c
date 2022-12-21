@@ -62,10 +62,11 @@
 #include "presentation-time-server-protocol.h"
 #include "gl-renderer.h"
 
-#define DEFAULT_BRIGHTNESS (255)
+#define DEFAULT_BRIGHTNESS (155)
 #define DEBOUNCE_PERIOD (500)
 #define CHECK_CONNECTION_PERIOD (1000)
 #define HANDLE_RESUME_PERIOD (750)
+#define TURN_ON_BACKLIGHT_DELAY (850)
 
 struct fbdev_backend {
 	struct weston_backend base;
@@ -82,6 +83,7 @@ struct fbdev_backend {
 	struct wl_event_source *udev_fb_source;
 	struct wl_event_source *check_connection_timer;
 	struct wl_event_source *rest_resume_timer;
+	struct wl_event_source *turn_on_backlight_timer;
 
 	bool secondary_connected;
 	bool resume_is_handled;
@@ -160,6 +162,7 @@ static void fbdev_output_acquire(struct fbdev_backend *backend, int disp_id);
 static void fbdev_output_release(struct fbdev_backend *backend, int disp_id);
 static int fbdev_recheck_connection(void *data);
 static int fbdev_reset_resume_flag(void *data);
+static int fbdev_turn_on_dsi_backlight(void *data);
 static struct weston_output *fbdev_search_output(struct weston_compositor *compositor,
 			int disp_id);
 static bool hpd_event_is_resume(struct udev_device *dev);
@@ -661,7 +664,6 @@ fbdev_output_enable(struct weston_output *base)
 	struct fbdev_output *output = to_fbdev_output(base);
 	struct fbdev_backend *backend = to_fbdev_backend(base->compositor);
 	int fb_fd;
-	struct wl_event_loop *loop;
 
 	/* Create the frame buffer. */
 	fb_fd = fbdev_frame_buffer_open(output, output->device, &output->fb_info);
@@ -688,19 +690,20 @@ fbdev_output_enable(struct weston_output *base)
 		goto out_hw_surface;
 	}
 
-	if (fbdev_output_enable_vsync(output)) {
+	if (fbdev_output_enable_vsync(output) < 0) {
 		weston_log("Failed to create vsync event\n");
 		goto out_hw_surface;
 	}
-
-	fbdev_set_backlight(base, DEFAULT_BRIGHTNESS);
-
-	loop = wl_display_get_event_loop(backend->compositor->wl_display);
 
 	weston_log("fbdev output %dx%d px\n",
 	           output->mode.width, output->mode.height);
 	weston_log_continue(STAMP_SPACE "guessing %d Hz and 96 dpi\n",
 	                    output->mode.refresh / 1000);
+
+	if(output->display_id == PRIMARY_DISPLAY_ID) {
+		wl_event_source_timer_update(backend->turn_on_backlight_timer,
+		TURN_ON_BACKLIGHT_DELAY);
+	}
 
 	output->fb_device_fd = fb_fd;
 	return 0;
@@ -739,9 +742,11 @@ fbdev_output_create(struct fbdev_backend *backend,
 	if(!strcmp(device, PRIMARY_DISPLAY_NODE)) {
 		output->display_id = PRIMARY_DISPLAY_ID;
 		output->base.name = strdup("fbdev_0");
+		output->base.id = PRIMARY_DISPLAY_ID;
 	} else {
 		output->display_id = SECONDARY_DISPLAY_ID;
 		output->base.name = strdup("fbdev_1");
+		output->base.id = SECONDARY_DISPLAY_ID;
 	}
 
 	weston_log("[%s] create(%d) name(%s)\n", __FUNCTION__, output->display_id, output->base.name);
@@ -976,6 +981,10 @@ fbdev_backend_destroy(struct weston_compositor *base)
 {
 	struct fbdev_backend *backend = to_fbdev_backend(base);
 
+	if(backend->turn_on_backlight_timer) {
+		wl_event_source_remove(backend->turn_on_backlight_timer);
+	}
+
 	if(backend->rest_resume_timer) {
 		wl_event_source_remove(backend->rest_resume_timer);
 	}
@@ -1205,6 +1214,9 @@ fbdev_backend_create(struct weston_compositor *compositor,
 	if (fbdev_output_create(backend, PRIMARY_DISPLAY_NODE) < 0)
 		goto out_launcher;
 
+	backend->turn_on_backlight_timer = wl_event_loop_add_timer(loop,
+		fbdev_turn_on_dsi_backlight, backend);
+
 	if (backend->use_pixman) {
 		if (pixman_renderer_init(compositor) < 0) {
 			weston_log("failed to initialize pixman renderer\n");
@@ -1326,6 +1338,20 @@ buffer_destroy(struct buffer_allocator buf_alloc)
 #ifdef USE_GBM
 	gbm_surface_destroy(buf_alloc.surface);
 #endif
+}
+
+static int
+fbdev_turn_on_dsi_backlight(void *data)
+{
+	struct fbdev_backend *b = data;
+	struct weston_output *primary_output;
+
+	weston_log("%s: setting backlight\n", __func__);
+	primary_output = fbdev_search_output(b->compositor,
+		PRIMARY_DISPLAY_ID);
+	fbdev_set_backlight(primary_output, DEFAULT_BRIGHTNESS);
+
+	return 1;
 }
 
 static void
@@ -1524,6 +1550,8 @@ fbdev_reset_resume_flag(void *data)
 {
 	struct fbdev_backend *b = data;
 	b->resume_is_handled = false;
+
+	return 1;
 }
 
 static void
@@ -1572,7 +1600,6 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 		} else {
 			if (is_resume) {
 				if(b->resume_is_handled) {
-					weston_log("%s: resume event has benn handled in 0.75s\n", __func__);
 					goto out;
 				}
 				fbdev_handle_resume(b, connected);
