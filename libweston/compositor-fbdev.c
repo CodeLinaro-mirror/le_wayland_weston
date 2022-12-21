@@ -86,7 +86,7 @@ struct fbdev_backend {
 	struct wl_event_source *turn_on_backlight_timer;
 
 	bool secondary_connected;
-	bool resume_is_handled;
+	bool ignore_resume;
 	uint32_t last_hpd_time;
 };
 
@@ -1159,7 +1159,7 @@ fbdev_backend_create(struct weston_compositor *compositor,
 
 	backend->prev_state = WESTON_COMPOSITOR_ACTIVE;
 	backend->last_hpd_time = 0;
-	backend->resume_is_handled = false;
+	backend->ignore_resume = true;
 
 	weston_setup_vt_switch_bindings(compositor);
 
@@ -1346,10 +1346,10 @@ fbdev_turn_on_dsi_backlight(void *data)
 	struct fbdev_backend *b = data;
 	struct weston_output *primary_output;
 
-	weston_log("%s: setting backlight\n", __func__);
 	primary_output = fbdev_search_output(b->compositor,
 		PRIMARY_DISPLAY_ID);
 	fbdev_set_backlight(primary_output, DEFAULT_BRIGHTNESS);
+	fbdev_reset_resume_flag(data);
 
 	return 1;
 }
@@ -1529,7 +1529,7 @@ fbdev_recheck_connection(void *data)
 	current_status = fbdev_get_hdmi_connection_status();
 
 	if(current_status && !b->secondary_connected) {
-		weston_log("%s: status[%d] was missged,reconfig hdmi output\n",
+		weston_log("%s: status[%d] was missed,reconfig hdmi output\n",
 		__func__, current_status);
 		fbdev_output_acquire(b, SECONDARY_DISPLAY_ID);
 		weston_compositor_schedule_repaint(b->compositor);
@@ -1537,7 +1537,7 @@ fbdev_recheck_connection(void *data)
 		weston_compositor_restore(b->compositor);
 		b->secondary_connected = true;
 	}else if(!current_status && b->secondary_connected) {
-		weston_log("%s: status[%d] was missged,reconfig hdmi output\n",
+		weston_log("%s: status[%d] was missed,reconfig hdmi output\n",
 		__func__, current_status);
 		fbdev_output_release(b, SECONDARY_DISPLAY_ID);
 	}
@@ -1549,7 +1549,7 @@ static int
 fbdev_reset_resume_flag(void *data)
 {
 	struct fbdev_backend *b = data;
-	b->resume_is_handled = false;
+	b->ignore_resume = false;
 
 	return 1;
 }
@@ -1571,7 +1571,7 @@ fbdev_handle_resume(struct fbdev_backend *backend, bool is_connected)
 	wl_event_source_timer_update(backend->rest_resume_timer,
 		HANDLE_RESUME_PERIOD);
 
-	backend->resume_is_handled = true;
+	backend->ignore_resume = true;
 }
 
 static int
@@ -1599,7 +1599,7 @@ udev_fb_event(int fd, uint32_t mask, void *data)
 			weston_log("ignore 1st double connect event.\n");
 		} else {
 			if (is_resume) {
-				if(b->resume_is_handled) {
+				if(b->ignore_resume) {
 					goto out;
 				}
 				fbdev_handle_resume(b, connected);
