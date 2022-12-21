@@ -55,7 +55,7 @@ git_version_h = vcs_tag(
 
 config_h = configuration_data()
 
-cc = meson.get_compiler('cpp')
+cc = meson.get_compiler('c')
 
 global_args = []
 global_args_maybe = [
@@ -157,6 +157,9 @@ dep_libdl = cc.find_library('dl')
 dep_libdrm = dependency('libdrm', version: '>= 2.4.95')
 dep_libdrm_headers = dep_libdrm.partial_dependency(compile_args: true)
 dep_threads = dependency('threads')
+dep_gbm = dependency('gbm')
+
+dep_gbm = cc.find_library('gbm')
 
 dep_libdrm_version = dep_libdrm.version()
 if dep_libdrm_version.version_compare('>=2.4.107')

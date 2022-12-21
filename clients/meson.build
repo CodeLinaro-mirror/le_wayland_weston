@@ -344,10 +344,6 @@ demo_clients = [
 	},
 	{ 'basename': 'smoke' },
 	{ 'basename': 'stacking' },
-	{
-		'basename': 'subsurfaces',
-		'deps': [ 'egl', 'glesv2', 'wayland-egl' ]
-	},
 	{ 'basename': 'transformed' },
 ]
 

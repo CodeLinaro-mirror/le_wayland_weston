@@ -162,9 +162,6 @@ if get_option('backend-drm')
 	deps_session_helper += dep_libdrm
 endif
 
-if get_option('backend-sdm')
-	deps_session_helper += [dep_libdrm, dep_libsdmcore, dep_libsdmutils]
-endif
 
 systemd_dep = dependency('', required: false)
 if get_option('launcher-logind')
@@ -209,7 +206,7 @@ endif
 lib_session_helper = static_library(
 	'session-helper',
 	srcs_session_helper,
-	include_directories: [common_inc, ('backend-sdm')],
+	include_directories: common_inc,
 	dependencies: deps_session_helper,
 	install: false
 )
@@ -261,7 +258,6 @@ endif
 subdir('color-lcms')
 subdir('renderer-gl')
 subdir('backend-drm')
-subdir('backend-sdm')
 subdir('backend-fbdev')
 subdir('backend-headless')
 subdir('backend-rdp')
