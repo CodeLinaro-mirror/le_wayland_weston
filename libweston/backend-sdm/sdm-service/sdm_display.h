@@ -62,15 +62,20 @@ using std::map;
 using std::pair;
 using std::fstream;
 
+class SdmDisplayProxy;
+
 enum SdmDisplayIntfType {null_disp, sdm_disp};
 
 typedef std::map<uint32_t, HWDisplayInfo> SdmDisplaysInfo;
+
+// map<display_id, sdm_display>
+typedef std::map<uint32_t, SdmDisplayProxy *> CreatedDisplaysInfo;
 
 class SdmDisplayInterface {
   public:
     virtual ~SdmDisplayInterface() {}
 
-    virtual DisplayError CreateDisplay() = 0;
+    virtual DisplayError CreateDisplay(uint32_t display_id) = 0;
     virtual DisplayError DestroyDisplay() = 0;
     virtual DisplayError Prepare(struct drm_output *output) = 0;
     virtual DisplayError Commit(struct drm_output *output) = 0;
@@ -83,6 +88,8 @@ class SdmDisplayInterface {
     virtual DisplayError SetPanelBrightness(float brightness) = 0;
     virtual DisplayError GetPanelBrightness(float *brightness) = 0;
     static int GetDrmMasterFd();
+    struct drm_output *drm_output_;
+    struct drm_output *prev_output_;
 };
 
 class SdmNullDisplay : public SdmDisplayInterface {
@@ -93,7 +100,7 @@ class SdmNullDisplay : public SdmDisplayInterface {
     SdmDisplayIntfType GetDisplayIntfType() {
       return null_disp;
     }
-    DisplayError CreateDisplay();
+    DisplayError CreateDisplay(uint32_t display_id);
     DisplayError DestroyDisplay();
     DisplayError Prepare(struct drm_output *output);
     DisplayError Commit(struct drm_output *output);
@@ -117,7 +124,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
       return sdm_disp;
     }
 
-    DisplayError CreateDisplay();
+    DisplayError CreateDisplay(uint32_t display_id);
     DisplayError DestroyDisplay();
     DisplayError Prepare(struct drm_output *output);
     DisplayError Commit(struct drm_output *output);
@@ -224,8 +231,8 @@ class SdmDisplayProxy {
                     SdmDisplayBufferAllocator *buffer_allocator);
     ~SdmDisplayProxy();
 
-    DisplayError CreateDisplay() {
-      DisplayError rc = display_intf_->CreateDisplay();
+    DisplayError CreateDisplay(uint32_t display_id) {
+      DisplayError rc = display_intf_->CreateDisplay(display_id);
       if (rc != kErrorNone)
         display_intf_ = &null_disp_;
       return kErrorNone;
