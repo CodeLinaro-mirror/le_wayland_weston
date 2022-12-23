@@ -80,6 +80,7 @@
 #include "sdm-service/sdm_display_buffer_allocator.h"
 #include "sdm-service/sdm_display_buffer_sync_handler.h"
 #include "sdm-service/sdm_display_socket_handler.h"
+#include "sdm-service/sdm_display_tonemapper.h"
 #include "sdm-internal.h"
 #include "drm_master.h"
 
@@ -119,6 +120,8 @@ class SdmDisplayInterface {
     virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
     virtual DisplayError SetPanelBrightness(float brightness) = 0;
     virtual DisplayError GetPanelBrightness(float *brightness) = 0;
+    virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
+
     static int GetDrmMasterFd();
     struct drm_output *drm_output_;
     struct drm_output *prev_output_;
@@ -143,6 +146,7 @@ class SdmNullDisplay : public SdmDisplayInterface {
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
     DisplayError SetPanelBrightness(float brightness);
     DisplayError GetPanelBrightness(float *brightness);
+    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
 };
 
 class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDebugger {
@@ -167,6 +171,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError RegisterCb(int display_id, vblank_cb_t vbcb);
     DisplayError SetPanelBrightness(float brightness);
     DisplayError GetPanelBrightness(float *brightness);
+    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
 
     int OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level);
 
@@ -254,7 +259,8 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     int previous_retire_fence_fd_ = -1;
     bool esd_reset_panel_ = false;
     int disable_hdr_handling_ = 1;
-    bool hdr_supported_ = false;
+    int disable_tone_mapper_ = 0;        /* To disable tone mapping functionality. */
+    SdmDisplayToneMapper *tone_mapper_ = NULL;
 };
 
 class SdmDisplayProxy {
@@ -299,6 +305,10 @@ class SdmDisplayProxy {
     int HandleHotplug(bool connected);
 
     DisplayError OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level);
+
+    DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
+      return display_intf_->GetHdrInfo(display_hdr_info);
+    }
 
   private:
     // Uevent thread
