@@ -64,7 +64,7 @@ class SdmDisplayToneMapper {
                                 : buffer_allocator_(allocator) {}
   ~SdmDisplayToneMapper() {}
 
-  int HandleToneMap(LayerStack *layer_stack);
+  DisplayError HandleToneMap(LayerStack *layer_stack);
   bool IsActive() { return !tone_map_sessions_.empty(); }
   void PostCommit(LayerStack *layer_stack);
   void SetFrameDumpConfig(uint32_t count);
