@@ -31,11 +31,23 @@
 #include "linux-explicit-synchronization-unstable-v1-client-protocol.h"
 #include "weston-test-client-helper.h"
 #include "wayland-server-protocol.h"
+#include "weston-test-fixture-compositor.h"
 
-/* We need to use the pixman renderer, since a few of the tests depend
- * on the renderer holding onto a surface buffer until the next one
- * is committed, which the noop renderer doesn't do. */
-char *server_parameters = "--use-pixman";
+static enum test_result_code
+fixture_setup(struct weston_test_harness *harness)
+{
+	struct compositor_setup setup;
+
+	compositor_setup_defaults(&setup);
+
+	/* We need to use the pixman renderer, since a few of the tests depend
+	 * on the renderer holding onto a surface buffer until the next one
+	 * is committed, which the noop renderer doesn't do. */
+	setup.renderer = RENDERER_PIXMAN;
+
+	return weston_test_harness_execute_as_client(harness, &setup);
+}
+DECLARE_FIXTURE_SETUP(fixture_setup);
 
 static struct zwp_linux_explicit_synchronization_v1 *
 get_linux_explicit_synchronization(struct client *client)
@@ -99,6 +111,7 @@ TEST(second_surface_synchronization_on_surface_raises_error)
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync2);
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync1);
 	zwp_linux_explicit_synchronization_v1_destroy(sync);
+	client_destroy(client);
 }
 
 TEST(set_acquire_fence_with_invalid_fence_raises_error)
@@ -124,6 +137,7 @@ TEST(set_acquire_fence_with_invalid_fence_raises_error)
 	close(pipefd[1]);
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync);
 	zwp_linux_explicit_synchronization_v1_destroy(sync);
+	client_destroy(client);
 }
 
 TEST(set_acquire_fence_on_destroyed_surface_raises_error)
@@ -139,6 +153,7 @@ TEST(set_acquire_fence_on_destroyed_surface_raises_error)
 	assert(pipe(pipefd) == 0);
 
 	wl_surface_destroy(client->surface->wl_surface);
+	client->surface->wl_surface = NULL;
 	zwp_linux_surface_synchronization_v1_set_acquire_fence(surface_sync,
 							       pipefd[0]);
 	expect_protocol_error(
@@ -150,6 +165,7 @@ TEST(set_acquire_fence_on_destroyed_surface_raises_error)
 	close(pipefd[1]);
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync);
 	zwp_linux_explicit_synchronization_v1_destroy(sync);
+	client_destroy(client);
 }
 
 TEST(second_buffer_release_in_commit_raises_error)
@@ -179,6 +195,7 @@ TEST(second_buffer_release_in_commit_raises_error)
 	zwp_linux_buffer_release_v1_destroy(buffer_release1);
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync);
 	zwp_linux_explicit_synchronization_v1_destroy(sync);
+	client_destroy(client);
 }
 
 TEST(get_release_without_buffer_raises_commit_error)
@@ -203,6 +220,7 @@ TEST(get_release_without_buffer_raises_commit_error)
 	zwp_linux_buffer_release_v1_destroy(buffer_release);
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync);
 	zwp_linux_explicit_synchronization_v1_destroy(sync);
+	client_destroy(client);
 }
 
 TEST(get_release_on_destroyed_surface_raises_error)
@@ -216,6 +234,7 @@ TEST(get_release_on_destroyed_surface_raises_error)
 	struct zwp_linux_buffer_release_v1 *buffer_release;
 
 	wl_surface_destroy(client->surface->wl_surface);
+	client->surface->wl_surface = NULL;
 	buffer_release =
 		zwp_linux_surface_synchronization_v1_get_release(surface_sync);
 	expect_protocol_error(
@@ -226,6 +245,7 @@ TEST(get_release_on_destroyed_surface_raises_error)
 	zwp_linux_buffer_release_v1_destroy(buffer_release);
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync);
 	zwp_linux_explicit_synchronization_v1_destroy(sync);
+	client_destroy(client);
 }
 
 TEST(get_release_after_commit_succeeds)
@@ -257,6 +277,7 @@ TEST(get_release_after_commit_succeeds)
 	zwp_linux_buffer_release_v1_destroy(buffer_release1);
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync);
 	zwp_linux_explicit_synchronization_v1_destroy(sync);
+	client_destroy(client);
 }
 
 static void
@@ -347,6 +368,7 @@ TEST(get_release_events_are_emitted_for_different_buffers)
 	zwp_linux_buffer_release_v1_destroy(buffer_release1);
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync);
 	zwp_linux_explicit_synchronization_v1_destroy(sync);
+	client_destroy(client);
 }
 
 TEST(get_release_events_are_emitted_for_same_buffer_on_surface)
@@ -406,6 +428,7 @@ TEST(get_release_events_are_emitted_for_same_buffer_on_surface)
 	zwp_linux_buffer_release_v1_destroy(buffer_release1);
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync);
 	zwp_linux_explicit_synchronization_v1_destroy(sync);
+	client_destroy(client);
 }
 
 TEST(get_release_events_are_emitted_for_same_buffer_on_different_surfaces)
@@ -483,4 +506,6 @@ TEST(get_release_events_are_emitted_for_same_buffer_on_different_surfaces)
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync2);
 	zwp_linux_surface_synchronization_v1_destroy(surface_sync1);
 	zwp_linux_explicit_synchronization_v1_destroy(sync);
+	surface_destroy(other_surface);
+	client_destroy(client);
 }

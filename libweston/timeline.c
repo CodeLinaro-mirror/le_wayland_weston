@@ -324,7 +324,7 @@ emit_vblank_timestamp(struct timeline_emit_context *ctx, void *obj)
 {
 	struct timespec *ts = obj;
 
-	fprintf(ctx->cur, "\"vblank\":[%" PRId64 ", %ld]",
+	fprintf(ctx->cur, "\"vblank_monotonic\":[%" PRId64 ", %ld]",
 		(int64_t)ts->tv_sec, ts->tv_nsec);
 
 	return 1;
@@ -362,7 +362,7 @@ weston_timeline_get_subscription_object(struct weston_log_subscription *sub,
  * Can be used from outside libweston.
  *
  * @param wc a weston_compositor instance
- * @param object the underyling object
+ * @param object the underlying object
  *
  * @ingroup log
  */

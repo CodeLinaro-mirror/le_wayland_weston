@@ -32,12 +32,17 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
 
 #include <libweston/libweston.h>
+#include <libweston/weston-log.h>
 #include "backend.h"
 #include "libweston-internal.h"
 #include "compositor/weston.h"
 #include "weston-test-server-protocol.h"
+#include "weston.h"
+#include "weston-testsuite-data.h"
 
 #include "shared/helpers.h"
 #include "shared/timespec-util.h"
@@ -46,40 +51,27 @@
 
 struct weston_test {
 	struct weston_compositor *compositor;
-	/* XXX: missing compositor destroy listener
-	 * https://gitlab.freedesktop.org/wayland/weston/issues/300
-	 */
+	struct wl_listener destroy_listener;
+
+	struct weston_log_scope *log;
+
 	struct weston_layer layer;
-	struct weston_process process;
 	struct weston_seat seat;
 	struct weston_touch_device *touch_device[MAX_TOUCH_DEVICES];
 	int nr_touch_devices;
 	bool is_seat_initialized;
+
+	pthread_t client_thread;
+	struct wl_event_source *client_source;
 };
 
 struct weston_test_surface {
 	struct weston_surface *surface;
+	struct wl_listener surface_destroy_listener;
 	struct weston_view *view;
 	int32_t x, y;
 	struct weston_test *test;
 };
-
-static void
-test_client_sigchld(struct weston_process *process, int status)
-{
-	struct weston_test *test =
-		container_of(process, struct weston_test, process);
-
-	/* Chain up from weston-test-runner's exit code so that ninja
-	 * knows the exit status and can report e.g. skipped tests. */
-	if (WIFEXITED(status) && WEXITSTATUS(status) != 0)
-		exit(WEXITSTATUS(status));
-
-	/* In case the child aborted or segfaulted... */
-	assert(status == 0);
-
-	weston_compositor_exit(test->compositor);
-}
 
 static void
 touch_device_add(struct weston_test *test)
@@ -176,6 +168,84 @@ test_surface_committed(struct weston_surface *surface, int32_t sx, int32_t sy)
 	test_surface->view->is_mapped = true;
 }
 
+static int
+test_surface_get_label(struct weston_surface *surface, char *buf, size_t len)
+{
+	return snprintf(buf, len, "test suite surface");
+}
+
+static void
+test_surface_destroy(struct weston_test_surface *test_surface)
+{
+	weston_view_destroy(test_surface->view);
+
+	test_surface->surface->committed = NULL;
+	test_surface->surface->committed_private = NULL;
+	weston_surface_set_label_func(test_surface->surface, NULL);
+
+	wl_list_remove(&test_surface->surface_destroy_listener.link);
+	free(test_surface);
+}
+
+static void
+test_surface_handle_surface_destroy(struct wl_listener *l, void *data)
+{
+	struct weston_test_surface *test_surface =
+		wl_container_of(l, test_surface, surface_destroy_listener);
+
+	assert(test_surface->surface == data);
+
+	test_surface_destroy(test_surface);
+}
+
+static struct weston_test_surface *
+weston_test_surface_create(struct wl_resource *test_resource,
+			   struct weston_surface *surface)
+{
+	struct wl_client *client = wl_resource_get_client(test_resource);
+	struct wl_resource *display_resource;
+	struct weston_test_surface *test_surface;
+
+	test_surface = zalloc(sizeof *test_surface);
+	if (!test_surface)
+		goto err_post_no_mem;
+
+	test_surface->surface = surface;
+	test_surface->test = wl_resource_get_user_data(test_resource);
+
+	test_surface->view = weston_view_create(surface);
+	if (!test_surface->view)
+		goto err_free_surface;
+
+	/* Protocol does not define this error so abuse wl_display */
+	display_resource = wl_client_get_object(client, 1);
+	if (weston_surface_set_role(surface, "weston_test_surface",
+				    display_resource,
+				    WL_DISPLAY_ERROR_INVALID_OBJECT) < 0)
+		goto err_free_view;
+
+	surface->committed_private = test_surface;
+	surface->committed = test_surface_committed;
+	weston_surface_set_label_func(surface, test_surface_get_label);
+
+	test_surface->surface_destroy_listener.notify =
+		test_surface_handle_surface_destroy;
+	wl_signal_add(&surface->destroy_signal,
+		      &test_surface->surface_destroy_listener);
+
+	return test_surface;
+
+err_free_view:
+	weston_view_destroy(test_surface->view);
+
+err_free_surface:
+	free(test_surface);
+
+err_post_no_mem:
+	wl_resource_post_no_memory(test_resource);
+	return NULL;
+}
+
 static void
 move_surface(struct wl_client *client, struct wl_resource *resource,
 	     struct wl_resource *surface_resource,
@@ -184,28 +254,24 @@ move_surface(struct wl_client *client, struct wl_resource *resource,
 	struct weston_surface *surface =
 		wl_resource_get_user_data(surface_resource);
 	struct weston_test_surface *test_surface;
+	struct wl_resource *display_resource;
 
-	test_surface = surface->committed_private;
-	if (!test_surface) {
-		test_surface = malloc(sizeof *test_surface);
-		if (!test_surface) {
-			wl_resource_post_no_memory(resource);
-			return;
-		}
-
-		test_surface->view = weston_view_create(surface);
-		if (!test_surface->view) {
-			wl_resource_post_no_memory(resource);
-			free(test_surface);
-			return;
-		}
-
-		surface->committed_private = test_surface;
-		surface->committed = test_surface_committed;
+	if (surface->committed &&
+	    surface->committed != test_surface_committed) {
+		display_resource = wl_client_get_object(client, 1);
+		wl_resource_post_error(display_resource,
+				       WL_DISPLAY_ERROR_INVALID_OBJECT,
+				       "weston_test.move_surface: wl_surface@%u has a role.",
+				       wl_resource_get_id(surface_resource));
+		return;
 	}
 
-	test_surface->surface = surface;
-	test_surface->test = wl_resource_get_user_data(resource);
+	test_surface = surface->committed_private;
+	if (!test_surface)
+		test_surface = weston_test_surface_create(resource, surface);
+	if (!test_surface)
+		return;
+
 	test_surface->x = x;
 	test_surface->y = y;
 }
@@ -347,250 +413,6 @@ device_add(struct wl_client *client,
 	}
 }
 
-enum weston_test_screenshot_outcome {
-	WESTON_TEST_SCREENSHOT_SUCCESS,
-	WESTON_TEST_SCREENSHOT_NO_MEMORY,
-	WESTON_TEST_SCREENSHOT_BAD_BUFFER
-	};
-
-typedef void (*weston_test_screenshot_done_func_t)(void *data,
-						   enum weston_test_screenshot_outcome outcome);
-
-struct test_screenshot {
-	struct weston_compositor *compositor;
-	struct wl_global *global;
-	struct wl_client *client;
-	struct weston_process process;
-	struct wl_listener destroy_listener;
-};
-
-struct test_screenshot_frame_listener {
-	struct wl_listener listener;
-	struct weston_buffer *buffer;
-	struct weston_output *output;
-	weston_test_screenshot_done_func_t done;
-	void *data;
-};
-
-static void
-copy_bgra_yflip(uint8_t *dst, uint8_t *src, int height, int stride)
-{
-	uint8_t *end;
-
-	end = dst + height * stride;
-	while (dst < end) {
-		memcpy(dst, src, stride);
-		dst += stride;
-		src -= stride;
-	}
-}
-
-
-static void
-copy_bgra(uint8_t *dst, uint8_t *src, int height, int stride)
-{
-	/* TODO: optimize this out */
-	memcpy(dst, src, height * stride);
-}
-
-static void
-copy_row_swap_RB(void *vdst, void *vsrc, int bytes)
-{
-	uint32_t *dst = vdst;
-	uint32_t *src = vsrc;
-	uint32_t *end = dst + bytes / 4;
-
-	while (dst < end) {
-		uint32_t v = *src++;
-		/*                    A R G B */
-		uint32_t tmp = v & 0xff00ff00;
-		tmp |= (v >> 16) & 0x000000ff;
-		tmp |= (v << 16) & 0x00ff0000;
-		*dst++ = tmp;
-	}
-}
-
-static void
-copy_rgba_yflip(uint8_t *dst, uint8_t *src, int height, int stride)
-{
-	uint8_t *end;
-
-	end = dst + height * stride;
-	while (dst < end) {
-		copy_row_swap_RB(dst, src, stride);
-		dst += stride;
-		src -= stride;
-	}
-}
-
-static void
-copy_rgba(uint8_t *dst, uint8_t *src, int height, int stride)
-{
-	uint8_t *end;
-
-	end = dst + height * stride;
-	while (dst < end) {
-		copy_row_swap_RB(dst, src, stride);
-		dst += stride;
-		src += stride;
-	}
-}
-
-static void
-test_screenshot_frame_notify(struct wl_listener *listener, void *data)
-{
-	struct test_screenshot_frame_listener *l =
-		container_of(listener,
-			     struct test_screenshot_frame_listener, listener);
-	struct weston_output *output = l->output;
-	struct weston_compositor *compositor = output->compositor;
-	int32_t stride;
-	uint8_t *pixels, *d, *s;
-
-	weston_output_disable_planes_decr(output);
-	wl_list_remove(&listener->link);
-	stride = l->buffer->width * (PIXMAN_FORMAT_BPP(compositor->read_format) / 8);
-	pixels = malloc(stride * l->buffer->height);
-
-	if (pixels == NULL) {
-		l->done(l->data, WESTON_TEST_SCREENSHOT_NO_MEMORY);
-		free(l);
-		return;
-	}
-
-	/* FIXME: Needs to handle output transformations */
-
-	compositor->renderer->read_pixels(output,
-					  compositor->read_format,
-					  pixels,
-					  0, 0,
-					  output->current_mode->width,
-					  output->current_mode->height);
-
-	stride = wl_shm_buffer_get_stride(l->buffer->shm_buffer);
-
-	d = wl_shm_buffer_get_data(l->buffer->shm_buffer);
-	s = pixels + stride * (l->buffer->height - 1);
-
-	wl_shm_buffer_begin_access(l->buffer->shm_buffer);
-
-	/* XXX: It would be nice if we used Pixman to do all this rather
-	 *  than our own implementation
-	 */
-	switch (compositor->read_format) {
-	case PIXMAN_a8r8g8b8:
-	case PIXMAN_x8r8g8b8:
-		if (compositor->capabilities & WESTON_CAP_CAPTURE_YFLIP)
-			copy_bgra_yflip(d, s, output->current_mode->height, stride);
-		else
-			copy_bgra(d, pixels, output->current_mode->height, stride);
-		break;
-	case PIXMAN_x8b8g8r8:
-	case PIXMAN_a8b8g8r8:
-		if (compositor->capabilities & WESTON_CAP_CAPTURE_YFLIP)
-			copy_rgba_yflip(d, s, output->current_mode->height, stride);
-		else
-			copy_rgba(d, pixels, output->current_mode->height, stride);
-		break;
-	default:
-		break;
-	}
-
-	wl_shm_buffer_end_access(l->buffer->shm_buffer);
-
-	l->done(l->data, WESTON_TEST_SCREENSHOT_SUCCESS);
-	free(pixels);
-	free(l);
-}
-
-static bool
-weston_test_screenshot_shoot(struct weston_output *output,
-			     struct weston_buffer *buffer,
-			     weston_test_screenshot_done_func_t done,
-			     void *data)
-{
-	struct test_screenshot_frame_listener *l;
-
-	/* Get the shm buffer resource the client created */
-	if (!wl_shm_buffer_get(buffer->resource)) {
-		done(data, WESTON_TEST_SCREENSHOT_BAD_BUFFER);
-		return false;
-	}
-
-	buffer->shm_buffer = wl_shm_buffer_get(buffer->resource);
-	buffer->width = wl_shm_buffer_get_width(buffer->shm_buffer);
-	buffer->height = wl_shm_buffer_get_height(buffer->shm_buffer);
-
-	/* Verify buffer is big enough */
-	if (buffer->width < output->current_mode->width ||
-		buffer->height < output->current_mode->height) {
-		done(data, WESTON_TEST_SCREENSHOT_BAD_BUFFER);
-		return false;
-	}
-
-	/* allocate the frame listener */
-	l = malloc(sizeof *l);
-	if (l == NULL) {
-		done(data, WESTON_TEST_SCREENSHOT_NO_MEMORY);
-		return false;
-	}
-
-	/* Set up the listener */
-	l->buffer = buffer;
-	l->output = output;
-	l->done = done;
-	l->data = data;
-	l->listener.notify = test_screenshot_frame_notify;
-	wl_signal_add(&output->frame_signal, &l->listener);
-
-	/* Fire off a repaint */
-	weston_output_disable_planes_incr(output);
-	weston_output_schedule_repaint(output);
-
-	return true;
-}
-
-static void
-capture_screenshot_done(void *data, enum weston_test_screenshot_outcome outcome)
-{
-	struct wl_resource *resource = data;
-
-	switch (outcome) {
-	case WESTON_TEST_SCREENSHOT_SUCCESS:
-		weston_test_send_capture_screenshot_done(resource);
-		break;
-	case WESTON_TEST_SCREENSHOT_NO_MEMORY:
-		wl_resource_post_no_memory(resource);
-		break;
-	default:
-		break;
-	}
-}
-
-
-/**
- * Grabs a snapshot of the screen.
- */
-static void
-capture_screenshot(struct wl_client *client,
-		   struct wl_resource *resource,
-		   struct wl_resource *output_resource,
-		   struct wl_resource *buffer_resource)
-{
-	struct weston_output *output =
-		weston_head_from_resource(output_resource)->output;
-	struct weston_buffer *buffer =
-		weston_buffer_from_resource(buffer_resource);
-
-	if (buffer == NULL) {
-		wl_resource_post_no_memory(resource);
-		return;
-	}
-
-	weston_test_screenshot_shoot(output, buffer,
-				     capture_screenshot_done, resource);
-}
-
 static void
 send_touch(struct wl_client *client, struct wl_resource *resource,
 	   uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec,
@@ -617,7 +439,6 @@ static const struct weston_test_interface test_implementation = {
 	send_key,
 	device_release,
 	device_add,
-	capture_screenshot,
 	send_touch,
 };
 
@@ -640,31 +461,179 @@ bind_test(struct wl_client *client, void *data, uint32_t version, uint32_t id)
 }
 
 static void
-idle_launch_client(void *data)
+client_thread_cleanup(void *data_)
 {
-	struct weston_test *test = data;
-	pid_t pid;
-	sigset_t allsigs;
-	char *path;
+	struct wet_testsuite_data *data = data_;
 
-	path = getenv("WESTON_TEST_CLIENT_PATH");
-	if (path == NULL)
-		return;
-	pid = fork();
-	if (pid == -1)
-		exit(EXIT_FAILURE);
-	if (pid == 0) {
-		sigfillset(&allsigs);
-		sigprocmask(SIG_UNBLOCK, &allsigs, NULL);
-		execl(path, path, NULL);
-		weston_log("compositor: executing '%s' failed: %s\n", path,
+	close(data->thread_event_pipe);
+	data->thread_event_pipe = -1;
+}
+
+static void *
+client_thread_routine(void *data_)
+{
+	struct wet_testsuite_data *data = data_;
+
+	pthread_setname_np(pthread_self(), "client");
+	pthread_cleanup_push(client_thread_cleanup, data);
+	data->run(data);
+	pthread_cleanup_pop(true);
+
+	return NULL;
+}
+
+static void
+client_thread_join(struct weston_test *test)
+{
+	assert(test->client_source);
+
+	pthread_join(test->client_thread, NULL);
+	wl_event_source_remove(test->client_source);
+	test->client_source = NULL;
+
+	weston_log_scope_printf(test->log, "Test thread reaped.\n");
+}
+
+static int
+handle_client_thread_event(int fd, uint32_t mask, void *data_)
+{
+	struct weston_test *test = data_;
+
+	weston_log_scope_printf(test->log,
+				"Received thread event mask 0x%x\n", mask);
+
+	if (mask != WL_EVENT_HANGUP)
+		weston_log("%s: unexpected event %u\n", __func__, mask);
+
+	client_thread_join(test);
+	weston_compositor_exit(test->compositor);
+
+	return 0;
+}
+
+static int
+create_client_thread(struct weston_test *test, struct wet_testsuite_data *data)
+{
+	struct wl_event_loop *loop;
+	int pipefd[2] = { -1, -1 };
+	sigset_t saved;
+	sigset_t blocked;
+	int ret;
+
+	weston_log_scope_printf(test->log, "Creating a thread for running tests...\n");
+
+	if (pipe2(pipefd, O_CLOEXEC | O_NONBLOCK) < 0) {
+		weston_log("Creating pipe for a client thread failed: %s\n",
 			   strerror(errno));
-		exit(EXIT_FAILURE);
+		return -1;
 	}
 
-	test->process.pid = pid;
-	test->process.cleanup = test_client_sigchld;
-	weston_watch_process(&test->process);
+	loop = wl_display_get_event_loop(test->compositor->wl_display);
+	test->client_source = wl_event_loop_add_fd(loop, pipefd[0],
+						   WL_EVENT_READABLE,
+						   handle_client_thread_event,
+						   test);
+	close(pipefd[0]);
+
+	if (!test->client_source) {
+		weston_log("Adding client thread fd to event loop failed.\n");
+		goto out_pipe;
+	}
+
+	data->thread_event_pipe = pipefd[1];
+
+	/* Ensure we don't accidentally get signals to the thread. */
+	sigfillset(&blocked);
+	sigdelset(&blocked, SIGSEGV);
+	sigdelset(&blocked, SIGFPE);
+	sigdelset(&blocked, SIGILL);
+	sigdelset(&blocked, SIGCONT);
+	sigdelset(&blocked, SIGSYS);
+	if (pthread_sigmask(SIG_BLOCK, &blocked, &saved) != 0)
+		goto out_source;
+
+	ret = pthread_create(&test->client_thread, NULL,
+			     client_thread_routine, data);
+
+	pthread_sigmask(SIG_SETMASK, &saved, NULL);
+
+	if (ret != 0) {
+		weston_log("Creating client thread failed: %s (%d)\n",
+			   strerror(ret), ret);
+		goto out_source;
+	}
+
+	return 0;
+
+out_source:
+	data->thread_event_pipe = -1;
+	wl_event_source_remove(test->client_source);
+	test->client_source = NULL;
+
+out_pipe:
+	close(pipefd[1]);
+
+	return -1;
+}
+
+static void
+idle_launch_testsuite(void *test_)
+{
+	struct weston_test *test = test_;
+	struct wet_testsuite_data *data = weston_compositor_get_test_data(test->compositor);
+
+	if (!data)
+		return;
+
+	switch (data->type) {
+	case TEST_TYPE_CLIENT:
+		if (create_client_thread(test, data) < 0) {
+			weston_log("Error: creating client thread for test suite failed.\n");
+			weston_compositor_exit_with_code(test->compositor,
+							 RESULT_HARD_ERROR);
+		}
+		break;
+
+	case TEST_TYPE_PLUGIN:
+		data->compositor = test->compositor;
+		weston_log_scope_printf(test->log,
+					"Running tests from idle handler...\n");
+		data->run(data);
+		weston_compositor_exit(test->compositor);
+		break;
+
+	case TEST_TYPE_STANDALONE:
+		weston_log("Error: unknown test internal type %d.\n",
+			   data->type);
+		weston_compositor_exit_with_code(test->compositor,
+						 RESULT_HARD_ERROR);
+	}
+}
+
+static void
+handle_compositor_destroy(struct wl_listener *listener,
+			  void *weston_compositor)
+{
+	struct weston_test *test;
+
+	test = wl_container_of(listener, test, destroy_listener);
+
+	wl_list_remove(&test->destroy_listener.link);
+
+	if (test->client_source) {
+		weston_log_scope_printf(test->log, "Cancelling client thread...\n");
+		pthread_cancel(test->client_thread);
+		client_thread_join(test);
+	}
+
+	if (test->is_seat_initialized)
+		test_seat_release(test);
+
+	wl_list_remove(&test->layer.view_list.link);
+	wl_list_remove(&test->layer.link);
+
+	weston_log_scope_destroy(test->log);
+	free(test);
 }
 
 WL_EXPORT int
@@ -678,19 +647,35 @@ wet_module_init(struct weston_compositor *ec,
 	if (test == NULL)
 		return -1;
 
+	if (!weston_compositor_add_destroy_listener_once(ec,
+							 &test->destroy_listener,
+							 handle_compositor_destroy)) {
+		free(test);
+		return 0;
+	}
+
 	test->compositor = ec;
 	weston_layer_init(&test->layer, ec);
 	weston_layer_set_position(&test->layer, WESTON_LAYER_POSITION_CURSOR - 1);
 
+	test->log = weston_compositor_add_log_scope(ec, "test-harness-plugin",
+					"weston-test plugin's own actions",
+					NULL, NULL, NULL);
+
 	if (wl_global_create(ec->wl_display, &weston_test_interface, 1,
 			     test, bind_test) == NULL)
-		return -1;
+		goto out_free;
 
 	if (test_seat_init(test) == -1)
-		return -1;
+		goto out_free;
 
 	loop = wl_display_get_event_loop(ec->wl_display);
-	wl_event_loop_add_idle(loop, idle_launch_client, test);
+	wl_event_loop_add_idle(loop, idle_launch_testsuite, test);
 
 	return 0;
+
+out_free:
+	wl_list_remove(&test->destroy_listener.link);
+	free(test);
+	return -1;
 }

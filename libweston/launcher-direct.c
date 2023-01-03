@@ -133,6 +133,9 @@ setup_tty(struct launcher_direct *launcher, int tty)
 	char tty_device[32] ="<stdin>";
 	int ret, kd_mode;
 
+	if (geteuid() != 0)
+		return -1;
+
 	if (tty == 0) {
 		launcher->tty = dup(tty);
 		if (launcher->tty == -1) {
@@ -166,7 +169,6 @@ setup_tty(struct launcher_direct *launcher, int tty)
 	if (kd_mode != KD_TEXT) {
 		weston_log("%s is already in graphics mode, "
 			   "is another display server running?\n", tty_device);
-		goto err_close;
 	}
 
 	ioctl(launcher->tty, VT_ACTIVATE, minor(buf.st_rdev));
@@ -215,8 +217,10 @@ setup_tty(struct launcher_direct *launcher, int tty)
 	loop = wl_display_get_event_loop(launcher->compositor->wl_display);
 	launcher->vt_source =
 		wl_event_loop_add_signal(loop, SIGRTMIN, vt_handler, launcher);
-	if (!launcher->vt_source)
+	if (!launcher->vt_source) {
+		weston_log("failed to add SIGRTMIN signal\n");
 		goto err_close;
+	}
 
 	return 0;
 
@@ -232,25 +236,20 @@ launcher_direct_open(struct weston_launcher *launcher_base, const char *path, in
 	struct stat s;
 	int fd;
 
-	/**
-	 * DRM Master FD is derived by SDM backend, so it can have
-	 * permission to commit.
-	 */
-	if (strcmp(path, "/dev/dri/card0") == 0) {
-		fd = get_drm_master_fd();
-		if (fd == -1) {
-			weston_log("%s: DRM device path=%s \n", __func__, path);
-			fd = open(path, flags | O_CLOEXEC);
-		}
-		if (fd == -1)
-			return -1;
-	} else {
-		fd = open(path, flags | O_CLOEXEC);
-		if (fd == -1)
-			return -1;
+	fd = open(path, flags | O_CLOEXEC);
+	if (fd == -1) {
+		weston_log("couldn't open: %s! error=%s\n", path, strerror(errno));
+		return -1;
+	}
+
+	if (geteuid() != 0) {
+		weston_log("WARNING! Succeeded opening %s as non-root user."
+			   " This implies your device can be spied on.\n",
+			   path);
 	}
 
 	if (fstat(fd, &s) == -1) {
+		weston_log("couldn't fstat: %s! error=%s\n", path, strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -295,7 +294,8 @@ launcher_direct_restore(struct weston_launcher *launcher_base)
 
 	mode.mode = VT_AUTO;
 	if (ioctl(launcher->tty, VT_SETMODE, &mode) < 0)
-		weston_log("could not reset vt handling\n");
+		weston_log("could not reset vt handling! error=%s\n",
+			   strerror(errno));
 }
 
 static int
@@ -310,20 +310,28 @@ launcher_direct_connect(struct weston_launcher **out, struct weston_compositor *
 			int tty, const char *seat_id, bool sync_drm)
 {
 	struct launcher_direct *launcher;
-
-	if (geteuid() != 0)
-		return -EINVAL;
+	struct stat buf;
 
 	launcher = zalloc(sizeof(*launcher));
-	if (launcher == NULL)
+	if (launcher == NULL) {
+		weston_log("failed to alloc for launcher\n");
 		return -ENOMEM;
+	}
 
 	launcher->base.iface = &launcher_direct_iface;
 	launcher->compositor = compositor;
 
-	if (setup_tty(launcher, tty) == -1) {
-		free(launcher);
-		return -1;
+	/* Checking the existance of /dev/tty0 and verifying it's a TTY
+	 * device, as kernels compiled with CONFIG_VT=0 do not create these
+	 * devices. */
+	if (stat("/dev/tty0", &buf) == 0 &&
+	    strcmp("seat0", seat_id) == 0 && major(buf.st_rdev) == TTY_MAJOR) {
+		if (setup_tty(launcher, tty) == -1) {
+			free(launcher);
+			return -1;
+		}
+	} else {
+		launcher->tty = -1;
 	}
 
 	* (struct launcher_direct **) out = launcher;
@@ -335,11 +343,11 @@ launcher_direct_destroy(struct weston_launcher *launcher_base)
 {
 	struct launcher_direct *launcher = wl_container_of(launcher_base, launcher, base);
 
-	launcher_direct_restore(&launcher->base);
-	wl_event_source_remove(launcher->vt_source);
-
-	if (launcher->tty >= 0)
+	if (launcher->tty >= 0) {
+		launcher_direct_restore(&launcher->base);
+		wl_event_source_remove(launcher->vt_source);
 		close(launcher->tty);
+	}
 
 	free(launcher);
 }
@@ -349,13 +357,16 @@ launcher_direct_get_vt(struct weston_launcher *base)
 {
 	struct launcher_direct *launcher = wl_container_of(base, launcher, base);
 	struct stat s;
-	if (fstat(launcher->tty, &s) < 0)
+	if (fstat(launcher->tty, &s) < 0) {
+		weston_log("couldn't fstat launcher tty: %s\n", strerror(errno));
 		return -1;
+	}
 
 	return minor(s.st_rdev);
 }
 
 const struct launcher_interface launcher_direct_iface = {
+	.name = "direct",
 	.connect = launcher_direct_connect,
 	.destroy = launcher_direct_destroy,
 	.open = launcher_direct_open,

@@ -456,21 +456,167 @@ gl_renderer_get_egl_config(struct gl_renderer *gr,
 }
 
 static void
-renderer_setup_egl_client_extensions(struct gl_renderer *gr)
+gl_renderer_set_egl_device(struct gl_renderer *gr)
+{
+	EGLAttrib attrib;
+	const char *extensions;
+
+	assert(gr->has_device_query);
+
+	if (!gr->query_display_attrib(gr->egl_display, EGL_DEVICE_EXT, &attrib)) {
+		weston_log("failed to get EGL device\n");
+		gl_renderer_print_egl_error_state();
+		return;
+	}
+
+	gr->egl_device = (EGLDeviceEXT) attrib;
+
+	extensions = gr->query_device_string(gr->egl_device, EGL_EXTENSIONS);
+	if (!extensions) {
+		weston_log("failed to get EGL extensions\n");
+		return;
+	}
+
+	gl_renderer_log_extensions("EGL device extensions", extensions);
+
+	/* Try to query the render node using EGL_DRM_RENDER_NODE_FILE_EXT */
+	if (weston_check_egl_extension(extensions, "EGL_EXT_device_drm_render_node"))
+		gr->drm_device = gr->query_device_string(gr->egl_device,
+							 EGL_DRM_RENDER_NODE_FILE_EXT);
+
+	/* The extension is not supported by the Mesa version of the system or
+	 * the query failed. Fallback to EGL_DRM_DEVICE_FILE_EXT */
+	if (!gr->drm_device && weston_check_egl_extension(extensions, "EGL_EXT_device_drm"))
+		gr->drm_device = gr->query_device_string(gr->egl_device,
+							 EGL_DRM_DEVICE_FILE_EXT);
+
+	if (!gr->drm_device)
+		weston_log("failed to query DRM device from EGL\n");
+}
+
+int
+gl_renderer_setup_egl_display(struct gl_renderer *gr,
+			      void *native_display)
+{
+	gr->egl_display = NULL;
+
+	/* extension_suffix is supported */
+	if (gr->has_platform_base)
+		gr->egl_display = gr->get_platform_display(gr->platform,
+							   native_display,
+							   NULL);
+
+	if (!gr->egl_display) {
+		weston_log("warning: either no EGL_EXT_platform_base "
+			   "support or specific platform support; "
+			   "falling back to eglGetDisplay.\n");
+		gr->egl_display = eglGetDisplay(native_display);
+	}
+
+	if (!gr->egl_display) {
+		weston_log("failed to create display\n");
+		return -1;
+	}
+
+	if (!eglInitialize(gr->egl_display, NULL, NULL)) {
+		weston_log("failed to initialize display\n");
+		goto fail;
+	}
+
+	if (gr->has_device_query)
+		gl_renderer_set_egl_device(gr);
+
+	return 0;
+
+fail:
+	gl_renderer_print_egl_error_state();
+	return -1;
+}
+
+static const char *
+platform_to_extension(EGLenum platform)
+{
+	switch (platform) {
+	case EGL_PLATFORM_GBM_KHR:
+		return "gbm";
+	case EGL_PLATFORM_WAYLAND_KHR:
+		return "wayland";
+	case EGL_PLATFORM_X11_KHR:
+		return "x11";
+	case EGL_PLATFORM_SURFACELESS_MESA:
+		return "surfaceless";
+	default:
+		assert(0 && "bad EGL platform enum");
+	}
+}
+
+/** Checks for EGL client extensions (i.e. independent of EGL display),
+ * loads the function pointers, and checks if the platform is supported.
+ *
+ * \param gr The OpenGL renderer
+ * \return 0 for success, -1 if platform is unsupported
+ *
+ * This function checks whether a specific platform_* extension is supported
+ * by EGL by checking in order "EGL_KHR_platform_foo", "EGL_EXT_platform_foo",
+ * and "EGL_MESA_platform_foo" in order, for some platform "foo".
+ */
+int
+gl_renderer_setup_egl_client_extensions(struct gl_renderer *gr)
 {
 	const char *extensions;
+	const char *extension_suffix = platform_to_extension(gr->platform);
+	char s[64];
 
 	extensions = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
 	if (!extensions) {
 		weston_log("Retrieving EGL client extension string failed.\n");
-		return;
+		return 0;
 	}
 
-	if (weston_check_egl_extension(extensions, "EGL_EXT_platform_base"))
+	gl_renderer_log_extensions("EGL client extensions",
+				   extensions);
+
+	if (weston_check_egl_extension(extensions, "EGL_EXT_device_query")) {
+		gr->query_display_attrib =
+			(void *) eglGetProcAddress("eglQueryDisplayAttribEXT");
+		gr->query_device_string =
+			(void *) eglGetProcAddress("eglQueryDeviceStringEXT");
+		gr->has_device_query = true;
+	}
+
+	if (weston_check_egl_extension(extensions, "EGL_EXT_platform_base")) {
+		gr->get_platform_display =
+			(void *) eglGetProcAddress("eglGetPlatformDisplayEXT");
 		gr->create_platform_window =
 			(void *) eglGetProcAddress("eglCreatePlatformWindowSurfaceEXT");
-	else
+		gr->has_platform_base = true;
+	} else {
 		weston_log("warning: EGL_EXT_platform_base not supported.\n");
+
+		/* Surfaceless is unusable without platform_base extension */
+		if (gr->platform == EGL_PLATFORM_SURFACELESS_MESA)
+			return -1;
+
+		return 0;
+	}
+
+	snprintf(s, sizeof s, "EGL_KHR_platform_%s", extension_suffix);
+	if (weston_check_egl_extension(extensions, s))
+		return 0;
+
+	snprintf(s, sizeof s, "EGL_EXT_platform_%s", extension_suffix);
+	if (weston_check_egl_extension(extensions, s))
+		return 0;
+
+	snprintf(s, sizeof s, "EGL_MESA_platform_%s", extension_suffix);
+	if (weston_check_egl_extension(extensions, s))
+		return 0;
+
+	/* at this point we definitely have some platform extensions but
+	 * haven't found the supplied platform, so chances are it's
+	 * not supported. */
+
+	return -1;
 }
 
 int
@@ -592,8 +738,6 @@ gl_renderer_setup_egl_extensions(struct weston_compositor *ec)
 		weston_log("warning: Disabling explicit synchronization due"
 			   "to missing EGL_KHR_wait_sync extension\n");
 	}
-
-	renderer_setup_egl_client_extensions(gr);
 
 	return 0;
 }

@@ -21,7 +21,7 @@ sys.path.append(os.path.abspath('sphinxext'))
 # -- Project information -----------------------------------------------------
 
 project = u'weston'
-copyright = u'2019, Weston community'
+copyright = u'Weston community - @VERSION@'
 author = u'Weston community '
 
 
@@ -83,6 +83,9 @@ pygments_style = None
 
 # default domain
 primary_domain = 'cpp'
+
+# To automatically number figures, tables, etc. and be able to reference them.
+numfig = True
 
 # -- Options for HTML output -------------------------------------------------
 

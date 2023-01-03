@@ -30,6 +30,18 @@
 #include "input-timestamps-helper.h"
 #include "shared/timespec-util.h"
 #include "weston-test-client-helper.h"
+#include "weston-test-fixture-compositor.h"
+
+static enum test_result_code
+fixture_setup(struct weston_test_harness *harness)
+{
+	struct compositor_setup setup;
+
+	compositor_setup_defaults(&setup);
+
+	return weston_test_harness_execute_as_client(harness, &setup);
+}
+DECLARE_FIXTURE_SETUP(fixture_setup);
 
 static const struct timespec t1 = { .tv_sec = 1, .tv_nsec = 1000001 };
 static const struct timespec t2 = { .tv_sec = 2, .tv_nsec = 2000001 };
@@ -93,6 +105,8 @@ TEST(simple_keyboard_test)
 			break;
 		}
 	}
+
+	client_destroy(client);
 }
 
 TEST(keyboard_key_event_time)
@@ -111,6 +125,8 @@ TEST(keyboard_key_event_time)
 	assert(timespec_eq(&keyboard->key_time_timespec, &t2));
 
 	input_timestamps_destroy(input_ts);
+
+	client_destroy(client);
 }
 
 TEST(keyboard_timestamps_stop_after_input_timestamps_object_is_destroyed)
@@ -129,6 +145,8 @@ TEST(keyboard_timestamps_stop_after_input_timestamps_object_is_destroyed)
 	send_key(client, &t2, 1, WL_KEYBOARD_KEY_STATE_RELEASED);
 	assert(keyboard->key_time_msec == timespec_to_msec(&t2));
 	assert(timespec_is_zero(&keyboard->key_time_timespec));
+
+	client_destroy(client);
 }
 
 TEST(keyboard_timestamps_stop_after_client_releases_wl_keyboard)
@@ -154,4 +172,8 @@ TEST(keyboard_timestamps_stop_after_client_releases_wl_keyboard)
 	assert(timespec_eq(&keyboard->input_timestamp, &t_other));
 
 	input_timestamps_destroy(input_ts);
+
+	free(client->input->keyboard);
+	client->input->keyboard = NULL;
+	client_destroy(client);
 }

@@ -151,7 +151,7 @@ init_egl(struct display *display, struct window *window)
 		EGL_NONE
 	};
 
-	EGLint major, minor, n, count, i, size;
+	EGLint major, minor, n, count, i;
 	EGLConfig *configs;
 	EGLBoolean ret;
 
@@ -179,9 +179,13 @@ init_egl(struct display *display, struct window *window)
 	assert(ret && n >= 1);
 
 	for (i = 0; i < n; i++) {
+		EGLint buffer_size, red_size;
 		eglGetConfigAttrib(display->egl.dpy,
-				   configs[i], EGL_BUFFER_SIZE, &size);
-		if (window->buffer_size == size) {
+				   configs[i], EGL_BUFFER_SIZE, &buffer_size);
+		eglGetConfigAttrib(display->egl.dpy,
+				   configs[i], EGL_RED_SIZE, &red_size);
+		if ((window->buffer_size == 0 ||
+		     window->buffer_size == buffer_size) && red_size < 10) {
 			display->egl.conf = configs[i];
 			break;
 		}
@@ -258,6 +262,19 @@ init_gl(struct window *window)
 	GLuint frag, vert;
 	GLuint program;
 	GLint status;
+	EGLBoolean ret;
+
+	window->native = wl_egl_window_create(window->surface,
+					      window->geometry.width,
+					      window->geometry.height);
+	window->egl_surface =
+		weston_platform_create_egl_surface(window->display->egl.dpy,
+						   window->display->egl.conf,
+						   window->native, NULL);
+
+	ret = eglMakeCurrent(window->display->egl.dpy, window->egl_surface,
+			     window->egl_surface, window->display->egl.ctx);
+	assert(ret == EGL_TRUE);
 
 	frag = create_shader(window, frag_shader_text, GL_FRAGMENT_SHADER);
 	vert = create_shader(window, vert_shader_text, GL_VERTEX_SHADER);
@@ -358,18 +375,8 @@ static void
 create_surface(struct window *window)
 {
 	struct display *display = window->display;
-	EGLBoolean ret;
 
 	window->surface = wl_compositor_create_surface(display->compositor);
-
-	window->native =
-		wl_egl_window_create(window->surface,
-				     window->geometry.width,
-				     window->geometry.height);
-	window->egl_surface =
-		weston_platform_create_egl_surface(display->egl.dpy,
-						   display->egl.conf,
-						   window->native, NULL);
 
 	window->xdg_surface = xdg_wm_base_get_xdg_surface(display->wm_base,
 							  window->surface);
@@ -382,22 +389,19 @@ create_surface(struct window *window)
 				  &xdg_toplevel_listener, window);
 
 	xdg_toplevel_set_title(window->xdg_toplevel, "simple-egl");
+	xdg_toplevel_set_app_id(window->xdg_toplevel,
+			"org.freedesktop.weston.simple-egl");
+
+	if (window->fullscreen)
+		xdg_toplevel_set_fullscreen(window->xdg_toplevel, NULL);
+	else if (window->maximized)
+		xdg_toplevel_set_maximized(window->xdg_toplevel);
 
 	window->wait_for_configure = true;
 	wl_surface_commit(window->surface);
 
-	ret = eglMakeCurrent(window->display->egl.dpy, window->egl_surface,
-			     window->egl_surface, window->display->egl.ctx);
-	assert(ret == EGL_TRUE);
-
 	if (!window->frame_sync)
 		eglSwapInterval(display->egl.dpy, 0);
-
-	if (!display->wm_base)
-		return;
-
-	if (window->fullscreen)
-		xdg_toplevel_set_fullscreen(window->xdg_toplevel, NULL);
 }
 
 static void
@@ -484,7 +488,10 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 	glUniformMatrix4fv(window->gl.rotation_uniform, 1, GL_FALSE,
 			   (GLfloat *) rotation);
 
-	glClearColor(0.0, 0.0, 0.0, 0.5);
+	if (window->opaque || window->fullscreen)
+		glClearColor(0.0, 0.0, 0.0, 1);
+	else
+		glClearColor(0.0, 0.0, 0.0, 0.5);
 	glClear(GL_COLOR_BUFFER_BIT);
 
 	glVertexAttribPointer(window->gl.pos, 2, GL_FLOAT, GL_FALSE, 0, verts);
@@ -797,6 +804,7 @@ usage(int error_code)
 	fprintf(stderr, "Usage: simple-egl [OPTIONS]\n\n"
 		"  -d <us>\tBuffer swap delay in microseconds\n"
 		"  -f\tRun in fullscreen mode\n"
+		"  -m\tRun in maximized mode\n"
 		"  -o\tCreate an opaque surface\n"
 		"  -s\tUse a 16 bpp EGL config\n"
 		"  -b\tDon't sync to compositor redraw (eglSwapInterval 0)\n"
@@ -818,7 +826,7 @@ main(int argc, char **argv)
 	window.geometry.width  = 250;
 	window.geometry.height = 250;
 	window.window_size = window.geometry;
-	window.buffer_size = 32;
+	window.buffer_size = 0;
 	window.frame_sync = 1;
 	window.delay = 0;
 
@@ -827,6 +835,8 @@ main(int argc, char **argv)
 			window.delay = atoi(argv[++i]);
 		else if (strcmp("-f", argv[i]) == 0)
 			window.fullscreen = 1;
+		else if (strcmp("-m", argv[i]) == 0)
+			window.maximized = 1;
 		else if (strcmp("-o", argv[i]) == 0)
 			window.opaque = 1;
 		else if (strcmp("-s", argv[i]) == 0)
@@ -848,9 +858,24 @@ main(int argc, char **argv)
 
 	wl_display_roundtrip(display.display);
 
+	if (!display.wm_base) {
+		fprintf(stderr, "xdg-shell support required. simple-egl exiting\n");
+		goto out_no_xdg_shell;
+	}
+
 	init_egl(&display, &window);
 	create_surface(&window);
-	init_gl(&window);
+
+	/* we already have wait_for_configure set after create_surface() */
+	while (running && ret != -1 && window.wait_for_configure) {
+		ret = wl_display_dispatch(display.display);
+
+		/* wait until xdg_surface::configure acks the new dimensions */
+		if (window.wait_for_configure)
+			continue;
+
+		init_gl(&window);
+	}
 
 	display.cursor_surface =
 		wl_compositor_create_surface(display.compositor);
@@ -860,17 +885,9 @@ main(int argc, char **argv)
 	sigint.sa_flags = SA_RESETHAND;
 	sigaction(SIGINT, &sigint, NULL);
 
-	/* The mainloop here is a little subtle.  Redrawing will cause
-	 * EGL to read events so we can just call
-	 * wl_display_dispatch_pending() to handle any events that got
-	 * queued up as a side effect. */
 	while (running && ret != -1) {
-		if (window.wait_for_configure) {
-			ret = wl_display_dispatch(display.display);
-		} else {
-			ret = wl_display_dispatch_pending(display.display);
-			redraw(&window, NULL, 0);
-		}
+		ret = wl_display_dispatch_pending(display.display);
+		redraw(&window, NULL, 0);
 	}
 
 	fprintf(stderr, "simple-egl exiting\n");
@@ -879,8 +896,24 @@ main(int argc, char **argv)
 	fini_egl(&display);
 
 	wl_surface_destroy(display.cursor_surface);
+out_no_xdg_shell:
 	if (display.cursor_theme)
 		wl_cursor_theme_destroy(display.cursor_theme);
+
+	if (display.shm)
+		wl_shm_destroy(display.shm);
+
+	if (display.pointer)
+		wl_pointer_destroy(display.pointer);
+
+	if (display.keyboard)
+		wl_keyboard_destroy(display.keyboard);
+
+	if (display.touch)
+		wl_touch_destroy(display.touch);
+
+	if (display.seat)
+		wl_seat_destroy(display.seat);
 
 	if (display.wm_base)
 		xdg_wm_base_destroy(display.wm_base);

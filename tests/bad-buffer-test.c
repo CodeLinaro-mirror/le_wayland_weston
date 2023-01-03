@@ -34,6 +34,18 @@
 
 #include "shared/os-compatibility.h"
 #include "weston-test-client-helper.h"
+#include "weston-test-fixture-compositor.h"
+
+static enum test_result_code
+fixture_setup(struct weston_test_harness *harness)
+{
+	struct compositor_setup setup;
+
+	compositor_setup_defaults(&setup);
+
+	return weston_test_harness_execute_as_client(harness, &setup);
+}
+DECLARE_FIXTURE_SETUP(fixture_setup);
 
 /* These three functions are copied from shared/os-compatibility.c in order to
  * behave like older clients, and allow ftruncate() to shrink the file’s size,
@@ -158,6 +170,7 @@ TEST(test_truncated_shm_file)
 	struct client *client;
 	struct wl_buffer *bad_buffer;
 	struct wl_surface *surface;
+	struct wl_callback *frame_cb;
 	int frame;
 
 	client = create_client_and_test_surface(46, 76, 111, 134);
@@ -168,10 +181,14 @@ TEST(test_truncated_shm_file)
 
 	wl_surface_attach(surface, bad_buffer, 0, 0);
 	wl_surface_damage(surface, 0, 0, 200, 200);
-	frame_callback_set(surface, &frame);
+	frame_cb = frame_callback_set(surface, &frame);
 	wl_surface_commit(surface);
-	frame_callback_wait_nofail(client, &frame);
+	if (!frame_callback_wait_nofail(client, &frame))
+		wl_callback_destroy(frame_cb);
 
 	expect_protocol_error(client, &wl_buffer_interface,
 			      WL_SHM_ERROR_INVALID_FD);
+
+	wl_buffer_destroy(bad_buffer);
+	client_destroy(client);
 }

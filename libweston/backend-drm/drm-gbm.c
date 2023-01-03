@@ -98,18 +98,19 @@ drm_backend_create_gl_renderer(struct drm_backend *b)
 		fallback_format_for(b->gbm_format),
 		0,
 	};
-	unsigned n_formats = 2;
+	struct gl_renderer_display_options options = {
+		.egl_platform = EGL_PLATFORM_GBM_KHR,
+		.egl_native_display = b->gbm,
+		.egl_surface_type = EGL_WINDOW_BIT,
+		.drm_formats = format,
+		.drm_formats_count = 2,
+	};
 
 	if (format[1])
-		n_formats = 3;
-	if (gl_renderer->display_create(b->compositor,
-					EGL_PLATFORM_GBM_KHR,
-					(void *)b->gbm,
-					EGL_WINDOW_BIT,
-					format,
-					n_formats) < 0) {
+		options.drm_formats_count = 3;
+
+	if (gl_renderer->display_create(b->compositor, &options) < 0)
 		return -1;
-	}
 
 	return 0;
 }
@@ -124,6 +125,7 @@ init_egl(struct drm_backend *b)
 
 	if (drm_backend_create_gl_renderer(b) < 0) {
 		gbm_device_destroy(b->gbm);
+		b->gbm = NULL;
 		return -1;
 	}
 
@@ -176,6 +178,49 @@ err:
 	return -1;
 }
 
+static void
+create_gbm_surface(struct gbm_device *gbm, struct drm_output *output)
+{
+	struct weston_mode *mode = output->base.current_mode;
+	struct drm_plane *plane = output->scanout_plane;
+	struct weston_drm_format *fmt;
+	const uint64_t *modifiers;
+	unsigned int num_modifiers;
+
+	fmt = weston_drm_format_array_find_format(&plane->formats,
+						  output->gbm_format);
+	if (!fmt) {
+		weston_log("format 0x%x not supported by output %s\n",
+			   output->gbm_format, output->base.name);
+		return;
+	}
+
+#ifdef HAVE_GBM_MODIFIERS
+	if (!weston_drm_format_has_modifier(fmt, DRM_FORMAT_MOD_INVALID)) {
+		modifiers = weston_drm_format_get_modifiers(fmt, &num_modifiers);
+		output->gbm_surface =
+			gbm_surface_create_with_modifiers(gbm,
+							  mode->width, mode->height,
+							  output->gbm_format,
+							  modifiers, num_modifiers);
+	}
+#endif
+
+	/* We may allocate with no modifiers in the following situations:
+	 *
+	 * 1. old GBM version, so HAVE_GBM_MODIFIERS is false;
+	 * 2. the KMS driver does not support modifiers;
+	 * 3. if allocating with modifiers failed, what can happen when the KMS
+	 *    display device supports modifiers but the GBM driver does not,
+	 *    e.g. the old i915 Mesa driver.
+	 */
+	if (!output->gbm_surface)
+		output->gbm_surface = gbm_surface_create(gbm,
+							 mode->width, mode->height,
+							 output->gbm_format,
+							 output->gbm_bo_flags);
+}
+
 /* Init output state that depends on gl or gbm */
 int
 drm_output_init_egl(struct drm_output *output, struct drm_backend *b)
@@ -184,59 +229,23 @@ drm_output_init_egl(struct drm_output *output, struct drm_backend *b)
 		output->gbm_format,
 		fallback_format_for(output->gbm_format),
 	};
-	unsigned n_formats = 1;
-	struct weston_mode *mode = output->base.current_mode;
-	struct drm_plane *plane = output->scanout_plane;
-	unsigned int i;
+	struct gl_renderer_output_options options = {
+		.drm_formats = format,
+		.drm_formats_count = 1,
+	};
 
 	assert(output->gbm_surface == NULL);
-
-	for (i = 0; i < plane->count_formats; i++) {
-		if (plane->formats[i].format == output->gbm_format)
-			break;
-	}
-
-	if (i == plane->count_formats) {
-		weston_log("format 0x%x not supported by output %s\n",
-			   output->gbm_format, output->base.name);
-		return -1;
-	}
-
-#ifdef HAVE_GBM_MODIFIERS
-	if (plane->formats[i].count_modifiers > 0) {
-		output->gbm_surface =
-			gbm_surface_create_with_modifiers(b->gbm,
-							  mode->width,
-							  mode->height,
-							  output->gbm_format,
-							  plane->formats[i].modifiers,
-							  plane->formats[i].count_modifiers);
-	}
-
-	/* If allocating with modifiers fails, try again without. This can
-	 * happen when the KMS display device supports modifiers but the
-	 * GBM driver does not, e.g. the old i915 Mesa driver. */
-	if (!output->gbm_surface)
-#endif
-	{
-		output->gbm_surface =
-		    gbm_surface_create(b->gbm, mode->width, mode->height,
-				       output->gbm_format,
-				       output->gbm_bo_flags);
-	}
-
+	create_gbm_surface(b->gbm, output);
 	if (!output->gbm_surface) {
 		weston_log("failed to create gbm surface\n");
 		return -1;
 	}
 
-	if (format[1])
-		n_formats = 2;
-	if (gl_renderer->output_window_create(&output->base,
-					      (EGLNativeWindowType)output->gbm_surface,
-					      output->gbm_surface,
-					      format,
-					      n_formats) < 0) {
+	if (options.drm_formats[1])
+		options.drm_formats_count = 2;
+	options.window_for_legacy = (EGLNativeWindowType) output->gbm_surface;
+	options.window_for_platform = output->gbm_surface;
+	if (gl_renderer->output_window_create(&output->base, &options) < 0) {
 		weston_log("failed to create gl renderer output state\n");
 		gbm_surface_destroy(output->gbm_surface);
 		output->gbm_surface = NULL;
@@ -258,10 +267,7 @@ drm_output_fini_egl(struct drm_output *output)
 	if (!b->shutting_down &&
 	    output->scanout_plane->state_cur->fb &&
 	    output->scanout_plane->state_cur->fb->type == BUFFER_GBM_SURFACE) {
-		drm_plane_state_free(output->scanout_plane->state_cur, true);
-		output->scanout_plane->state_cur =
-			drm_plane_state_alloc(NULL, output->scanout_plane);
-		output->scanout_plane->state_cur->complete = true;
+		drm_plane_reset_state(output->scanout_plane);
 	}
 
 	gl_renderer->output_destroy(&output->base);

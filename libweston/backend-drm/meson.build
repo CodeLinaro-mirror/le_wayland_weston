@@ -53,6 +53,10 @@ if get_option('renderer-gl')
 		#config_h.set('HAVE_GBM_FD_IMPORT', '1')
 	#endif
 	deps_drm += dep_gbm
+	if not dep_egl.found()
+		error('drm-backend + gl-renderer requires egl which was not found. Or, you can use \'-Dbackend-drm=false\' or \'-Drenderer-gl=false\'.')
+	endif
+	deps_drm += dep_egl
 	srcs_drm += 'drm-gbm.c'
 	config_h.set('BUILD_DRM_GBM', '1')
 endif
@@ -71,9 +75,9 @@ if get_option('backend-drm-screencast-vaapi')
 	config_h.set('BUILD_VAAPI_RECORDER', '1')
 endif
 
-if get_option('remoting')
+if get_option('remoting') or get_option('pipewire')
 	if not get_option('renderer-gl')
-		warning('DRM virtual requires renderer-gl.')
+		error('DRM virtual requires renderer-gl.')
 	endif
 	srcs_drm += 'drm-virtual.c'
 	config_h.set('BUILD_DRM_VIRTUAL', '1')

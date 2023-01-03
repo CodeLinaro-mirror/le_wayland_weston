@@ -138,6 +138,10 @@ weston_head_set_physical_size(struct weston_head *head,
 void
 weston_head_set_subpixel(struct weston_head *head,
 			 enum wl_output_subpixel sp);
+
+void
+weston_head_set_transform(struct weston_head *head, uint32_t transform);
+
 /* weston_output */
 
 void
@@ -157,6 +161,10 @@ void
 weston_output_finish_frame(struct weston_output *output,
 			   const struct timespec *stamp,
 			   uint32_t presented_flags);
+
+void
+weston_output_repaint_failed(struct weston_output *output);
+
 int
 weston_output_mode_set_native(struct weston_output *output,
 			      struct weston_mode *mode,
@@ -165,6 +173,10 @@ void
 weston_output_transform_coordinate(struct weston_output *output,
 				   double device_x, double device_y,
 				   double *x, double *y);
+
+void
+weston_output_region_from_global(struct weston_output *output,
+				 pixman_region32_t *region);
 
 /* weston_seat */
 

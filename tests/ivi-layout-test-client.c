@@ -34,6 +34,20 @@
 #include "weston-test-client-helper.h"
 #include "ivi-application-client-protocol.h"
 #include "ivi-test.h"
+#include "weston-test-fixture-compositor.h"
+
+static enum test_result_code
+fixture_setup(struct weston_test_harness *harness)
+{
+	struct compositor_setup setup;
+
+	compositor_setup_defaults(&setup);
+	setup.shell = SHELL_IVI;
+	setup.extra_module = "test-ivi-layout.so";
+
+	return weston_test_harness_execute_as_client(harness, &setup);
+}
+DECLARE_FIXTURE_SETUP(fixture_setup);
 
 struct runner {
 	struct client *client;
@@ -171,9 +185,6 @@ ivi_window_destroy(struct ivi_window *wnd)
 /******************************** tests ********************************/
 
 /*
- * This is a test program, launched by ivi-layout-test-plugin.c. Each TEST()
- * is forked and exec'd as usual with the weston-test-runner framework.
- *
  * These tests make use of weston_test_runner global interface exposed by
  * ivi-layout-test-plugin.c. This allows these tests to trigger compositor-side
  * checks.
@@ -230,6 +241,8 @@ TEST_P(ivi_layout_runner, basic_test_names)
 
 	ivi_window_destroy(wnd);
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }
 
 TEST(ivi_layout_surface_create)
@@ -256,6 +269,8 @@ TEST(ivi_layout_surface_create)
 
 	ivi_window_destroy(winds[1]);
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }
 
 TEST_P(commit_changes_after_properties_set_surface_destroy, surface_property_commit_changes_test_names)
@@ -280,6 +295,8 @@ TEST_P(commit_changes_after_properties_set_surface_destroy, surface_property_com
 	runner_run(runner, "ivi_layout_commit_changes");
 
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }
 
 TEST(get_surface_after_destroy_ivi_surface)
@@ -302,6 +319,8 @@ TEST(get_surface_after_destroy_ivi_surface)
 	wl_surface_destroy(wnd->wl_surface);
 	free(wnd);
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }
 
 TEST(get_surface_after_destroy_wl_surface)
@@ -324,6 +343,8 @@ TEST(get_surface_after_destroy_wl_surface)
 	ivi_surface_destroy(wnd->ivi_surface);
 	free(wnd);
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }
 
 TEST_P(ivi_layout_layer_render_order_runner, render_order_test_names)
@@ -352,6 +373,8 @@ TEST_P(ivi_layout_layer_render_order_runner, render_order_test_names)
 	ivi_window_destroy(winds[1]);
 	ivi_window_destroy(winds[2]);
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }
 
 TEST(destroy_surface_after_layer_render_order)
@@ -381,6 +404,8 @@ TEST(destroy_surface_after_layer_render_order)
 	ivi_window_destroy(winds[0]);
 	ivi_window_destroy(winds[2]);
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }
 
 TEST(commit_changes_after_render_order_set_surface_destroy)
@@ -411,6 +436,8 @@ TEST(commit_changes_after_render_order_set_surface_destroy)
 	ivi_window_destroy(winds[0]);
 	ivi_window_destroy(winds[2]);
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }
 
 TEST(ivi_layout_surface_configure_notification)
@@ -446,6 +473,8 @@ TEST(ivi_layout_surface_configure_notification)
 	buffer_destroy(buffer);
 	ivi_window_destroy(wind);
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }
 
 TEST(ivi_layout_surface_create_notification)
@@ -471,6 +500,8 @@ TEST(ivi_layout_surface_create_notification)
 
 	ivi_window_destroy(wind);
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }
 
 TEST(ivi_layout_surface_remove_notification)
@@ -495,4 +526,6 @@ TEST(ivi_layout_surface_remove_notification)
 	runner_run(runner, "surface_remove_notification_p3");
 
 	runner_destroy(runner);
+	ivi_application_destroy(iviapp);
+	client_destroy(client);
 }

@@ -5,6 +5,7 @@ if get_option('shell-desktop')
 		'shell.c',
 		'exposay.c',
 		'input-panel.c',
+		'../shared/shell-utils.c',
 		weston_desktop_shell_server_protocol_h,
 		weston_desktop_shell_protocol_c,
 		input_method_unstable_v1_server_protocol_h,
@@ -24,7 +25,8 @@ if get_option('shell-desktop')
 		dependencies: deps_shell_desktop,
 		name_prefix: '',
 		install: true,
-		install_dir: dir_module_weston
+		install_dir: dir_module_weston,
+		install_rpath: '$ORIGIN'
 	)
 	env_modmap += 'desktop-shell.so=@0@;'.format(plugin_shell_desktop.full_path())
 endif

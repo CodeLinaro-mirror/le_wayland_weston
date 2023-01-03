@@ -4,7 +4,7 @@ deps_libweston = [
 	dep_pixman,
 	dep_libm,
 	dep_libdl,
-	dep_libdrm_headers,
+	dep_libdrm,
 	dep_xkbcommon,
 	dep_matrix_c,
         dep_gbm
@@ -14,9 +14,12 @@ srcs_libweston = [
 	'animation.c',
 	'bindings.c',
 	'clipboard.c',
+	'color.c',
+	'color-noop.c',
 	'compositor.c',
 	'content-protection.c',
 	'data-device.c',
+	'drm-formats.c',
 	'input.c',
 	'linux-dmabuf.c',
 	'linux-explicit-synchronization.c',
@@ -192,6 +195,16 @@ if get_option('launcher-logind')
 		systemd_dep,
 	]
 endif
+if get_option('launcher-libseat')
+	libseat_dep = dependency('libseat', version: '>= 0.4')
+	config_h.set('HAVE_LIBSEAT', '1')
+	srcs_session_helper += [
+		'launcher-libseat.c',
+	]
+	deps_session_helper += [
+		libseat_dep,
+	]
+endif
 
 lib_session_helper = static_library(
 	'session-helper',
@@ -226,7 +239,8 @@ dep_vertex_clipping = declare_dependency(
 	include_directories: include_directories('.')
 )
 
-if get_option('weston-launch')
+if get_option('deprecated-weston-launch')
+	warning('weston-launch is deprecated and will be removed in a future release. Please migrate to libseat and seatd-launch.')
 	dep_pam = cc.find_library('pam')
 
 	if not cc.has_function('pam_open_session', dependencies: dep_pam)
@@ -244,6 +258,7 @@ if get_option('weston-launch')
 	meson.add_install_script('echo', 'REMINDER: You are installing weston-launch, please make it setuid-root.')
 endif
 
+subdir('color-lcms')
 subdir('renderer-gl')
 subdir('backend-drm')
 subdir('backend-sdm')

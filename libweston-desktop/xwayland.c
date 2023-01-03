@@ -193,6 +193,17 @@ weston_desktop_xwayland_surface_destroy(struct weston_desktop_surface *dsurface,
 	free(surface);
 }
 
+static void
+weston_desktop_xwayland_surface_close(struct weston_desktop_surface *dsurface,
+					void *user_data)
+{
+	struct weston_desktop_xwayland_surface *surface = user_data;
+	struct weston_surface *wsurface =
+		weston_desktop_surface_get_surface(surface->surface);
+
+	surface->client_interface->send_close(wsurface);
+}
+
 static bool
 weston_desktop_xwayland_surface_get_maximized(struct weston_desktop_surface *dsurface,
 					      void *user_data)
@@ -219,6 +230,7 @@ static const struct weston_desktop_surface_implementation weston_desktop_xwaylan
 	.get_fullscreen = weston_desktop_xwayland_surface_get_fullscreen,
 
 	.destroy = weston_desktop_xwayland_surface_destroy,
+	.close = weston_desktop_xwayland_surface_close,
 };
 
 static void
@@ -422,4 +434,20 @@ weston_desktop_xwayland_init(struct weston_desktop *desktop)
 
 	compositor->xwayland = xwayland;
 	compositor->xwayland_interface = &weston_desktop_xwayland_interface;
+}
+
+void
+weston_desktop_xwayland_fini(struct weston_desktop *desktop)
+{
+	struct weston_compositor *compositor = weston_desktop_get_compositor(desktop);
+	struct weston_desktop_xwayland *xwayland;
+
+	xwayland = compositor->xwayland;
+
+	weston_desktop_client_destroy(xwayland->client);
+	weston_layer_fini(&xwayland->layer);
+	free(xwayland);
+
+	compositor->xwayland = NULL;
+	compositor->xwayland_interface = NULL;
 }

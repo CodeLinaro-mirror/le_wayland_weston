@@ -20,17 +20,17 @@ instance can be brought up much more later, but in the same time logging can
 take place much earlier without the need of a compositor instance.
 
 Instantiation of the :type:`weston_log_context` object takes place using
-:func:`weston_log_ctx_compositor_create()` and clean-up/destroy with
-:func:`weston_log_ctx_compositor_destroy()`.
+:func:`weston_log_ctx_create()` and clean-up/destroy with
+:func:`weston_log_ctx_destroy()` or :func:`weston_log_ctx_compositor_destroy()`.
 
 Log scopes
 ----------
 
-A scope represents a source for a data stream (i.e., a producer). You'll require
-one as a way to generate data. Creating a log scope is done using
+A scope represents a source for a data stream (i.e., a producer). You'll
+require one as a way to generate data. Creating a log scope is done using
+:func:`weston_log_ctx_add_log_scope()` or
 :func:`weston_compositor_add_log_scope()`. You can customize the scope
-behaviour and you'll require at least a name and a description for the
-scope.
+behaviour and you'll require at least a name and a description for the scope.
 
 .. note::
 
@@ -39,7 +39,7 @@ scope.
    important for the subscription part, detailed bit later.
 
 Log scopes are managed **explicitly**, and destroying the scope is done using
-:func:`weston_compositor_log_scope_destroy`.
+:func:`weston_log_scope_destroy`.
 
 Available scopes in weston
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -109,7 +109,7 @@ initial/original one.
 
 .. note::
 
-   The subscription process is (an) internal API and is managed implictly.
+   The subscription process is (an) internal API and is managed implicitly.
 
 When a scope is being destroyed the subscriptions for this scope will be
 destroyed as well.
@@ -117,7 +117,7 @@ destroyed as well.
 Logger
 ~~~~~~
 
-weston uses a logger type of a subscriber for logging everyhing in the code
+weston uses a logger type of a subscriber for logging everything in the code
 (through the help of :func:`weston_log()`).  The subscriber method
 (:func:`weston_log_subscriber_create_log()`) takes an :samp:`FILE *` as an
 argument in case the std :samp:`stdout` file-descriptor is not where the data
