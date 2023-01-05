@@ -21,6 +21,7 @@
 * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
+
 /*
  * Copyright © 2008-2011 Kristian Høgsberg
  * Copyright © 2011 Intel Corporation
@@ -46,6 +47,43 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #include <assert.h>
 #include <stdarg.h>
 #include <linux/limits.h>
@@ -73,8 +111,7 @@
 
 #define __CLASS__ "SdmDisplay"
 extern "C" void NotifyOnRefresh(struct drm_output *);
-struct drm_output *drm_output_;
-struct drm_output *prev_output_;
+
 vblank_cb_t vblank_cb_;
 
 namespace sdm {
@@ -118,7 +155,7 @@ const char * SdmDisplay::FourccToString(uint32_t fourcc)
     return s;
 }
 
-DisplayError SdmDisplay::CreateDisplay() {
+DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
     DisplayError error = kErrorNone;
 
     error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
@@ -331,7 +368,7 @@ DisplayError SdmDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *displ
     return kErrorNone;
 }
 
-DisplayError SdmDisplay::RegisterCb(int display_id,       vblank_cb_t vbcb) {
+DisplayError SdmDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
     DisplayError error = kErrorNone;
 
     vblank_cb_   = vbcb;
@@ -525,9 +562,13 @@ DisplayError SdmDisplay::AddGeometryLayerToLayerStack(struct drm_output *output,
 
 int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
                         struct LayerGeometry **fb_glayer) {
-    struct LayerGeometry *fb_layer;
+    struct LayerGeometry *fb_layer = NULL;
     *fb_glayer = fb_layer = reinterpret_cast<struct LayerGeometry *> \
                               (zalloc(sizeof *fb_layer));
+    if (!fb_layer) {
+        DLOGE("fb_layer is NULL\n");
+        return -1;
+    }
 
     fb_layer->width = output->base.width;
     fb_layer->height = output->base.height;
@@ -605,6 +646,11 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
 
     *glayer = layer = reinterpret_cast<struct LayerGeometry *> \
                            (zalloc(sizeof *layer));
+    if (!layer) {
+        DLOGE("layer is NULL\n");
+        return -1;
+    }
+
     /* Prepare layer buffer information */
     layer->width = es->width;
     layer->height = es->height;
@@ -1336,7 +1382,7 @@ SdmNullDisplay::SdmNullDisplay(DisplayType type, CoreInterface *core_intf) {
 SdmNullDisplay::~SdmNullDisplay() {
 }
 
-DisplayError SdmNullDisplay::CreateDisplay() {
+DisplayError SdmNullDisplay::CreateDisplay(uint32_t display_id) {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::DestroyDisplay() {
@@ -1435,49 +1481,7 @@ SdmDisplayProxy::~SdmDisplayProxy () {
 }
 
 int SdmDisplayProxy::HandleHotplug(bool connected) {
-  DisplayError error = kErrorNone;
-  shared_ptr<Fence> release_fence;
-
-  DLOGI("HandleHotplug = %d", connected);
-
-  if (connected) {
-    if (display_intf_->GetDisplayIntfType() == null_disp) {
-      display_intf_ = &sdm_disp_;
-      error = display_intf_->CreateDisplay();
-      if (error != kErrorNone) {
-        DLOGE("Failed to create display %d", error);
-        display_intf_ = &null_disp_;
-        return error;
-      }
-
-      DLOGI("Display Vsync State = %d\n", kStateOn);
-      display_intf_->SetDisplayState(kStateOn, false, &release_fence);
-      display_intf_->SetVSyncState(true, drm_output_);
-
-      if (hotplug_cb_) {
-        hotplug_cb_(disp_type_, connected, drm_output_);
-      }
-
-      DLOGI("Display is connected successfully.");
-    } else {
-      DLOGI("Display is already connected.");
-    }
-  } else {
-    if (display_intf_->GetDisplayIntfType() == sdm_disp) {
-      if (hotplug_cb_) {
-        hotplug_cb_(disp_type_, connected, drm_output_);
-      }
-
-      display_intf_->SetVSyncState(false, drm_output_);
-      display_intf_->DestroyDisplay();
-
-      display_intf_ = &null_disp_;
-
-      DLOGI("Display is disconnected successfully.");
-    } else {
-      DLOGI("Display is already disconnected.");
-    }
-  }
+  return kErrorNone;
 }
 
 void *SdmDisplayProxy::UeventThread(void *context) {

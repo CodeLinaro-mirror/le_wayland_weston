@@ -59,6 +59,10 @@ if get_option('multi-display')
 	config_h.set('MULTI_DISPLAY', '1')
 endif
 
+if get_option('disable-power-key')
+	config_h.set('DISABLE_POWER_KEY', '1')
+endif
+
 plugin_drm = shared_library(
 	'sdm-backend',
 	srcs_drm,

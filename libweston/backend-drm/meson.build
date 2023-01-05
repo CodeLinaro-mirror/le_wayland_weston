@@ -57,6 +57,10 @@ if get_option('renderer-gl')
 	config_h.set('BUILD_DRM_GBM', '1')
 endif
 
+if get_option('disable-power-key')
+	config_h.set('DISABLE_POWER_KEY', '1')
+endif
+
 if get_option('backend-drm-screencast-vaapi')
 	foreach name : [ 'libva', 'libva-drm' ]
 		d = dependency(name, version: '>= 0.34.0', required: false)
