@@ -25,6 +25,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -577,8 +581,13 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
 			millihz_to_nsec(output->base.current_mode->refresh);
 		if (timespec_to_nsec(&vbl2now) < refresh_nsec) {
 			drm_output_update_msc(output, vbl.reply.sequence);
+#ifdef QCOM_BSP
+                        weston_output_finish_frame(output_base, &tnow,
+                                                WP_PRESENTATION_FEEDBACK_INVALID);
+#else
 			weston_output_finish_frame(output_base, &ts,
 						WP_PRESENTATION_FEEDBACK_INVALID);
+#endif
 			return 0;
 		}
 	}
