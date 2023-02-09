@@ -51,7 +51,7 @@
 /*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -133,6 +133,7 @@ namespace sdm {
 #define MAX_PROP_STR_SIZE 64
 #define SDM_NULL_DISPLAY_RESOLUTON_PROP_NAME "weston.sdm.default.resolution"
 #define SDM_ENABLE_SKIP_PREPARE "vendor.display.enable_skip_prepare"
+#define SDM_DISABLE_HDR_HANDLING "vendor.display.disable_hdr"
 
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf,
                                          SdmDisplayBufferAllocator *buffer_allocator) {
@@ -165,6 +166,12 @@ DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
     if (!(strncmp(property, "0", PROPERTY_VALUE_MAX)) ||
         !(strncmp(property, "false", PROPERTY_VALUE_MAX))) {
         disable_skip_prepare_ = 1;
+    }
+
+    property_get(SDM_DISABLE_HDR_HANDLING, property, "1");
+    if (!(strncmp(property, "0", PROPERTY_VALUE_MAX)) ||
+        !(strncmp(property, "false", PROPERTY_VALUE_MAX))) {
+        disable_hdr_handling_ = 0;
     }
 
     error = core_intf_->CreateDisplay(display_id, this, &display_intf_);
@@ -471,10 +478,7 @@ DisplayError SdmDisplay::PopulateLayerGeometryOnToLayerStack(struct drm_output *
     layer_buffer->flags.hdr = layer_geometry->flags.hdr_present;
 
     if (layer_buffer->flags.hdr) {
-      layer_buffer->color_metadata = layer_geometry->color_metadata;
-
-       DLOGI("color_metadata: ColorPrimaries: %d", layer_buffer->color_metadata.colorPrimaries);
-       DLOGI("color_metadata: Transfer: %d", layer_buffer->color_metadata.transfer);
+        layer_buffer->color_metadata = layer_geometry->color_metadata;
     }
 
     layer_buffer->flags.macro_tile = false;
@@ -668,14 +672,11 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     layer->format = SDM_BUFFER_FORMAT_RGBX_8888;
 
     if (sdm_layer->fb && sdm_layer->fb->bo) {
-        struct gbm_bo *bo = NULL;
-
-	bo = sdm_layer->fb->bo;
-
-         if (bo == NULL) {
+        struct gbm_bo *bo = sdm_layer->fb->bo;
+        if (bo == NULL) {
             DLOGE("fail to import gbm bo!\n");
-		return -1; 
-	 } else {
+            return -1;
+        } else {
             uint32_t width, height;
 
             //save gbm bo in sdm layer for future reference.
@@ -705,6 +706,15 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             layer->ion_fd = gbm_bo_get_fd(bo);
             layer->flags.secure_present = secure_status;
             layer->flags.has_ubwc_buf = ubwc_status;
+
+            bool hdr_layer = layer->color_metadata.colorPrimaries == ColorPrimaries_BT2020 &&
+                             (layer->color_metadata.transfer == Transfer_SMPTE_ST2084 ||
+                             layer->color_metadata.transfer == Transfer_HLG);
+
+            // Set to true if incoming layer has HDR support and Display supports HDR functionality
+            if (!disable_hdr_handling_) {
+                layer->flags.hdr_present = hdr_layer;
+            }
         }
     }
 
@@ -790,13 +800,16 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
             // Pass the wl_resource handle from sdm layer to layer stack
             // to use it for egl image creation in tone mapping
             layerBufferFlags = layer_stack_.layers.at(index)->input_buffer.flags;
+            layer_stack_.layers.at(index)->input_buffer.acquire_fence_fd =
+		                                                      sdm_layer->acquire_fence_fd;
+	    //Acquire fence fd is not received for frame buffer target layer as gl-renderer is not
+	    //sending it. Hence not adding acquire fence for frame buffer target
 
             index++;
             if (sdm_layer->is_skip)
                 layer_stack_.flags.skip_present = true;
         }
     }
-
     int err = PrepareFbLayerGeometry(output, &glayer);
     if (err) {
         DLOGE("failed to prepare Layer Geometry Fb target\n");
