@@ -134,6 +134,7 @@ namespace sdm {
 #define SDM_NULL_DISPLAY_RESOLUTON_PROP_NAME "weston.sdm.default.resolution"
 #define SDM_ENABLE_SKIP_PREPARE "vendor.display.enable_skip_prepare"
 #define SDM_DISABLE_HDR_HANDLING "vendor.display.disable_hdr"
+#define SDM_DISABLE_HDR_TM "vendor.display.disable_hdr_tm"
 
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf,
                                          SdmDisplayBufferAllocator *buffer_allocator) {
@@ -160,6 +161,7 @@ const char * SdmDisplay::FourccToString(uint32_t fourcc)
 
 DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
     DisplayError error = kErrorNone;
+    struct DisplayHdrInfo display_hdr_info = {};
 
     char property[PROPERTY_VALUE_MAX];
     property_get(SDM_ENABLE_SKIP_PREPARE, property, "0");
@@ -178,8 +180,34 @@ DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
 
     if (error != kErrorNone) {
         DLOGE("Display creation failed. Error = %d", error);
-
         return error;
+    }
+
+    if (disable_hdr_handling_) {
+        DLOGI("HDR Handling disabled");
+    } else {
+        property_get(SDM_DISABLE_HDR_TM, property, "0");
+        if (!(strncmp(property, "0", PROPERTY_VALUE_MAX)) ||
+            !(strncmp(property, "false", PROPERTY_VALUE_MAX))) {
+            disable_tone_mapper_ = 0;
+        }
+        #ifndef HAS_HDR_SUPPORT
+            disable_tone_mapper_ = 1;
+        #endif
+        if (!disable_tone_mapper_) {
+            DLOGI("Tone Mapper Enabled");
+            tone_mapper_ = new SdmDisplayToneMapper(buffer_allocator_);
+
+            if (!tone_mapper_)
+                DLOGE("Failed to create tone_mapper instance");
+        }
+    }
+
+    GetHdrInfo(&display_hdr_info);
+    if (display_hdr_info.hdr_supported) {
+        DLOGI("Display Device supports HDR functionality");
+    } else {
+        DLOGI("Display Device doesn't support HDR functionality");
     }
 
     return kErrorNone;
@@ -190,6 +218,11 @@ DisplayError SdmDisplay::DestroyDisplay() {
 
     error = core_intf_->DestroyDisplay(display_intf_);
     display_intf_ = NULL;
+
+    if (tone_mapper_) {
+        delete tone_mapper_;
+        tone_mapper_ = nullptr;
+    }
 
     return error;
 }
@@ -800,10 +833,15 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
             // Pass the wl_resource handle from sdm layer to layer stack
             // to use it for egl image creation in tone mapping
             layerBufferFlags = layer_stack_.layers.at(index)->input_buffer.flags;
+            if (layerBufferFlags.video && layerBufferFlags.hdr) {
+                layer_stack_.layers.at(index)->userdata =
+                        sdm_layer->view->surface->buffer_ref.buffer->resource;
+            }
+
+            //Acquire fence fd is not received for frame buffer target layer as gl-renderer is not
+            //sending it. Hence not adding acquire fence for frame buffer target
             layer_stack_.layers.at(index)->input_buffer.acquire_fence_fd =
-		                                                      sdm_layer->acquire_fence_fd;
-	    //Acquire fence fd is not received for frame buffer target layer as gl-renderer is not
-	    //sending it. Hence not adding acquire fence for frame buffer target
+                                                      sdm_layer->acquire_fence_fd;
 
             index++;
             if (sdm_layer->is_skip)
@@ -1029,13 +1067,35 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output)
 
 DisplayError SdmDisplay::PreCommit()
 {
-    return kErrorNone;
+    DisplayError error = kErrorNone;
+    if (layer_stack_.flags.hdr_present) {
+        int status = -1;
+        if (tone_mapper_) {
+            error = tone_mapper_->HandleToneMap(&layer_stack_);
+            if (error != kErrorNone) {
+                DLOGE("Error handling HDR in ToneMapper, status code = %d", status);
+            }
+        } else {
+            DLOGD("HandleToneMap failed due to invalid tone_mapper_ instance");
+        }
+    } else {
+        if (tone_mapper_)
+            tone_mapper_->Terminate();
+        else
+            DLOGD("ToneMap Terminate failed due to invalid tone_mapper_ instance");
+    }
+
+    return error;
 }
 
 
 DisplayError SdmDisplay::PostCommit(int *retire_fence_fd)
 {
     DisplayError error = kErrorNone;
+
+    if (tone_mapper_ && tone_mapper_->IsActive()) {
+        tone_mapper_->PostCommit(&layer_stack_);
+    }
 
     prev_layer_stack_ = layer_stack_;
     //Iterate through the layer buffer and close release fences
@@ -1082,7 +1142,12 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
 
     DLOGI("commiting ion fd = %d", output->next_fb->ion_fd);
 
-    PreCommit();
+    ret = PreCommit();
+    if (ret != kErrorNone) {
+        DLOGE("PreCommit failed!");
+        ret = kErrorNone;
+    }
+
     prev_output_ = output;
     ret = display_intf_->Commit(&layer_stack_);
 
@@ -1485,6 +1550,38 @@ const char *SdmDisplay::GetDisplayString() {
   }
 }
 
+DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
+    DisplayError error;
+
+    DisplayConfigFixedInfo fixed_info = {};
+    error = display_intf_->GetConfig(&fixed_info);
+
+    if (error != kErrorNone) {
+        DLOGE("Failed to get fixed info. Error = %d", error);
+        return error;
+    }
+
+    if (!fixed_info.hdr_supported) {
+        DLOGI("HDR is not supported");
+        return error;
+    }
+
+    static const float kLuminanceFactor = 10000.0;
+    // luminance is expressed in the unit of 0.0001 cd/m2, convert it to 1cd/m2.
+    max_luminance_ = FLOAT(fixed_info.max_luminance)/kLuminanceFactor;
+    max_average_luminance_ = FLOAT(fixed_info.average_luminance)/kLuminanceFactor;
+    min_luminance_ = FLOAT(fixed_info.min_luminance)/kLuminanceFactor;
+
+    display_hdr_info->hdr_supported = fixed_info.hdr_supported;
+    display_hdr_info->hdr_eotf = fixed_info.hdr_eotf;
+    display_hdr_info->hdr_metadata_type_one = fixed_info.hdr_metadata_type_one;
+    display_hdr_info->max_luminance = fixed_info.max_luminance;
+    display_hdr_info->average_luminance = fixed_info.average_luminance;
+    display_hdr_info->min_luminance = fixed_info.min_luminance;
+
+    return error;
+}
+
 SdmNullDisplay::SdmNullDisplay(DisplayType type, CoreInterface *core_intf) {
 }
 
@@ -1570,6 +1667,10 @@ DisplayError SdmNullDisplay::GetDisplayConfiguration(struct DisplayConfigInfo *d
 DisplayError SdmNullDisplay::RegisterCb(int display_id, vblank_cb_t vbcb) {
   vblank_cb_   = vbcb;
 
+  return kErrorNone;
+}
+
+DisplayError SdmNullDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
   return kErrorNone;
 }
 

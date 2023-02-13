@@ -102,7 +102,7 @@ bool ToneMapSession::IsSameToneMapConfig(Layer *layer) {
           (layer->request.height == UINT32(buffer.unaligned_height)));
 }
 
-int SdmDisplayToneMapper::HandleToneMap(LayerStack *layer_stack) {
+DisplayError SdmDisplayToneMapper::HandleToneMap(LayerStack *layer_stack) {
   uint32_t gpu_count = 0;
   DisplayError error = kErrorNone;
   for (uint32_t i = 0; i < layer_stack->layers.size(); i++) {
@@ -126,7 +126,7 @@ int SdmDisplayToneMapper::HandleToneMap(LayerStack *layer_stack) {
               fb_tone_map_session->UpdateBuffer(-1 /* acquire_fence */, &layer->input_buffer);
               fb_tone_map_session->layer_index_ = INT(i);
               fb_tone_map_session->acquired_ = true;
-              return 0;
+              return error;
             }
           }
           temp1 = layer;
@@ -144,7 +144,7 @@ int SdmDisplayToneMapper::HandleToneMap(LayerStack *layer_stack) {
 
       if (error != kErrorNone) {
         Terminate();
-        return -1;
+        return error;
       }
 
       ToneMapSession *session = tone_map_sessions_.at(session_index);
@@ -152,7 +152,7 @@ int SdmDisplayToneMapper::HandleToneMap(LayerStack *layer_stack) {
       session->layer_index_ = INT(i);
     }
   }
-  return 0;
+  return error;
 }
 
 void SdmDisplayToneMapper::ToneMap(Layer* layer, ToneMapSession *session) {

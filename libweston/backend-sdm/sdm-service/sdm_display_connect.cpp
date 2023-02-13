@@ -25,7 +25,7 @@
 /*
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -357,10 +357,18 @@ bool GetDisplayConfiguration(uint32_t display_id, struct DisplayConfigInfo *disp
 
 bool GetDisplayHdrInfo(uint32_t display_id, struct DisplayHdrInfo *display_hdr_info)
 {
+    DisplayError error = kErrorNone;
     SdmDisplayProxy *dpy = GetDisplayFromId(display_id);
     if (!dpy) {
         DLOGE("Failed as Display (%d) not created yet.", display_id);
-        return kErrorNotSupported;
+        return FAIL;
+    }
+
+    error = dpy->GetHdrInfo(display_hdr_info);
+
+    if (error != kErrorNone) {
+        DLOGE("function failed with error = %d", error);
+        return FAIL;
     }
 
     #if SDM_DISPLAY_DEBUG
