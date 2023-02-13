@@ -67,6 +67,7 @@
 #include <utils/debug.h>
 #include <utils/constants.h>
 #include <utils/formats.h>
+#include <private/color_params.h>
 #include <stdio.h>
 #include <string>
 #include <utility>
@@ -238,6 +239,11 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     bool IsTransparentGbmFormat(uint32_t format);
     void HandlePanelDead();
     void RefreshWithCachedLayerstack();
+    void PopulateColorModes();
+    DisplayError ValidateColorMode(PrimariesTransfer color_mode);
+    DisplayError SetColorMode(PrimariesTransfer color_mode);
+    PrimariesTransfer SelectBestColorSpace(bool isHdrSupported);
+
     CoreInterface *core_intf_ = NULL;
     SdmDisplayBufferAllocator *buffer_allocator_;
     SdmDisplayBufferSyncHandler buffer_sync_handler_;
@@ -261,6 +267,11 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     int disable_hdr_handling_ = 1;
     int disable_tone_mapper_ = 0;        /* To disable tone mapping functionality. */
     SdmDisplayToneMapper *tone_mapper_ = NULL;
+    bool hdr_supported_ = false;
+    typedef std::map<GammaTransfer, std::string> GammaTransferMap;
+    // Map structure: <ColorPrimaries, <GammaTransfer, string>>
+    std::map<ColorPrimaries, GammaTransferMap> color_mode_map_ = {};
+    PrimariesTransfer current_color_mode_;
 };
 
 class SdmDisplayProxy {
