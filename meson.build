@@ -155,6 +155,10 @@ if get_option('backend-sdm')
 	dep_libsdmcore = cc.find_library('sdmcore')
 	dep_libsdmutils = cc.find_library('sdmutils')
 	dep_libdrmutils = cc.find_library('drmutils')
+	dep_libgputonemapper = cc.find_library('libgpu_tonemapper', required: false)
+	if dep_libgputonemapper.found()
+		config_h.set('HAS_HDR_SUPPORT', '1')
+	endif
 endif
 dep_log = cc.find_library('liblog', required : true)
 
