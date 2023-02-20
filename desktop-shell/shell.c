@@ -102,6 +102,7 @@ struct shell_surface {
 	struct weston_desktop_surface *desktop_surface;
 	struct weston_view *view;
 	struct weston_surface *fade_surface;
+	struct weston_view *wview_anim_fade;
 	int32_t last_width, last_height;
 
 	struct desktop_shell *shell;
@@ -194,6 +195,10 @@ struct shell_seat {
 	struct wl_list link;	/** shell::seat_list */
 };
 
+
+static struct weston_view *
+shell_fade_create_fade_out_view(struct shell_surface *shsurf,
+				struct weston_surface *surface);
 
 static struct desktop_shell *
 shell_surface_get_shell(struct shell_surface *shsurf);
@@ -2255,8 +2260,8 @@ fade_out_done(struct weston_view_animation *animation, void *data)
 
 	loop = wl_display_get_event_loop(shsurf->shell->compositor->wl_display);
 
-	if (weston_view_is_mapped(shsurf->view)) {
-		weston_view_unmap(shsurf->view);
+	if (weston_view_is_mapped(shsurf->wview_anim_fade)) {
+		weston_view_unmap(shsurf->wview_anim_fade);
 		wl_event_loop_add_idle(loop, fade_out_done_idle_cb, shsurf);
 	}
 }
@@ -2375,8 +2380,25 @@ desktop_surface_removed(struct weston_desktop_surface *desktop_surface,
 			pixman_region32_init(&surface->pending.input);
 			pixman_region32_fini(&surface->input);
 			pixman_region32_init(&surface->input);
-			weston_fade_run(shsurf->view, 1.0, 0.0, 300.0,
+
+			/* its location might have changed, but also might've
+			 * migrated to a different output, so re-compute  this
+			 * as the animation requires having the same output as
+			 * the view */
+			weston_view_set_output(shsurf->wview_anim_fade,
+						shsurf->view->output);
+			weston_view_set_position(shsurf->wview_anim_fade,
+						shsurf->view->geometry.x,
+						shsurf->view->geometry.y);
+
+			weston_layer_entry_insert(&shsurf->view->layer_link,
+						&shsurf->wview_anim_fade->layer_link);
+
+			/* unmap the "original" view */
+			weston_view_unmap(shsurf->view);
+			weston_fade_run(shsurf->wview_anim_fade, 1.0, 0.0, 300.0,
 					fade_out_done, shsurf);
+
 			return;
 		} else {
 			weston_surface_destroy(surface);
@@ -2505,6 +2527,9 @@ desktop_surface_committed(struct weston_desktop_surface *desktop_surface,
 		if (shsurf->shell->win_close_animation_type == ANIMATION_FADE) {
 			++surface->ref_count;
 			shsurf->fade_surface = surface;
+			shsurf->wview_anim_fade =
+				shell_fade_create_fade_out_view(shsurf, surface);
+
 		}
 		return;
 	}
@@ -3991,6 +4016,29 @@ shell_fade_create_surface_for_output(struct desktop_shell *shell, struct shell_o
 				  &view->layer_link);
 	pixman_region32_init(&surface->input);
 	surface->is_mapped = true;
+	view->is_mapped = true;
+
+	return view;
+}
+
+static struct weston_view *
+shell_fade_create_fade_out_view(struct shell_surface *shsurf,
+				struct weston_surface *surface)
+{
+	struct weston_view *view;
+	struct weston_output *woutput;
+
+	view = weston_view_create(surface);
+	if (!view)
+		return NULL;
+
+	woutput = get_focused_output(surface->compositor);
+	/* set the initial position and output just in case we happen to not
+	 * move it around and just destroy it */
+	weston_view_set_output(view, woutput);
+	weston_view_set_position(view,
+				 shsurf->view->geometry.x,
+				 shsurf->view->geometry.y);
 	view->is_mapped = true;
 
 	return view;

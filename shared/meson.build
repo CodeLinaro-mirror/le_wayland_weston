@@ -88,5 +88,6 @@ install_headers(
 	'helpers.h',
 	'timespec-util.h',
 	'weston-egl-ext.h',
+	'string-helpers.h',
 	subdir: dir_weston_shared
 )
