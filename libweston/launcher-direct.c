@@ -22,6 +22,11 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -236,10 +241,24 @@ launcher_direct_open(struct weston_launcher *launcher_base, const char *path, in
 	struct stat s;
 	int fd;
 
-	fd = open(path, flags | O_CLOEXEC);
-	if (fd == -1) {
-		weston_log("couldn't open: %s! error=%s\n", path, strerror(errno));
-		return -1;
+        /**
+         * DRM Master FD is derived by SDM backend, so it can have
+         * permission to commit.
+         */
+        if (strcmp(path, "/dev/dri/card0") == 0) {
+                fd = get_drm_master_fd();
+                if (fd == -1) {
+                        weston_log("%s: DRM device path=%s \n", __func__, path);
+                        fd = open(path, flags | O_CLOEXEC);
+                }
+                if (fd == -1) {
+                        weston_log("couldn't open: %s! error=%s\n", path, strerror(errno));
+                        return -1;
+                }
+        } else {
+                fd = open(path, flags | O_CLOEXEC);
+                if (fd == -1)
+                        return -1;
 	}
 
 	if (geteuid() != 0) {

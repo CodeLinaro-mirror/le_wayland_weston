@@ -26,6 +26,11 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -92,16 +97,18 @@ drm_backend_create_gl_renderer(struct drm_backend *b)
 		fallback_format_for(b->gbm_format),
 		0,
 	};
-	unsigned n_formats = 2;
+        struct gl_renderer_display_options options = {
+                .egl_platform = EGL_PLATFORM_GBM_KHR,
+                .egl_native_display = b->gbm,
+                .egl_surface_type = EGL_WINDOW_BIT,
+                .drm_formats = format,
+                .drm_formats_count = 2,
+        };
 
 	if (format[1])
-		n_formats = 3;
-	if (gl_renderer->display_create(b->compositor,
-					EGL_PLATFORM_GBM_KHR,
-					(void *)b->gbm,
-					EGL_WINDOW_BIT,
-					format,
-					n_formats) < 0) {
+                options.drm_formats_count = 3;
+
+        if (gl_renderer->display_create(b->compositor, &options) < 0) {
 		return -1;
 	}
 
@@ -132,8 +139,12 @@ drm_output_init_egl(struct drm_output *output, struct drm_backend *b)
 		output->gbm_format,
 		fallback_format_for(output->gbm_format),
 	};
-	unsigned n_formats = 1;
-	struct weston_mode *mode = output->base.current_mode;
+        struct gl_renderer_output_options options = {
+                .drm_formats = format,
+                .drm_formats_count = 1,
+	};
+
+        struct weston_mode *mode = output->base.current_mode;
 
 	assert(output->gbm_surface == NULL);
 
@@ -145,13 +156,11 @@ drm_output_init_egl(struct drm_output *output, struct drm_backend *b)
 		return -1;
 	}
 
-	if (format[1])
-		n_formats = 2;
-	if (gl_renderer->output_window_create(&output->base,
-					      (EGLNativeWindowType)output->gbm_surface,
-					      output->gbm_surface,
-					      format,
-					      n_formats) < 0) {
+        if (options.drm_formats[1])
+                options.drm_formats_count = 2;
+        options.window_for_legacy = (EGLNativeWindowType) output->gbm_surface;
+        options.window_for_platform = output->gbm_surface;
+        if (gl_renderer->output_window_create(&output->base, &options) < 0) {
 		weston_log("failed to create gl renderer output state\n");
 		gbm_surface_destroy(output->gbm_surface);
 		output->gbm_surface = NULL;

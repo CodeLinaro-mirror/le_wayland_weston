@@ -30,7 +30,7 @@
 /*
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -82,7 +82,6 @@
 #include <time.h>
 
 
-#include <xf86drm.h>
 #include <xf86drmMode.h>
 #include <drm_fourcc.h>
 
@@ -105,20 +104,12 @@
 extern "C" {
 #endif
 
-#ifndef DRM_CLIENT_CAP_ASPECT_RATIO
-#define DRM_CLIENT_CAP_ASPECT_RATIO	4
-#endif
-
 #ifndef GBM_BO_USE_CURSOR
 #define GBM_BO_USE_CURSOR GBM_BO_USE_CURSOR_64X64
 #endif
 
 #ifndef GBM_BO_USE_LINEAR
 #define GBM_BO_USE_LINEAR (1 << 4)
-#endif
-
-#ifndef DRM_PLANE_ZPOS_INVALID_PLANE
-#define DRM_PLANE_ZPOS_INVALID_PLANE	0xffffffffffffffffULL
 #endif
 
 /**
@@ -158,17 +149,6 @@ extern "C" {
 	weston_log_scope_printf((b)->debug, __VA_ARGS__)
 
 #define MAX_CLONED_CONNECTORS 4
-
-#ifndef DRM_MODE_PICTURE_ASPECT_64_27
-#define DRM_MODE_PICTURE_ASPECT_64_27		3
-#define  DRM_MODE_FLAG_PIC_AR_64_27 \
-			(DRM_MODE_PICTURE_ASPECT_64_27<<19)
-#endif
-#ifndef DRM_MODE_PICTURE_ASPECT_256_135
-#define DRM_MODE_PICTURE_ASPECT_256_135		4
-#define  DRM_MODE_FLAG_PIC_AR_256_135 \
-			(DRM_MODE_PICTURE_ASPECT_256_135<<19)
-#endif
 
 /**
  * Represents the values of an enum-type KMS property

@@ -26,26 +26,21 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
 
 #include <stdint.h>
-
-#include <xf86drm.h>
-#include <xf86drmMode.h>
-#include <drm_fourcc.h>
-
 #include <libweston/libweston.h>
-#include <libweston/backend-drm.h>
 #include "shared/helpers.h"
 #include "sdm-internal.h"
 #include "pixel-formats.h"
 #include "presentation-time-server-protocol.h"
-
-#ifndef DRM_FORMAT_MOD_LINEAR
-#define DRM_FORMAT_MOD_LINEAR 0
-#endif
 
 extern int display_id;
 
