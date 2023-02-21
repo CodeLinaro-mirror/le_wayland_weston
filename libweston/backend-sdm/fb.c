@@ -31,7 +31,7 @@
 /*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -68,12 +68,8 @@
 
 #include <stdint.h>
 
-#include <xf86drm.h>
-#include <xf86drmMode.h>
-#include <drm_fourcc.h>
 
 #include <libweston/libweston.h>
-#include <libweston/backend-drm.h>
 #include <libweston/pixel-formats.h>
 #include <libweston/linux-dmabuf.h>
 #include "shared/helpers.h"

@@ -31,7 +31,7 @@
 /*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -81,17 +81,12 @@
 #include <time.h>
 #include <poll.h>
 
-#include <xf86drm.h>
-#include <xf86drmMode.h>
-#include <drm_fourcc.h>
-
 #include <libudev.h>
 
 #include <gbm.h>
 #include <gbm_priv.h>
 
 #include <libweston/libweston.h>
-#include <libweston/backend-drm.h>
 #include <libweston/weston-log.h>
 #ifdef MULTI_DISPLAY
 #include <libweston/linux-sync-file-uapi.h>
@@ -803,9 +798,6 @@ drm_output_init_pixman(struct drm_output *output, struct drm_backend *b)
 			goto err;
 	}
 
-	if (b->use_pixman_shadow)
-		flags |= PIXMAN_RENDERER_OUTPUT_USE_SHADOW;
-
 	if (pixman_renderer_output_create(&output->base, flags) < 0)
 		goto err;
 
@@ -1463,7 +1455,7 @@ drm_destroy(struct weston_compositor *ec)
 
 	b->shutting_down = true;
 
-	weston_compositor_log_scope_destroy(b->debug);
+	weston_log_scope_destroy(b->debug);
 	b->debug = NULL;
 	weston_compositor_shutdown(ec);
 
