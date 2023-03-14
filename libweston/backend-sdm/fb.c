@@ -68,7 +68,6 @@
 
 #include <stdint.h>
 
-
 #include <libweston/libweston.h>
 #include <libweston/pixel-formats.h>
 #include <libweston/linux-dmabuf.h>
@@ -76,6 +75,7 @@
 #include "sdm-internal.h"
 #include "linux-dmabuf.h"
 #include "gbm-buffer-backend.h"
+#include <display/drm/sde_drm.h>
 
 #include <gbm.h>
 #include <gbm_priv.h>
@@ -416,6 +416,20 @@ err_free:
 	return NULL;
 }
 
+static void
+get_drm_format(uint32_t format, struct drm_fb *fb)
+{
+	switch (format) {
+		case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+			fb->format = pixel_format_get_info(DRM_FORMAT_NV12);
+			fb->modifier = DRM_FORMAT_MOD_QCOM_COMPRESSED |
+					DRM_FORMAT_MOD_QCOM_DX | DRM_FORMAT_MOD_QCOM_TIGHT;
+			break;
+		default:
+			fb->format = NULL;
+	}
+}
+
 struct drm_fb *
 drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 		   bool is_opaque, enum drm_fb_type type)
@@ -447,6 +461,14 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 #ifdef HAVE_GBM_MODIFIERS
 	fb->modifier = gbm_bo_get_modifier(bo);
 	fb->num_planes = gbm_bo_get_plane_count(bo);
+	/*
+	  TODO: A more elegant solution would be to create a GBM API call
+		to get number of non-meta planes.
+		For UBWC formats, 2 planes represent the actual format component,
+		and 2 planes contain meta information. We only want to iterate over
+		the actual YUV planes for the purposes of strides/offsets calculations.
+	*/
+	fb->num_planes = fb->num_planes > 3 ? 2 : fb->num_planes;
 	for (i = 0; i < fb->num_planes; i++) {
 		fb->strides[i] = gbm_bo_get_stride_for_plane(bo, i);
 		fb->handles[i] = gbm_bo_get_handle_for_plane(bo, i).u32;
@@ -464,12 +486,16 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 
 #endif
 
-	fb->size = fb->strides[0] * fb->height;
 	if (!fb->format) {
-		weston_log("couldn't look up format 0x%lx\n",
-			   (unsigned long) gbm_bo_get_format(bo));
-		goto err_free;
+		get_drm_format(gbm_bo_get_format(bo), fb);
+		if (!fb->format) {
+			weston_log("couldn't look up format 0x%lx\n",
+				   (unsigned long) gbm_bo_get_format(bo));
+			goto err_free;
+		}
 	}
+
+	fb->size = fb->strides[0] * fb->height;
 
 	if (is_opaque)
 		fb->format = pixel_format_get_opaque_substitute(fb->format);
