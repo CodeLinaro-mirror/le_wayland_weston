@@ -47,9 +47,9 @@ if get_option('renderer-gl')
 	if not dep_gbm.found()
                 error('sdm-backend with GL renderer requires gbm which was not found. Or, you can use \'-Drenderer-gl=false\'.')
 	endif
-	#if dep_gbm.version().version_compare('>= 17.1')
-		#config_h.set('HAVE_GBM_MODIFIERS', '1')
-	#endif
+	if dep_gbm.version().version_compare('>= 17.1')
+		config_h.set('HAVE_GBM_MODIFIERS', '1')
+	endif
 	#if dep_gbm.version().version_compare('>= 17.2')
 		#config_h.set('HAVE_GBM_FD_IMPORT', '1')
 	#endif
