@@ -157,11 +157,13 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 
 		es = ev->surface;
 		if (!es->buffer_ref.buffer) {
-		    is_skip = true;
+			is_skip = true;
 		} else if (linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource)) {
-		    is_skip = false;
+			is_skip = false;
+		} else if (gbm_buffer_get(es->buffer_ref.buffer->resource)) {
+			is_skip = false;
 		} else if (wl_shm_buffer_get(es->buffer_ref.buffer->resource)) {
-		    is_skip = true;
+			is_skip = true;
 		}
 
 		sdm_layer = create_sdm_layer(output, ev, &surface_overlap, false, is_skip);

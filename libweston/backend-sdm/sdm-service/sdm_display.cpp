@@ -703,6 +703,8 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     /* Prepare layer buffer information */
     layer->width = es->width;
     layer->height = es->height;
+    layer->unaligned_width = es->width;
+    layer->unaligned_height = es->height;
     layer->fb_id = -1;
     layer->format = SDM_BUFFER_FORMAT_RGBX_8888;
 
@@ -738,7 +740,7 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
             layer->height = alignedHeight;
             layer->unaligned_width = width;
             layer->unaligned_height = height;
-            layer->ion_fd = gbm_bo_get_fd(bo);
+            layer->ion_fd = sdm_layer->fb->ion_fd;
             layer->flags.secure_present = secure_status;
             layer->flags.has_ubwc_buf = ubwc_status;
 
