@@ -254,3 +254,9 @@ option(
 	value: false,
 	description: 'Generate documentation'
 )
+option(
+	'qcom-bsp',
+        type: 'boolean',
+        value: true,
+        description: 'DRM: run qcom bsp related flow'
+)

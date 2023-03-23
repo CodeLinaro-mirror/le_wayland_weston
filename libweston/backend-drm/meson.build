@@ -83,6 +83,10 @@ if get_option('remoting') or get_option('pipewire')
 	config_h.set('BUILD_DRM_VIRTUAL', '1')
 endif
 
+if get_option('qcom-bsp')
+        config_h.set('QCOM_BSP', '1')
+endif
+
 plugin_drm = shared_library(
 	'drm-backend',
 	srcs_drm,

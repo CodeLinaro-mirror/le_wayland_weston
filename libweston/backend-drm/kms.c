@@ -25,6 +25,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -1384,6 +1388,9 @@ atomic_flip_handler(int fd, unsigned int frame, unsigned int sec,
 	uint32_t flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC |
 			 WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
 			 WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
+#ifdef QCOM_BSP
+        struct timespec tnow;
+#endif
 
 	crtc = drm_crtc_find(b, crtc_id);
 	assert(crtc);
@@ -1403,7 +1410,14 @@ atomic_flip_handler(int fd, unsigned int frame, unsigned int sec,
 	assert(output->atomic_complete_pending);
 	output->atomic_complete_pending = false;
 
+#ifdef QCOM_BSP
+        // kms can't update ts automaticlly, and update here every time.
+        weston_compositor_read_presentation_clock(b->compositor,
+                                                          &tnow);
+        drm_output_update_complete(output, flags, tnow.tv_sec, tnow.tv_nsec/1000);
+#else
 	drm_output_update_complete(output, flags, sec, usec);
+#endif
 	drm_debug(b, "[atomic][CRTC:%u] flip processing completed\n", crtc_id);
 }
 
