@@ -442,14 +442,18 @@ int SdmDisplay::OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level) {
 
 DisplayError SdmDisplay::FreeLayerStack() {
     prev_layer_stack_ = layer_stack_;
-    for (Layer *layer : layer_stack_.layers) {
+    for (uint32_t i = 0; i < layer_stack_.layers.size(); i++) {
+        Layer *layer = layer_stack_.layers.at(i);
+        /* only reserve the buffer fd of the GPUTarget layer */
+        if ((i != layer_stack_.layers.size()-1) && layer->input_buffer.planes[0].fd > 0)
+            close(layer->input_buffer.planes[0].fd);
 
-         layer->visible_regions.erase(layer->visible_regions.begin(),
-                                       layer->visible_regions.end());
-         layer->dirty_regions.erase(layer->dirty_regions.begin(),
-                                       layer->dirty_regions.end());
+        layer->visible_regions.erase(layer->visible_regions.begin(),
+                    layer->visible_regions.end());
+        layer->dirty_regions.erase(layer->dirty_regions.begin(),
+                    layer->dirty_regions.end());
 
-         delete layer;
+        delete layer;
     }
     layer_stack_ = {};
 

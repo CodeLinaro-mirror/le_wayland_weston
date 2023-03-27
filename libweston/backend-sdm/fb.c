@@ -354,7 +354,7 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	fb->modifier = dmabuf->attributes.modifier[0];
 	fb->size = 0;
 	fb->fd = backend->drm.fd;
-	fb->ion_fd = dmabuf->attributes.fd[0];
+	fb->ion_fd = gbm_bo_get_fd(fb->bo);
 	static_assert(ARRAY_LENGTH(fb->strides) ==
 		      ARRAY_LENGTH(dmabuf->attributes.stride),
 		      "drm_fb and dmabuf stride size must match");
