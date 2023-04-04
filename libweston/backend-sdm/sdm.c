@@ -108,7 +108,7 @@
 
 
 static const char default_seat[] = "seat0";
-#define FENCE_TIMEOUT 50
+#define FENCE_TIMEOUT 1000
 
 enum {
     PRIMARY_DISPLAY_ID,
@@ -153,9 +153,12 @@ vblank_handler(int display_id, int64_t timestamp, void *data)
 
 	if(output->retire_fence_fd > 0)
 	{
-		int error = sync_wait(output->retire_fence_fd, FENCE_TIMEOUT);
-		close(output->retire_fence_fd);
+		int error = 0;
+		int temp_fd = output->retire_fence_fd;
 		output->retire_fence_fd = -1;
+		error = sync_wait(temp_fd, FENCE_TIMEOUT);
+		close(temp_fd);
+
 		if (error < 0)
 		{
 			weston_log("Error: retire fence timed out!");
