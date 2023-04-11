@@ -71,10 +71,10 @@ srcs_libweston = [
 	weston_debug_server_protocol_h,
 	weston_direct_display_protocol_c,
 	weston_direct_display_server_protocol_h,
-        gbm_buffer_backend_protocol_c,
-        gbm_buffer_backend_server_protocol_h,
-        weston_qti_extn_protocol_c,
-        weston_qti_extn_server_protocol_h,
+	weston_qti_extn_protocol_c,
+	weston_qti_extn_server_protocol_h,
+	gbm_buffer_backend_protocol_c,
+	gbm_buffer_backend_server_protocol_h,
 ]
 
 if get_option('renderer-gl')
@@ -155,7 +155,10 @@ srcs_session_helper = [
 	'launcher-util.c',
 	'launcher-weston-launch.c',
 ]
-deps_session_helper = [ dep_libweston_private_h ]
+deps_session_helper = [
+	dep_libweston_private_h,
+	dep_libweston_private,
+]
 
 if get_option('backend-drm')
 	deps_session_helper += dep_libdrm
@@ -256,6 +259,17 @@ if get_option('deprecated-weston-launch')
 
 	meson.add_install_script('echo', 'REMINDER: You are installing weston-launch, please make it setuid-root.')
 endif
+
+install_headers(
+	'backend.h',
+	'libinput-seat.h',
+	'libweston-internal.h',
+	'linux-dmabuf.h',
+	'color.h',
+	'launcher-util.h',
+	'pixman-renderer.h',
+	subdir: dir_include_libweston_private_install
+)
 
 subdir('color-lcms')
 subdir('renderer-gl')

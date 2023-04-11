@@ -23,6 +23,11 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #ifndef LIBWESTON_INTERNAL_H
@@ -84,6 +89,9 @@ weston_compositor_import_dmabuf(struct weston_compositor *compositor,
 bool
 weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
 					struct linux_dmabuf_buffer *buffer);
+bool
+weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
+				struct gbm_buffer *buffer);
 void
 weston_compositor_offscreen(struct weston_compositor *compositor);
 

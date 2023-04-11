@@ -24,6 +24,11 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -8030,7 +8035,6 @@ weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
 	return backend->can_scanout_dmabuf(compositor, buffer);
 }
 
-
 /** Import gbmbuf buffer into current renderer
  *
  * \param compositor
@@ -8047,13 +8051,13 @@ weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
  * */
 WL_EXPORT bool
 weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
-                struct gbm_buffer *buffer)
+				struct gbm_buffer *buffer)
 {
-        struct weston_renderer *renderer;
-        renderer = compositor->renderer;
-        if (renderer->import_gbm_buffer == NULL)
-                return false;
-        return renderer->import_gbm_buffer(compositor, buffer);
+	struct weston_renderer *renderer;
+	renderer = compositor->renderer;
+	if (renderer->import_gbm_buffer == NULL)
+		return false;
+	return renderer->import_gbm_buffer(compositor, buffer);
 }
 
 WL_EXPORT void

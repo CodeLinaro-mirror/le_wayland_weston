@@ -21,6 +21,11 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -128,16 +133,18 @@ weston_drm_format_array_add_format(struct weston_drm_format_array *formats,
 	struct weston_drm_format *fmt;
 
 	/* We should not try to add repeated formats to an array. */
-	assert(!weston_drm_format_array_find_format(formats, format));
+	if(!weston_drm_format_array_find_format(formats, format)) {
+		fmt = wl_array_add(&formats->arr, sizeof(*fmt));
+		if (!fmt) {
+			weston_log("%s: out of memory\n", __func__);
+			return NULL;
+		}
 
-	fmt = wl_array_add(&formats->arr, sizeof(*fmt));
-	if (!fmt) {
-		weston_log("%s: out of memory\n", __func__);
-		return NULL;
+		fmt->format = format;
+		wl_array_init(&fmt->modifiers);
+	} else {
+		fmt = weston_drm_format_array_find_format(formats, format);
 	}
-
-	fmt->format = format;
-	wl_array_init(&fmt->modifiers);
 
 	return fmt;
 }
@@ -448,14 +455,14 @@ weston_drm_format_add_modifier(struct weston_drm_format *format,
 	uint64_t *mod;
 
 	/* We should not try to add repeated modifiers to a set. */
-	assert(!weston_drm_format_has_modifier(format, modifier));
-
-	mod = wl_array_add(&format->modifiers, sizeof(*mod));
-	if (!mod) {
-		weston_log("%s: out of memory\n", __func__);
-		return -1;
+	if (!weston_drm_format_has_modifier(format, modifier)) {
+		mod = wl_array_add(&format->modifiers, sizeof(*mod));
+		if (!mod) {
+			weston_log("%s: out of memory\n", __func__);
+			return -1;
+		}
+		*mod = modifier;
 	}
-	*mod = modifier;
 
 	return 0;
 }

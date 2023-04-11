@@ -34,6 +34,7 @@ dir_bin = join_paths(dir_prefix, get_option('bindir'))
 dir_data = join_paths(dir_prefix, get_option('datadir'))
 dir_include_libweston = 'libweston-@0@'.format(libweston_major)
 dir_include_libweston_install = join_paths(dir_include_libweston, 'libweston')
+dir_include_libweston_private_install = join_paths(dir_include_libweston, 'libweston-private')
 dir_lib = join_paths(dir_prefix, get_option('libdir'))
 dir_libexec = join_paths(dir_prefix, get_option('libexecdir'))
 dir_module_weston = join_paths(dir_lib, 'weston')
@@ -42,6 +43,7 @@ dir_data_pc = join_paths(dir_data, 'pkgconfig')
 dir_lib_pc = join_paths(dir_lib, 'pkgconfig')
 dir_man = join_paths(dir_prefix, get_option('mandir'))
 dir_protocol_libweston = join_paths('libweston-@0@'.format(libweston_major), 'protocols')
+dir_weston_shared = 'weston-shared'
 
 public_inc = include_directories('include')
 common_inc = [ include_directories('.'), public_inc ]
@@ -168,6 +170,8 @@ if get_option('backend-sdm')
 		config_h.set('HAS_HDR_SUPPORT', '1')
 	endif
 endif
+dep_libcutils = cc.find_library('cutils')
+
 dep_libdrm_version = dep_libdrm.version()
 if dep_libdrm_version.version_compare('>=2.4.107')
 	message('Found libdrm with human format modifier support.')
