@@ -46,6 +46,10 @@
 * RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
 * CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #include "config.h"
@@ -165,8 +169,8 @@ extern int early_renderer_init(struct weston_compositor *ec,
 static void
 drm_output_update_msc(struct drm_output *output, unsigned int seq);
 
-static int
-assign_planes(struct weston_output *output_base, bool is_virtual_output);
+static void
+drm_assign_planes(struct weston_output *output_base);
 
 static inline struct drm_head *
 to_drm_head(struct weston_head *base)
@@ -730,12 +734,6 @@ output_repaint(struct weston_output *output_base,
 	if (output->destroy_pending || output->disable_pending)
 		return -1;
 
-	if (output_base->disable_planes) {
-		drm_debug(backend, "disable planes happen\n");
-		/* disable planes force go through gpu composition*/
-		output_base->need_gpu_composition = assign_planes(output_base, is_virtual_output);
-	}
-
 	if (!is_virtual_output && !output->next && output_base->need_gpu_composition) {
 		drm_output_render(output, damage);
 	}
@@ -826,6 +824,11 @@ drm_output_repaint(struct weston_output *output_base,
 			(struct drm_backend *)output_base->compositor->backend;
 	struct screen_capture *screen_cap = backend->screen_cap;
 
+	if (output_base->disable_planes) {
+		drm_debug(backend, "disable planes happen\n");
+		/* disable planes force go through gpu composition*/
+		drm_assign_planes(output_base);
+	}
 	/* Backend is not full ready, do early repaint. */
 	if (!backend->sdm_repaint)
 		return drm_output_repaint_early(output_base);
