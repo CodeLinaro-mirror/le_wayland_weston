@@ -990,9 +990,6 @@ drm_output_enable(struct weston_output *base)
 		return -1;
 	}
 
-	if (SetVSyncState(output->display_id, true, output) != 0)
-		return -1;
-
 	drm_output_print_modes(output);
 
 	return 0;
