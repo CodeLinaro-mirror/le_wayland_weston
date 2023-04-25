@@ -3550,8 +3550,22 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 			return;
 		}
 	} else {
-		if (!image)
-			return;
+		/*
+		 * If there's no image, expecting early gbm buffer case.
+		 * Set shader_variant to ensure clear_view could be triggered successfully
+		 * after full backend is ready.
+		 */
+		target = choose_texture_gbm_buf_target(gbmbuf);
+
+		switch (target) {
+		case GL_TEXTURE_2D:
+			gs->shader_variant = SHADER_VARIANT_RGBA;
+			break;
+		default:
+			gs->shader_variant = SHADER_VARIANT_EXTERNAL;
+			break;
+		}
+		return;
 	}
 
 	gs->num_images = image->num_images;
@@ -3563,18 +3577,14 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
 
 	for (i = 0; i < gs->num_images; ++i) {
 		glActiveTexture(GL_TEXTURE0 + i);
-		//glBindTexture(gs->target, gs->textures[i]);
 		glBindTexture(target, gs->textures[i]);
-		//gr->image_target_texture_2d(gs->target, gs->images[i]->image);
 		gr->image_target_texture_2d(target, gs->images[i]->image);
 		if (gs->images[i]->is_secure)
 		{
-			//glTexParameteri(gs->target, GL_TEXTURE_PROTECTED_EXT, GL_TRUE);
 			glTexParameteri(target, GL_TEXTURE_PROTECTED_EXT, GL_TRUE);
 		}
 	}
 
-	//gs->shader = image->shader;
 	gs->shader_variant = image->shader_variant;
 	gs->pitch = buffer->width;
 	gs->height = buffer->height;
