@@ -93,6 +93,20 @@ gbm_buffer_destroy(struct gbm_buffer *buffer)
 {
   // Destroy gbm bo if it is still valid
   if (buffer->bo) {
+    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_destroy close buffer fd[%d] metadata_fd[%d]\n",
+                                                        buffer->fd, buffer->metadata_fd);
+    /*
+     * 1. Both data fd and metadata fd are from client through RPC which is new fd for weston process
+     * So these fd should be closed in weston server
+     * 2. If fd is external fd for gbm(not created by gbm) gbm would not close it
+     * So we need to close them here, not only do bo_destroy.
+     */
+    if (buffer->fd > 0)
+      close(buffer->fd);
+
+    if (buffer->metadata_fd > 0)
+      close(buffer->metadata_fd);
+
     gbm_bo_destroy(buffer->bo);
     buffer->bo = NULL;
   }
