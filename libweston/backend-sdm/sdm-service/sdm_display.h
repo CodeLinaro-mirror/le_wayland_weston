@@ -203,6 +203,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
                          pixman_region32_t *aboved_opaque, struct RectArray *visible);
     bool IsTransparentGbmFormat(uint32_t format);
     void HandlePanelDead();
+    void HandleDisplayPowerReset();
     void RefreshWithCachedLayerstack();
     CoreInterface *core_intf_ = NULL;
     SdmDisplayBufferAllocator *buffer_allocator_;
