@@ -1,4 +1,7 @@
 /*
+*    Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+*    Not a Contribution.
+*
 *    Copyright (c) 2017, The Linux Foundation. All rights reserved.
 *
 *    Redistribution and use in source and binary forms, with or without
@@ -64,7 +67,7 @@ extern "C" {
 
 #define GBM_BUFFER_BACKEND_PROTOCOL
 
-#define MAX_NUM_PLANES (3)
+#define MAX_NUM_PLANES GBM_MAX_PLANES
 
 #define LOG_FATAL    (0)
 #define LOG_ERR      (1)

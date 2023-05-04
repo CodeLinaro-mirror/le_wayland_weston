@@ -101,8 +101,7 @@ create_sdm_layer(struct drm_output *output, struct weston_view *ev,
 	layer->acquire_fence_fd = ev->surface->acquire_fence_fd;
 	layer->is_cursor = is_cursor;
 	layer->is_skip = is_skip;
-	if (!is_skip)
-		layer->fb = drm_fb_get_from_view(output, ev);
+	layer->fb = drm_fb_get_from_view(output, ev);
 
 	pixman_region32_init(&layer->overlap);
 	pixman_region32_copy(&layer->overlap, overlap);
@@ -158,11 +157,15 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 
 		es = ev->surface;
 		if (!es->buffer_ref.buffer) {
-		    is_skip = true;
+			is_skip = true;
 		} else if (linux_dmabuf_buffer_get(es->buffer_ref.buffer->resource)) {
-		    is_skip = false;
+			is_skip = false;
+		} else if (gbm_buffer_get(es->buffer_ref.buffer->resource)) {
+			is_skip = false;
 		} else if (wl_shm_buffer_get(es->buffer_ref.buffer->resource)) {
-		    is_skip = true;
+			is_skip = true;
+		} else {
+			is_skip = true;
 		}
 
 		sdm_layer = create_sdm_layer(output, ev, &surface_overlap, false, is_skip);

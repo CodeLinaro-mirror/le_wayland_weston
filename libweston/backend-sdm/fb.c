@@ -80,6 +80,28 @@
 #include <gbm.h>
 #include <gbm_priv.h>
 
+static uint32_t drm_fb_get_planes_number(uint32_t format)
+{
+	uint32_t planes_num;
+	switch (format) {
+		case GBM_FORMAT_YCbCr_420_SP:
+		case GBM_FORMAT_YCbCr_422_SP:
+		case GBM_FORMAT_YCbCr_420_SP_VENUS:
+		case GBM_FORMAT_NV12:
+		case GBM_FORMAT_YCrCb_420_SP:
+		case GBM_FORMAT_YCrCb_422_SP:
+		case GBM_FORMAT_YCrCb_420_SP_VENUS:
+		case GBM_FORMAT_YCbCr_420_P010_VENUS:
+		case GBM_FORMAT_P010:
+			planes_num = 2;
+			break;
+		default:
+			planes_num = 1;
+			break;
+	}
+	return planes_num;
+}
+
 static void
 drm_fb_destroy(struct drm_fb *fb)
 {
@@ -270,17 +292,6 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	int i;
 #endif
 
-	/* XXX: TODO:
-	 *
-	 * Currently the buffer is rejected if any dmabuf attribute
-	 * flag is set.  This keeps us from passing an inverted /
-	 * interlaced / bottom-first buffer (or any other type that may
-	 * be added in the future) through to an overlay.  Ultimately,
-	 * these types of buffers should be handled through buffer
-	 * transforms and not as spot-checks requiring specific
-	 * knowledge. */
-	if (dmabuf->attributes.flags)
-		return NULL;
 
 	fb = zalloc(sizeof *fb);
 	if (fb == NULL)
@@ -343,7 +354,7 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	fb->modifier = dmabuf->attributes.modifier[0];
 	fb->size = 0;
 	fb->fd = backend->drm.fd;
-
+	fb->ion_fd = gbm_bo_get_fd(fb->bo);
 	static_assert(ARRAY_LENGTH(fb->strides) ==
 		      ARRAY_LENGTH(dmabuf->attributes.stride),
 		      "drm_fb and dmabuf stride size must match");
@@ -381,13 +392,17 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	{
 		union gbm_bo_handle handle;
 
-		fb->num_planes = 1;
-
 	        handle = gbm_bo_get_handle(fb->bo);
 
 		if (handle.s32 == -1)
 			goto err_free;
 		fb->handles[0] = handle.u32;
+
+		fb->num_planes = drm_fb_get_planes_number(fb->format->format);
+		if (fb->num_planes == 2) {
+			fb->strides[1] = fb->strides[0];
+			fb->handles[1] = fb->handles[0];
+		}
 	}
 #endif /* NOT HAVE_GBM_MODIFIERS */
 
@@ -438,10 +453,15 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 		fb->offsets[i] = gbm_bo_get_offset(bo, i);
 	}
 #else
-	fb->num_planes = 1;
 	fb->strides[0] = gbm_bo_get_stride(bo);
 	fb->handles[0] = gbm_bo_get_handle(bo).u32;
 	fb->modifier = DRM_FORMAT_MOD_INVALID;
+	fb->num_planes = drm_fb_get_planes_number(fb->format->format);
+	if (fb->num_planes == 2) {
+		fb->strides[1] = fb->strides[0];
+		fb->handles[1] = fb->handles[0];
+	}
+
 #endif
 
 	fb->size = fb->strides[0] * fb->height;
@@ -587,14 +607,16 @@ drm_fb_get_from_view(struct drm_output *output, struct weston_view *ev)
 				   buffer->resource, GBM_BO_USE_SCANOUT);
 	}
 
-	if (!bo) {
-		return NULL;
-	}
+	if (!dmabuf) {
+		if (!bo) {
+			return NULL;
+		}
 
-	fb = drm_fb_get_from_bo(bo, b, is_opaque, BUFFER_CLIENT);
-	if (!fb || !fb->format) {
-		gbm_bo_destroy(bo);
-		return NULL;
+		fb = drm_fb_get_from_bo(bo, b, is_opaque, BUFFER_CLIENT);
+		if (!fb || !fb->format) {
+			gbm_bo_destroy(bo);
+			return NULL;
+		}
 	}
 
 	drm_debug(b, "\t\t\t[view] view %p format: %s\n",

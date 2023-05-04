@@ -11,7 +11,7 @@ option(
 option(
 	'multi-display',
 	type: 'boolean',
-	value: true,
+	value: false,
 	description: 'Weston backend: multi display support'
 )
 option(

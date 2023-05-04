@@ -12,6 +12,8 @@ srcs_drm = [
 	'sdm-service/sdm_display_buffer_allocator.h',
 	'sdm-service/sdm_display_buffer_sync_handler.cpp',
 	'sdm-service/sdm_display_buffer_sync_handler.h',
+	'sdm-service/sdm_display_tonemapper.cpp',
+	'sdm-service/sdm_display_tonemapper.h',
 	'sdm-service/sdm_display_connect.cpp',
 	'sdm-service/sdm_display_connect.h',
 	'sdm-service/sdm_display.cpp',
@@ -34,6 +36,7 @@ deps_drm = [
 	dep_libweston_private,
 	dep_session_helper,
 	dep_libdrm,
+	dep_libgputonemapper,
 	dep_libinput_backend,
 	dependency('libudev', version: '>= 136'),
 	dep_threads
@@ -44,9 +47,9 @@ if get_option('renderer-gl')
 	if not dep_gbm.found()
                 error('sdm-backend with GL renderer requires gbm which was not found. Or, you can use \'-Drenderer-gl=false\'.')
 	endif
-	#if dep_gbm.version().version_compare('>= 17.1')
-		#config_h.set('HAVE_GBM_MODIFIERS', '1')
-	#endif
+	if dep_gbm.version().version_compare('>= 17.1')
+		config_h.set('HAVE_GBM_MODIFIERS', '1')
+	endif
 	#if dep_gbm.version().version_compare('>= 17.2')
 		#config_h.set('HAVE_GBM_FD_IMPORT', '1')
 	#endif
