@@ -183,6 +183,9 @@ DisplayError SdmDisplayBufferAllocator::FreeBuffer(BufferInfo *buffer_info) {
   buffer_info->private_data = NULL;
   if (err == kErrorNone) {
       AllocatedBufferInfo *alloc_buffer_info = &buffer_info->alloc_buffer_info;
+      if (alloc_buffer_info->fd >= 0) {
+        close(alloc_buffer_info->fd);
+      }
       alloc_buffer_info->fd = -1;
       alloc_buffer_info->stride = 0;
       alloc_buffer_info->size = 0;
