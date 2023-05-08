@@ -25,6 +25,12 @@
 *    WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 *    OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 *    IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+*    Changes from Qualcomm Innovation Center are provided under the following
+*    license:
+*
+*    Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+*    SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifndef WESTON_SCREEN_CAPTURE_H
@@ -69,22 +75,42 @@ struct screen_capture {
 	struct weston_compositor *compositor;
 	uint32_t mirror_output_id;
 	void *virtual_output; /* point to drm_output to avoid nested definition */
+	struct drm_output *main_output;
 	bool enabled;
 	bool fallback_gpu;
+	bool force_gpu;
+	bool destroy_pending;
+	bool output_destroy_pending;
 	struct weston_view *view; /* record the view which owns the capture buffer */
 
+	/* buffers in the list is pending on capture */
 	struct wl_list attached_buf_list;
+
+	/* buffers which had been captured done, if client frame/attach these buffers again,
+	 * they could be moved to the attached list
+	 */
+	struct wl_list free_buf_list;
 
 	struct weston_buffer_reference buf_ref;
 	struct screen_capture_buffer *current;
 	struct screen_capture_buffer *next;
+	struct wl_resource *resource;
+	struct wl_event_source *timeout_source;
 };
 
 struct screen_capture_buffer {
 	struct weston_buffer *buffer;
-	int fence_id;
+	/* release fence fd to be signaled by kernel when WB finished */
+	int release_fence_fd;
+	int buffer_fd;
+	int format;
+	int type;
+	struct gbm_bo *bo;
+	bool is_secure;
+	bool is_ubwc;
 	struct wl_list link;
 	struct weston_buffer_reference buf_ref;
+	struct wl_event_source *cap_fence_source;
 };
 
 /** Advertise screen capture support

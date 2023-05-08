@@ -25,6 +25,12 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following
+* license:
+*
+* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 /*
  * Copyright © 2008-2011 Kristian Høgsberg
@@ -281,12 +287,18 @@ struct drm_output {
     unsigned int sec;
     unsigned int usec;
   } last_vblank;
-  // Indicate whether allocation of framebuffer is UBWC or not
+  /* Indicate whether allocation of framebuffer is UBWC or not */
   int framebuffer_ubwc;
-  // Indicate whether output is secure
+  /* Indicate whether output is secure */
   bool is_secure;
-  // Indicate whether commit layers or not
+  /* Indicate whether commit layers or not */
   bool layer_none_commit;
-  // Indicate previous frame whether commit layers or not, record previous layer_none_commit
+  /* Indicate previous frame whether commit layers or not, record previous
+   * layer_none_commit
+   */
   bool prev_layer_none_commit;
+  /* capture buffer in next frame */
+  struct screen_capture_buffer *cap_buffer;
+  /* Indicate screen capture by GPU or CWB */
+  bool cap_fallback_gpu;
 };

@@ -26,7 +26,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -1697,102 +1697,112 @@ gl_renderer_capture_screen(struct weston_output *output,
                               struct weston_buffer *buffer,
                               pixman_region32_t *output_damage)
 {
-        struct gl_output_state *go = get_output_state(output);
-        struct weston_compositor *compositor = output->compositor;
-        pixman_region32_t buffer_damage, total_damage;
-        enum gl_border_status border_damage = BORDER_STATUS_CLEAN;
-        GLuint framebuffer, texture;
-        GLenum status;
-        struct gbm_buffer *gbm_buf = NULL;
-        struct egl_image *cap_buf_image = NULL;
-        struct gbmbuf_image *gbm_buf_image = NULL;
-        struct weston_view *view;
+	struct gl_output_state *go = get_output_state(output);
+	struct weston_compositor *compositor = output->compositor;
+	pixman_region32_t buffer_damage, total_damage;
+	enum gl_border_status border_damage = BORDER_STATUS_CLEAN;
+	GLuint framebuffer, texture;
+	GLenum status;
+	struct gbm_buffer *gbm_buf = NULL;
+	struct egl_image *cap_buf_image = NULL;
+	struct gbmbuf_image *gbm_buf_image = NULL;
+	struct linux_dmabuf_buffer *dmabuf = NULL;
+	struct dmabuf_image *dmabuf_image = NULL;
+	struct weston_view *view;
 
-        if (!buffer) {
-                weston_log("Error! buffer is NULL.\n");
-                return;
-        }
+	if (!buffer) {
+		weston_log("Error! buffer is NULL.\n");
+		return;
+	}
 
-        if (wl_shm_buffer_get(buffer->resource) ||
-                linux_dmabuf_buffer_get(buffer->resource)) {
-                weston_log("Error! buffer is not supported by screen capture.\n");
-                return;
-        }
+	if (wl_shm_buffer_get(buffer->resource)) {
+		weston_log("Error! buffer is not supported by screen capture.\n");
+		return;
+	}
 
-        if (gbm_buf = gbm_buffer_get(buffer->resource)) {
-                gbm_buf_image = gbm_buffer_backend_get_user_data(gbm_buf);
-                cap_buf_image = gbm_buf_image->images[0];
-        } else if (gbm_buf = wl_resource_get_user_data(buffer->resource)) {
-                /* TODO: Create egl image */
-                weston_log("Error! no egl image is bound.\n");
-                return;
-        }
-        if (!cap_buf_image) {
-                weston_log("Error! no egl image is bound.\n");
-                return;
-        }
+	if (gbm_buf = gbm_buffer_get(buffer->resource)) {
+		gbm_buf_image = gbm_buffer_backend_get_user_data(gbm_buf);
+		cap_buf_image = gbm_buf_image->images[0];
+	} else if (dmabuf = linux_dmabuf_buffer_get(buffer->resource)) {
+		dmabuf_image = linux_dmabuf_buffer_get_user_data(dmabuf);
+		cap_buf_image = dmabuf_image->images[0];
+	} else if (gbm_buf = wl_resource_get_user_data(buffer->resource)) {
+		/* TODO: Create egl image */
+		weston_log("Error! no egl image is bound.\n");
+		return;
+	}
 
-        /* Prepare for framebuffer */
-        glGenTextures(1, &texture);
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, cap_buf_image->image);
-        glBindTexture(GL_TEXTURE_2D, 0);
+	if (!cap_buf_image) {
+		weston_log("Error! no egl image is bound.\n");
+		return;
+	}
 
-        glGenFramebuffers(1, &framebuffer);
-        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-        status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        if (status != GL_FRAMEBUFFER_COMPLETE) {
-                glDeleteFramebuffers(1, &framebuffer);
-                glDeleteTextures(1, &texture);
-                weston_log("Error! can't make FBO.\n");
-                return;
-        }
+	/* Prepare for framebuffer */
+	glGenTextures(1, &texture);
+	glBindTexture(GL_TEXTURE_2D, texture);
+	glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, cap_buf_image->image);
+	glBindTexture(GL_TEXTURE_2D, 0);
 
-        /* Calculate the viewport */
-        glViewport(go->borders[GL_RENDERER_BORDER_LEFT].width,
-                   go->borders[GL_RENDERER_BORDER_BOTTOM].height,
-                   gbm_buf->width,
-                   gbm_buf->height);
+	glGenFramebuffers(1, &framebuffer);
+	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+	status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if (status != GL_FRAMEBUFFER_COMPLETE) {
+		glDeleteFramebuffers(1, &framebuffer);
+		glDeleteTextures(1, &texture);
+		weston_log("Error! can't make FBO.\n");
+		return;
+	}
 
-        /* Calculate the global GL matrix */
-        go->output_matrix = output->matrix;
-        weston_matrix_translate(&go->output_matrix,
-                                -(output->current_mode->width / 2.0),
-                                -(output->current_mode->height / 2.0), 0);
-        /* Change y to y_invert */
-        weston_matrix_scale(&go->output_matrix,
-                            2.0 / output->current_mode->width,
-                            2.0 / output->current_mode->height, 1);
+	/* Calculate the viewport */
+	if (gbm_buf)
+		glViewport(go->borders[GL_RENDERER_BORDER_LEFT].width,
+			go->borders[GL_RENDERER_BORDER_BOTTOM].height,
+			gbm_buf->width, gbm_buf->height);
+	else
+		glViewport(go->borders[GL_RENDERER_BORDER_LEFT].width,
+			go->borders[GL_RENDERER_BORDER_BOTTOM].height,
+			dmabuf->attributes.width,
+			dmabuf->attributes.height);
 
-        pixman_region32_init(&total_damage);
-        pixman_region32_init(&buffer_damage);
+	/* Calculate the global GL matrix */
+	go->output_matrix = output->matrix;
+	weston_matrix_translate(&go->output_matrix,
+			-(output->current_mode->width / 2.0),
+			-(output->current_mode->height / 2.0), 0);
+	/* Change y to y_invert */
+	weston_matrix_scale(&go->output_matrix,
+			2.0 / output->current_mode->width,
+			2.0 / output->current_mode->height, 1);
 
-        output_get_damage(output, &buffer_damage, &border_damage);
-        output_rotate_damage(output, output_damage, go->border_status);
+	pixman_region32_init(&total_damage);
+	pixman_region32_init(&buffer_damage);
 
-        pixman_region32_union(&total_damage, &buffer_damage, output_damage);
-        border_damage |= go->border_status;
+	output_get_damage(output, &buffer_damage, &border_damage);
+	output_rotate_damage(output, output_damage, go->border_status);
 
-        /* Draw all views */
-        wl_list_for_each_reverse(view, &compositor->view_list, link) {
-                if (is_screen_capture_view(view))
-                        continue;
-                draw_view(view, output, &total_damage);
-        }
+	pixman_region32_union(&total_damage, &buffer_damage, output_damage);
+	border_damage |= go->border_status;
 
-        pixman_region32_fini(&total_damage);
-        pixman_region32_fini(&buffer_damage);
+	/* Draw all views */
+	wl_list_for_each_reverse(view, &compositor->view_list, link) {
+		if (is_screen_capture_view(view))
+			continue;
+		draw_view(view, output, &total_damage);
+	}
 
-        draw_output_borders(output, border_damage);
+	pixman_region32_fini(&total_damage);
+	pixman_region32_fini(&buffer_damage);
 
-        /* Check if FBO rendering is completed. Any efficient way except glFinish? */
-        glFinish();
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glDeleteFramebuffers(1, &framebuffer);
-        glDeleteTextures(1, &texture);
+	draw_output_borders(output, border_damage);
 
-        go->border_status = BORDER_STATUS_CLEAN;
+	/* Check if FBO rendering is completed. Any efficient way except glFinish? */
+	glFinish();
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glDeleteFramebuffers(1, &framebuffer);
+	glDeleteTextures(1, &texture);
+
+	go->border_status = BORDER_STATUS_CLEAN;
 }
 
 static int
