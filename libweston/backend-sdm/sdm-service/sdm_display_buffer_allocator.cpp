@@ -261,8 +261,14 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
                                         *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
                                                  GBM_BO_USAGE_HW_RENDERING_QTI;
                                         break;
-  case kFormatYCbCr420TP10Ubwc:         *target = GBM_FORMAT_YCbCr_420_TP10_UBWC;  break;
-  case kFormatYCbCr420P010Ubwc:         *target = GBM_FORMAT_YCbCr_420_P010_UBWC;  break;
+  case kFormatYCbCr420TP10Ubwc:         *target = GBM_FORMAT_YCbCr_420_TP10_UBWC;
+                                        *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
+                                                 GBM_BO_USAGE_HW_RENDERING_QTI;
+                                        break;
+  case kFormatYCbCr420P010Ubwc:         *target = GBM_FORMAT_YCbCr_420_P010_UBWC;
+                                        *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
+                                                 GBM_BO_USAGE_HW_RENDERING_QTI;
+                                        break;
   case kFormatYCbCr420P010:             *target = GBM_FORMAT_P010;  break;
   default:
     DLOGE("Unsupported format = 0x%x", format);
