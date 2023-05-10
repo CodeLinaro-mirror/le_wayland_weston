@@ -389,8 +389,13 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
     // Import gbm bo from buf_info
     bo = gbm_bo_import(gbm_, GBM_BO_IMPORT_FD, &import_fd_data, flags);
 
+    if (import_fd_data.fd >= 0) {
+      close(import_fd_data.fd);
+    }
+    import_fd_data.fd = -1;
+
     if (bo == NULL) {
-        return kErrorNone;
+      return kErrorNone;
     }
 
     uint32_t height = gbm_bo_get_height(bo);
