@@ -631,6 +631,10 @@ destroy_screen_capture(struct wl_resource *resource)
 	struct screen_capture *screen_cap = NULL;
 
 	screen_cap = wl_resource_get_user_data(resource);
+	if (!screen_cap) {
+		wl_resource_post_error(resource, WL_DISPLAY_ERROR_INVALID_OBJECT, "screen capture is null!");
+		return;
+	}
 	screen_cap->destroy_pending = true;
 	if (screen_cap) {
 		/* call exit again to avoid expected client crash */
