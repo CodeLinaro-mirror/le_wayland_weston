@@ -441,6 +441,16 @@ get_drm_format(uint32_t format, struct drm_fb *fb)
 			fb->modifier = DRM_FORMAT_MOD_QCOM_COMPRESSED |
 					DRM_FORMAT_MOD_QCOM_DX | DRM_FORMAT_MOD_QCOM_TIGHT;
 			break;
+		case GBM_FORMAT_YCbCr_420_P010_UBWC:
+			fb->format = pixel_format_get_info(DRM_FORMAT_NV12);
+			fb->modifier = DRM_FORMAT_MOD_QCOM_COMPRESSED |
+					DRM_FORMAT_MOD_QCOM_DX | DRM_FORMAT_MOD_QCOM_TIGHT;
+			break;
+		case GBM_FORMAT_YCbCr_420_P010_VENUS:
+		case GBM_FORMAT_P010:
+			fb->format = pixel_format_get_info(DRM_FORMAT_NV12);
+			fb->modifier = DRM_FORMAT_MOD_QCOM_DX;
+			break;
 		default:
 			fb->format = NULL;
 	}

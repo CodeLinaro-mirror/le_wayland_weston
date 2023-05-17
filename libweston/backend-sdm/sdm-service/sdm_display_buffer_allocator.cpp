@@ -269,6 +269,7 @@ int SdmDisplayBufferAllocator::SetBufferInfo(LayerBufferFormat format, uint32_t 
                                         *flags = GBM_BO_USAGE_UBWC_ALIGNED_QTI |
                                                  GBM_BO_USAGE_HW_RENDERING_QTI;
                                         break;
+  case kFormatYCbCr420P010Venus:        *target = GBM_FORMAT_YCbCr_420_P010_VENUS;  break;
   case kFormatYCbCr420P010:             *target = GBM_FORMAT_P010;  break;
   default:
     DLOGE("Unsupported format = 0x%x", format);
@@ -325,6 +326,7 @@ bool SdmDisplayBufferAllocator::IsFormatVideo(uint32_t fmt)
       case GBM_FORMAT_NV12:
       case GBM_FORMAT_YCbCr_420_TP10_UBWC:
       case GBM_FORMAT_P010:
+      case GBM_FORMAT_YCbCr_420_P010_VENUS:
            is_video_present = true;
            break;
       default:
@@ -343,6 +345,7 @@ bool SdmDisplayBufferAllocator::IsVideoFormatLinear(uint32_t fmt, uint32_t ubwc_
      switch (fmt) {
       case GBM_FORMAT_NV12:
       case GBM_FORMAT_P010:
+      case GBM_FORMAT_YCbCr_420_P010_VENUS:
         is_videofmt_linear = true;
         break;
       default:
@@ -363,6 +366,7 @@ bool SdmDisplayBufferAllocator::IsVideoFormatUBWC(uint32_t fmt, uint32_t ubwc_st
      switch (fmt) {
       case GBM_FORMAT_NV12:
       case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+      case GBM_FORMAT_YCbCr_420_P010_UBWC:
         is_videofmt_ubwc = true;
         break;
       default:
