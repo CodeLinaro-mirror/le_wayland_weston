@@ -406,12 +406,28 @@ drm_fb_get_from_dmabuf(struct linux_dmabuf_buffer *dmabuf,
 	}
 #endif /* NOT HAVE_GBM_MODIFIERS */
 
-	if (drm_fb_addfb(backend, fb) != 0)
+	if (drm_fb_addfb(backend, fb) != 0) {
+		weston_log("[%s]:failed to create kms fb: %s\n", __func__,
+				strerror(errno));
+		weston_log("[%s] fmt(%s:0x%x) num_planes(%d)\n", __FUNCTION__,
+				fb->format->drm_format_name, fb->format->format,
+				fb->num_planes);
+		for (int i = 0; i < fb->num_planes; i++) {
+			weston_log("[%s] fb strides[%d] = %d, handles[%d] = %d,\
+					offset[%d] = %d\n", __FUNCTION__,
+					i, fb->strides[i],
+					i, fb->handles[i],
+					i, fb->offsets[i]);
+		}
 		goto err_free;
+	}
 
 	return fb;
 
 err_free:
+	if (fb->ion_fd > 0) {
+		close(fb->ion_fd);
+	}
 	drm_fb_destroy_dmabuf(fb);
 	return NULL;
 }
@@ -502,7 +518,17 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 
 	if (drm_fb_addfb(backend, fb) != 0) {
 		weston_log("failed to create kms fb: %s\n",
-				   strerror(errno));
+				strerror(errno));
+		weston_log("[%s] fmt(%s:0x%x) num_planes(%d)\n", __FUNCTION__,
+				fb->format->drm_format_name, fb->format->format,
+				fb->num_planes);
+		for (int i = 0; i < fb->num_planes; i++) {
+			weston_log("[%s] fb strides[%d] = %d, handles[%d] = %d,\
+					offset[%d] = %d\n", __FUNCTION__,
+					i, fb->strides[i],
+					i, fb->handles[i],
+					i, fb->offsets[i]);
+		}
 		goto err_free;
 	}
 
@@ -511,6 +537,9 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 	return fb;
 
 err_free:
+	if (fb->ion_fd > 0) {
+		close(fb->ion_fd);
+	}
 	free(fb);
 	return NULL;
 }
