@@ -1008,7 +1008,8 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
             //sending it. Hence not adding acquire fence for frame buffer target
             layer_stack_.layers.at(index)->input_buffer.acquire_fence_fd =
                                                       sdm_layer->acquire_fence_fd;
-
+            DLOGV("Acquire fence fd = %d for layer index %d",
+                  sdm_layer->acquire_fence_fd, index);
             index++;
             if (sdm_layer->is_skip)
                 layer_stack_.flags.skip_present = true;
