@@ -382,53 +382,50 @@ bool SdmDisplayBufferAllocator::IsVideoFormatUBWC(uint32_t fmt, uint32_t ubwc_st
 DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInfo &buf_info,
                                                  uint32_t stride[4], uint32_t offset[4],
                                                  uint32_t *num_planes) {
-    struct gbm_bo *bo;
-    struct gbm_import_fd_data import_fd_data;
-    uint32_t format1 = GBM_FORMAT_ARGB8888;
-    uint64_t flags = 0;
-    uint32_t ubwc_status = 0;
-    generic_buf_layout_t buf_layout;
+  struct gbm_bo *bo;
+  struct gbm_import_fd_data import_fd_data;
+  uint32_t format1 = GBM_FORMAT_ARGB8888;
+  uint64_t flags = 0;
+  uint32_t ubwc_status = 0;
+  int dup_fd = -1;
+  generic_buf_layout_t buf_layout;
 
-    SetBufferInfo(buf_info.format, &format1, &flags);
+  SetBufferInfo(buf_info.format, &format1, &flags);
+  gbm_perform(GBM_PERFORM_GET_REGISTERED_DUP_FD, buf_info.fd, &dup_fd);
 
-    import_fd_data.fd = dup(buf_info.fd);
-    import_fd_data.format = format1;
-    import_fd_data.width = buf_info.aligned_width;
-    import_fd_data.height = buf_info.aligned_height;
+  import_fd_data.fd = dup_fd;
+  import_fd_data.format = format1;
+  import_fd_data.width = buf_info.aligned_width;
+  import_fd_data.height = buf_info.aligned_height;
 
-    // Import gbm bo from buf_info
-    bo = gbm_bo_import(gbm_, GBM_BO_IMPORT_FD, &import_fd_data, flags);
+  // Import gbm bo from buf_info
+  bo = gbm_bo_import(gbm_, GBM_BO_IMPORT_FD, &import_fd_data, flags);
 
-    if (import_fd_data.fd >= 0) {
-      close(import_fd_data.fd);
+  if (bo == NULL) {
+    if (dup_fd > -1) {
+      close(dup_fd);
+      dup_fd = -1;
     }
-    import_fd_data.fd = -1;
+    return kErrorNone;
+  }
 
-    if (bo == NULL) {
-      return kErrorNone;
-    }
+  uint32_t height = gbm_bo_get_height(bo);
+  uint32_t format = gbm_bo_get_format(bo);
 
-    uint32_t height = gbm_bo_get_height(bo);
-    uint32_t format = gbm_bo_get_format(bo);
-
-    if (IsFormatVideo(format) == false) {
-      stride[0] = gbm_bo_get_stride(bo);
-      offset[0] = 0;
-      *num_planes++;
-      gbm_bo_destroy(bo);
-      return kErrorNone;
-    } else {
-      /*
-        TODO: A more elegant solution would be to create a GBM API call to
-              get number of non-meta planes.
-              Additionally, need to check YUV formats using a GBM API so as to keep
-              the implementation generic. Currently, this is a local function call limited
-              to 3 YUV formats, and every time a new format needs to be introduced,
-              implementation of IsFormatVideo needs to be updated.
-      */
-      *num_planes = 2;  // For video formats
-    }
-
+  if (IsFormatVideo(format) == false) {
+    stride[0] = gbm_bo_get_stride(bo);
+    offset[0] = 0;
+    *num_planes++;
+  } else {
+    /*
+      TODO: A more elegant solution would be to create a GBM API call to
+            get number of non-meta planes.
+            Additionally, need to check YUV formats using a GBM API so as to keep
+            the implementation generic. Currently, this is a local function call limited
+            to 3 YUV formats, and every time a new format needs to be introduced,
+            implementation of IsFormatVideo needs to be updated.
+    */
+    *num_planes = 2;  // For video formats
     gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
     gbm_perform(GBM_PERFORM_GET_UBWC_STATUS, bo, &ubwc_status);
 
@@ -445,8 +442,13 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
       offset[0] = 0;
       offset[1] = 0;
     }
+  }
 
   gbm_bo_destroy(bo);
+  if (dup_fd > -1) {
+    close(dup_fd);
+    dup_fd = -1;
+  }
 
   return kErrorNone;
 }
