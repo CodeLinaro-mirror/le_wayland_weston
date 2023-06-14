@@ -26,6 +26,13 @@
  * SOFTWARE.
  */
 
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
+*/
+
 #include "config.h"
 
 #include <fcntl.h>
@@ -3159,7 +3166,11 @@ weston_output_finish_frame(struct weston_output *output,
 	struct timespec vblank_monotonic;
 	int64_t msec_rel;
 
-	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
+        //assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
+
+        if(REPAINT_AWAITING_COMPLETION != output->repaint_status) {
+                return;
+        }
 
 	/*
 	 * If timestamp of latest vblank is given, it must always go forwards.

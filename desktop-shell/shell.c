@@ -23,6 +23,13 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+/*
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 #include "config.h"
 
 #include <stdlib.h>
@@ -4407,14 +4414,14 @@ bind_desktop_shell(struct wl_client *client,
 
 	resource = wl_resource_create(client, &weston_desktop_shell_interface,
 				      1, id);
-
-	if (client == shell->child.client) {
+        /*TODO skip launch desktop shell temporarily*/
+	//if (client == shell->child.client) {
 		wl_resource_set_implementation(resource,
 					       &desktop_shell_implementation,
 					       shell, unbind_desktop_shell);
 		shell->child.desktop_shell = resource;
 		return;
-	}
+	//}
 
 	wl_resource_post_error(resource, WL_DISPLAY_ERROR_INVALID_OBJECT,
 			       "permission to bind desktop_shell denied");
@@ -5234,7 +5241,8 @@ wet_shell_init(struct weston_compositor *ec,
 	setup_output_destroy_handler(ec, shell);
 
 	loop = wl_display_get_event_loop(ec->wl_display);
-	wl_event_loop_add_idle(loop, launch_desktop_shell_process, shell);
+	/*TODO skip launch desktop shell temporarily*/
+	//wl_event_loop_add_idle(loop, launch_desktop_shell_process, shell);
 
 	wl_list_for_each(seat, &ec->seat_list, link)
 		create_shell_seat(shell, seat);
