@@ -297,31 +297,10 @@ void SdmDisplay::HandlePanelDead()
     esd_reset_panel_ = false;
 }
 
-void SdmDisplay::HandleDisplayPowerReset()
-{
-    shared_ptr<Fence> *release_fence;
-    DisplayError error = kErrorNone;
-
-    error = SetDisplayState(kStateOff, true, release_fence);
-    if (error != kErrorNone) {
-        DLOGE("Failed to power off the display with error %d", error);
-        return;
-    }
-
-    error = SetDisplayState(kStateOn, false, release_fence);
-    if (error != kErrorNone) {
-        DLOGE("Failed to SetDisplayState with error %d", error);
-        return;
-    }
-}
-
 DisplayError SdmDisplay::HandleEvent(DisplayEvent event) {
     switch (event) {
         case kPanelDeadEvent:
             HandlePanelDead();
-            break;
-        case kDisplayPowerResetEvent:
-            HandleDisplayPowerReset();
             break;
         default:
             DLOGW("Unknown event: %d", event);
