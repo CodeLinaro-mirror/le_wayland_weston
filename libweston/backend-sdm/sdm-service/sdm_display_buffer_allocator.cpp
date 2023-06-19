@@ -25,7 +25,7 @@
 /*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -399,10 +399,17 @@ DisplayError SdmDisplayBufferAllocator::GetBufferLayout(const AllocatedBufferInf
       *num_planes++;
       gbm_bo_destroy(bo);
       return kErrorNone;
+    } else {
+      /*
+        TODO: A more elegant solution would be to create a GBM API call to
+              get number of non-meta planes.
+              Additionally, need to check YUV formats using a GBM API so as to keep
+              the implementation generic. Currently, this is a local function call limited
+              to 3 YUV formats, and every time a new format needs to be introduced,
+              implementation of IsFormatVideo needs to be updated.
+      */
+      *num_planes = 2;  // For video formats
     }
-
-    if (format == GBM_FORMAT_NV12)
-    	*num_planes = 2; // for NV12 format
 
     gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_layout);
     gbm_perform(GBM_PERFORM_GET_UBWC_STATUS, bo, &ubwc_status);
