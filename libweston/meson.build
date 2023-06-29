@@ -7,7 +7,6 @@ deps_libweston = [
 	dep_libdrm_headers,
 	dep_xkbcommon,
 	dep_matrix_c,
-        dep_gbm
 ]
 srcs_libweston = [
 	git_version_h,
