@@ -264,7 +264,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     float min_luminance_ = 0.0;
     int previous_retire_fence_fd_ = -1;
     bool esd_reset_panel_ = false;
-    int disable_hdr_handling_ = 1;
+    int disable_hdr_handling_ = 0;
     int disable_tone_mapper_ = 0;        /* To disable tone mapping functionality. */
     SdmDisplayToneMapper *tone_mapper_ = NULL;
     bool hdr_supported_ = false;
