@@ -37,7 +37,7 @@ plugin_wlwl = shared_library(
 	include_directories: common_inc,
 	dependencies: deps_wlwl,
 	name_prefix: '',
-	install: true,
+	install: false,
 	install_dir: dir_module_libweston
 )
 env_modmap += 'wayland-backend.so=@0@;'.format(plugin_wlwl.full_path())
