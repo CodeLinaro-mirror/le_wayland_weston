@@ -18,12 +18,7 @@ BuildRequires:  meson
 BuildRequires:  pkgconfig(cairo)
 BuildRequires:  pkgconfig(cairo) >= 1.10.0
 BuildRequires:  pkgconfig(cairo-xcb)
-#BuildRequires:  pkgconfig(colord) >= 0.1.27
 BuildRequires:  pkgconfig(dbus-1) >= 1.6
-#BuildRequires:  pkgconfig(egl)
-#BuildRequires:  pkgconfig(freerdp2)
-#BuildRequires:  pkgconfig(gbm) >= 10.2
-#BuildRequires:  pkgconfig(glesv2)
 BuildRequires:  pkgconfig(lcms2)
 BuildRequires:  pkgconfig(libdrm) >= 2.4.30
 BuildRequires:  pkgconfig(libevdev)
@@ -31,61 +26,29 @@ BuildRequires:  pkgconfig(libinput) >= 0.8.0
 BuildRequires:  pkgconfig(libpng)
 BuildRequires:  pkgconfig(libsystemd) >= 209
 BuildRequires:  pkgconfig(libudev) >= 136
-# libunwind available only on selected arches
-%ifarch %{arm} aarch64 hppa ia64 mips ppc %{power64} %{ix86} x86_64
-#BuildRequires:  libunwind
-%endif
-#BuildRequires:  pkgconfig(libva) >= 0.34.0
-#BuildRequires:  pkgconfig(libva-drm) >= 0.34.0
 BuildRequires:  pkgconfig(libwebp)
 BuildRequires:  pkgconfig(libxml-2.0) >= 2.6
 BuildRequires:  pkgconfig(mtdev) >= 1.1.0
 BuildRequires:  pkgconfig(pangocairo)
 BuildRequires:  pkgconfig(pixman-1) >= 0.25.2
 BuildRequires:  pkgconfig(wayland-client) >= 1.12.0
-#BuildRequires:  pkgconfig(wayland-cursor)
 BuildRequires:  pkgconfig(wayland-egl)
 BuildRequires:  pkgconfig(wayland-protocols) >= 1.24
 BuildRequires:  pkgconfig(wayland-scanner)
 BuildRequires:  pkgconfig(wayland-server)
-#BuildRequires:  pkgconfig(x11)
-#BuildRequires:  pkgconfig(x11-xcb)
-#BuildRequires:  pkgconfig(xcb)
-#BuildRequires:  pkgconfig(xcb-composite)
-#BuildRequires:  pkgconfig(xcb-shm)
-#BuildRequires:  pkgconfig(xcb-xfixes)
-#BuildRequires:  pkgconfig(xcb-xkb)
-#BuildRequires:  pkgconfig(xcursor)
 BuildRequires:  pkgconfig(xkbcommon)
-#BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  poppler-devel
 BuildRequires:  poppler-glib-devel
 BuildRequires:  gstreamer1-devel
-#BuildRequires:  gstreamer1-plugins-base-devel
-#BuildRequires:  pipewire-devel
-#BuildRequires:  pkgconfig(libcutils)
 BuildRequires:  libgbm-dev
 BuildRequires:  weston-sdm-extension-headers
+BuildRequires: systemd systemd-rpm-macros
 
 Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
-#Requires:       mesa-dri-drivers
-Requires:       libcutils
-Requires:       systemd
+Requires:       libcutils systemd libevdev mtdev libgudev libwacom-data libwacom libinput libwayland-cursor libwayland-egl
+Requires:       pkgconfig(libdrm) = 2.4.110
+
 %{?systemd_requires}
-#Requires:  pkgconfig(libevdev)
-#Requires:  pkgconfig(libinput) >= 0.8.0
-#Requires:  pkgconfig(colord) >= 0.1.27
-#Requires:  pkgconfig(wayland-cursor)
-#Requires:  pkgconfig(wayland-egl)
-#Requires:  pkgconfig(pixman-1) >= 0.25.2
-#Requires:  pkgconfig(wayland-server)
-#Requires:  pkgconfig(xkbcommon)
-#Requires:  pkgconfig(x11-xcb)
-#Requires:  pkgconfig(freerdp2)
-#Requires:  gstreamer1-devel
-#Requires:  gstreamer1-plugins-base-devel
-#Requires:  pkgconfig(libpipewire-0.3)
-#Requires:  libwinpr
 BuildRequires: adreno200-binaries
 BuildRequires: owfds-dev
 
@@ -125,7 +88,7 @@ Common headers for weston
 # the setting.  Thanks to the SuSE folks for the workaround.
 export LDFLAGS="%{?build_ldflags} -Wl,-z,undefs"
 export CPPFLAGS="-I/usr/include/gbm"
-%meson -Dremoting=false -Dbackend-drm-screencast-vaapi=false  -Dcolor-management-colord=false -Dbackend-x11=false -Dbackend-rdp=false -Dpipewire=false -Dbackend-rdp=false -Dxwayland=false
+%meson -Dremoting=false -Dbackend-drm-screencast-vaapi=false  -Dcolor-management-colord=false -Dbackend-x11=false -Dbackend-rdp=false -Dpipewire=false -Dbackend-rdp=false -Dxwayland=false -Dsystemd=true -Dlauncher-logind=true
 %meson_build
 
 
@@ -135,20 +98,22 @@ export CPPFLAGS="-I/usr/include/gbm"
 mkdir -p %{buildroot}%{_libdir}/drm-back
 mv %{buildroot}%{_libdir}/libweston-%{apiver}/drm-backend.so %{buildroot}%{_libdir}/drm-back
 
-#mkdir -p %{buildroot}%{_unitdir}
-#install -DpZm 0644 weston.service_caf_10 %{buildroot}%{_unitdir}/weston.service
+mkdir -p %{buildroot}%{_sysconfdir}/pam.d
+install -DpZm 0644 weston-autologin %{buildroot}%{_sysconfdir}/pam.d/weston-autologin
+mkdir -p %{buildroot}%{_unitdir}
+install -DpZm 0644 weston.service %{buildroot}%{_unitdir}/weston.service
 mkdir -p %{buildroot}%{_sysconfdir}/xdg/weston
 install -DpZm 0644 weston.ini %{buildroot}%{_sysconfdir}/xdg/weston/weston.ini
 
 
-#%post
-#systemctl enable weston.service
+%post
+systemctl enable weston.service
 
-#%preun
-#%systemd_preun weston.service
+%preun
+%systemd_preun weston.service
 
-#%postun
-#%systemd_postun_with_restart weston.service
+%postun
+%systemd_postun_with_restart weston.service
 
 
 %check
@@ -186,7 +151,8 @@ install -DpZm 0644 weston.ini %{buildroot}%{_sysconfdir}/xdg/weston/weston.ini
 %{_datadir}/weston/*.png
 %{_datadir}/weston/wayland.svg
 %{_datadir}/wayland-sessions/weston.desktop
-#%{_unitdir}/weston.service
+%{_unitdir}/weston.service
+%{_sysconfdir}/pam.d/weston-autologin
 %{_sysconfdir}/xdg/weston/weston.ini
 
 %files libs

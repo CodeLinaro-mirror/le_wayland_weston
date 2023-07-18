@@ -1,0 +1,21 @@
+#Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+#SPDX-License-Identifier: BSD-3-Clause-Clear
+
+[Unit]
+Description=Weston reference Wayland compositor
+Conflicts=getty@tty2.service
+Requires=openwfd_server_@0.service kgsl.service
+After=dbus.service rc.pvr.service openwfd_server_@0.service kgsl.service
+
+[Service]
+User=root
+PAMName=weston-autologin
+Environment="XDG_RUNTIME_DIR=/run/user/0"
+ExecStart=weston --idle-time=0 --socket=wayland-0 --log=/tmp/weston.log
+Type=simple
+PIDFile=/run/early/weston.pid
+Restart=always
+TTYPath=/dev/tty2
+
+[Install]
+WantedBy=multi-user.target
