@@ -24,7 +24,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -267,6 +267,37 @@ weston_place_marker(const char *name)
 
 	if (fd > 0) {
 		write(fd, name, strlen(name));
+		close(fd);
+	}
+}
+
+WL_EXPORT bool
+weston_atrace_enable(void)
+{
+	static bool weston_trace = false;
+	static bool weston_trace_flag = false;
+
+	if (!weston_trace) {
+		weston_trace = true;
+		if (getenv("WESTON_TRACE") && !strcmp(getenv("WESTON_TRACE"), "1")) {
+			weston_trace_flag = true;
+		}
+	}
+
+	return weston_trace_flag;
+}
+
+WL_EXPORT void
+weston_atrace_marker(const char *type, const char *name)
+{
+	char buf[512];
+	size_t len;
+	int fd = -1;
+
+	fd = open("/sys/kernel/debug/tracing/trace_marker", O_WRONLY);
+	if (fd > 0) {
+		len = snprintf(buf, 512, "%s|%d|%s", type, getpid(), name);
+		write(fd, buf, len);
 		close(fd);
 	}
 }
