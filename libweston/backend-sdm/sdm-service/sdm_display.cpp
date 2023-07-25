@@ -170,7 +170,7 @@ DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
         disable_skip_prepare_ = 1;
     }
 
-    property_get(SDM_DISABLE_HDR_HANDLING, property, "1");
+    property_get(SDM_DISABLE_HDR_HANDLING, property, "0");
     if (!(strncmp(property, "0", PROPERTY_VALUE_MAX)) ||
         !(strncmp(property, "false", PROPERTY_VALUE_MAX))) {
         disable_hdr_handling_ = 0;
