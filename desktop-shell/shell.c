@@ -4010,9 +4010,6 @@ unlock(struct desktop_shell *shell)
 {
 	struct wl_resource *shell_resource;
 
-	weston_log("Disable unlock \n",__FUNCTION__);
-	return;
-
 	if (!shell->locked || shell->lock_surface) {
 		shell_fade(shell, FADE_IN);
 		return;
