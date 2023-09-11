@@ -88,7 +88,7 @@ Common headers for weston
 # the setting.  Thanks to the SuSE folks for the workaround.
 export LDFLAGS="%{?build_ldflags} -Wl,-z,undefs"
 export CPPFLAGS="-I/usr/include/gbm"
-%meson -Dremoting=false -Dbackend-drm-screencast-vaapi=false  -Dcolor-management-colord=false -Dbackend-x11=false -Dbackend-rdp=false -Dpipewire=false -Dbackend-rdp=false -Dxwayland=false -Dsystemd=true -Dlauncher-logind=true
+%meson -Dremoting=false -Dbackend-drm-screencast-vaapi=false  -Dcolor-management-colord=false -Dbackend-x11=false -Dbackend-rdp=false -Dpipewire=false -Dbackend-rdp=false -Dxwayland=false -Dsystemd=true -Dlauncher-logind=true -Ddeprecated-wl-shell=true
 %meson_build
 
 
