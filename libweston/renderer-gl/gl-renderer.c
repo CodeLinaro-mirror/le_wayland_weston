@@ -2556,92 +2556,116 @@ gl_renderer_destroy_gbm_buffer(struct gbm_buffer *gbm_buf)
 static struct egl_image *
 import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 {
-       struct egl_image *image;
-       EGLint attribs[30];
-       int atti = 0;
-       unsigned int secure_status = 0;
-       gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbmbuf->bo, &secure_status, NULL);
-       //If format is in skip list, return with out creating egl image.
-       if ((gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
-               (gbmbuf->format == GBM_FORMAT_P010) ||
-               ((gbmbuf->format == GBM_FORMAT_NV12) && secure_status)) {
-               return image;
-       }
-       memset(attribs,0,sizeof(EGLint));
+	struct egl_image *image;
+	int atti = 0;
+	unsigned int secure_status = 0;
+	EGLint attribs[32] = {
+		EGL_WIDTH, 0,
+		EGL_HEIGHT, 0,
+		EGL_LINUX_DRM_FOURCC_EXT, 0,
+		EGL_DMA_BUF_PLANE0_FD_EXT, 0,
+		EGL_DMA_BUF_PLANE0_PITCH_EXT, 0,
+		EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+		EGL_NONE
+	};
 
-       image = gbm_buffer_backend_get_user_data(gbmbuf);
-       if (image)
-               return egl_image_ref(image);
+	gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbmbuf->bo, &secure_status, NULL);
+	//If format is in skip list, return with out creating egl image.
+	if ((gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
+		(gbmbuf->format == GBM_FORMAT_P010) ||
+		((gbmbuf->format == GBM_FORMAT_NV12) && secure_status)) {
+		weston_log("[%s] skip fmt(0x%x)\n", __FUNCTION__, gbmbuf->format);
+		return image;
+	}
+	memset(attribs,0,sizeof(EGLint));
 
-       /* This requires the Mesa commit in
-        * Mesa 10.3 (08264e5dad4df448e7718e782ad9077902089a07) or
-        * Mesa 10.2.7 (55d28925e6109a4afd61f109e845a8a51bd17652).
-        * Otherwise Mesa closes the fd behind our back and re-importing
-        * will fail.
-        * https://bugs.freedesktop.org/show_bug.cgi?id=76188
-        */
-       attribs[atti++] = EGL_WIDTH;
-       attribs[atti++] = gbmbuf->width;
-       attribs[atti++] = EGL_HEIGHT;
-       attribs[atti++] = gbmbuf->height;
-       attribs[atti++] = EGL_LINUX_DRM_FOURCC_EXT;
-       attribs[atti++] = gbmbuf->format;
+	image = gbm_buffer_backend_get_user_data(gbmbuf);
+	if (image) {
+		return egl_image_ref(image);
+	}
+
+	/* This requires the Mesa commit in
+	* Mesa 10.3 (08264e5dad4df448e7718e782ad9077902089a07) or
+	* Mesa 10.2.7 (55d28925e6109a4afd61f109e845a8a51bd17652).
+	* Otherwise Mesa closes the fd behind our back and re-importing
+	* will fail.
+	* https://bugs.freedesktop.org/show_bug.cgi?id=76188
+	*/
+	attribs[atti++] = EGL_WIDTH;
+	attribs[atti++] = gbmbuf->width;
+	attribs[atti++] = EGL_HEIGHT;
+	attribs[atti++] = gbmbuf->height;
+	attribs[atti++] = EGL_LINUX_DRM_FOURCC_EXT;
+	attribs[atti++] = gbmbuf->format;
 /* XXX: Add modifier here when supported */
-       if (gbmbuf->num_planes > 0) {
-               attribs[atti++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-               attribs[atti++] = gbmbuf->fd;
-               attribs[atti++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-               attribs[atti++] = gbmbuf->offset[0];
-               attribs[atti++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-               attribs[atti++] = gbmbuf->stride[0];
-       }
-       if (gbmbuf->num_planes > 1) {
-               attribs[atti++] = EGL_DMA_BUF_PLANE1_FD_EXT;
-               attribs[atti++] = -1;
-               attribs[atti++] = EGL_DMA_BUF_PLANE1_OFFSET_EXT;
-               attribs[atti++] = gbmbuf->offset[1];
-               attribs[atti++] = EGL_DMA_BUF_PLANE1_PITCH_EXT;
-               attribs[atti++] = gbmbuf->stride[1];
-       }
-       if (gbmbuf->num_planes > 2) {
-               attribs[atti++] = EGL_DMA_BUF_PLANE2_FD_EXT;
-               attribs[atti++] = -1;
-               attribs[atti++] = EGL_DMA_BUF_PLANE2_OFFSET_EXT;
-               attribs[atti++] = gbmbuf->offset[2];
-               attribs[atti++] = EGL_DMA_BUF_PLANE2_PITCH_EXT;
-               attribs[atti++] = gbmbuf->stride[2];
-       }
-       attribs[atti++] = EGL_NONE;
+	if (gbmbuf->num_planes > 0) {
+		attribs[atti++] = EGL_DMA_BUF_PLANE0_FD_EXT;
+		attribs[atti++] = gbmbuf->fd;
+		attribs[atti++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+		attribs[atti++] = gbmbuf->offset[0];
+		attribs[atti++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
+		attribs[atti++] = gbmbuf->stride[0];
+	}
+	if (gbmbuf->num_planes > 1) {
+		attribs[atti++] = EGL_DMA_BUF_PLANE1_FD_EXT;
+		attribs[atti++] = -1;
+		attribs[atti++] = EGL_DMA_BUF_PLANE1_OFFSET_EXT;
+		attribs[atti++] = gbmbuf->offset[1];
+		attribs[atti++] = EGL_DMA_BUF_PLANE1_PITCH_EXT;
+		attribs[atti++] = gbmbuf->stride[1];
+	}
 
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->width=%d", gbmbuf->width);
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->height=%d", gbmbuf->height);
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->format=%d", gbmbuf->format);
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->num_planes=%d", gbmbuf->num_planes);
+	// Actually we don't really need to send these two planes info to GFX
+	// GFX would process UBWC internally
+	// But if do send, they should be valid value
+	if (gbmbuf->num_planes > 2) {
+		attribs[atti++] = EGL_DMA_BUF_PLANE2_FD_EXT;
+		attribs[atti++] = -1;
+		attribs[atti++] = EGL_DMA_BUF_PLANE2_OFFSET_EXT;
+		attribs[atti++] = gbmbuf->offset[2];
+		attribs[atti++] = EGL_DMA_BUF_PLANE2_PITCH_EXT;
+		attribs[atti++] = gbmbuf->stride[2];
+	}
+	if (gbmbuf->num_planes > 3) {
+		attribs[atti++] = EGL_DMA_BUF_PLANE3_FD_EXT;
+		attribs[atti++] = -1;
+		attribs[atti++] = EGL_DMA_BUF_PLANE3_OFFSET_EXT;
+		attribs[atti++] = gbmbuf->offset[3];
+		attribs[atti++] = EGL_DMA_BUF_PLANE3_PITCH_EXT;
+		attribs[atti++] = gbmbuf->stride[3];
+	}
+	attribs[atti++] = EGL_NONE;
 
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->fd=%d\n", gbmbuf->fd);
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[0]=%d", gbmbuf->offset[0]);
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[0]=%d", gbmbuf->stride[0]);
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[1]=%d", gbmbuf->offset[1]);
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[1]=%d", gbmbuf->stride[1]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->width=%d", gbmbuf->width);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->height=%d", gbmbuf->height);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->format=%d", gbmbuf->format);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->num_planes=%d", gbmbuf->num_planes);
 
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[2]=%d", gbmbuf->offset[2]);
-       GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[2]=%d", gbmbuf->stride[2]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->fd=%d\n", gbmbuf->fd);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[0]=%d", gbmbuf->offset[0]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[0]=%d", gbmbuf->stride[0]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[1]=%d", gbmbuf->offset[1]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[1]=%d", gbmbuf->stride[1]);
 
-       image = egl_image_create(gr, EGL_LINUX_DMA_BUF_EXT, NULL,
-                                        attribs);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[2]=%d", gbmbuf->offset[2]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[2]=%d", gbmbuf->stride[2]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[3]=%d", gbmbuf->offset[3]);
+	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[3]=%d", gbmbuf->stride[3]);
 
-       GBM_PROTOCOL_LOG(LOG_DBG,"import_gbm_buffer::Image created =%p\n", image);
+	image = egl_image_create(gr, EGL_LINUX_DMA_BUF_EXT, NULL,
+									attribs);
 
-       if (!image)
-               return NULL;
+	GBM_PROTOCOL_LOG(LOG_DBG,"import_gbm_buffer::Image created =%p\n", image);
 
-       /* The cache owns one ref. The caller gets another. */
-       image->gbmbuf = gbmbuf;
-       wl_list_insert(&gr->gbmbuf_images, &image->link);
-       gbm_buffer_backend_set_user_data(gbmbuf, egl_image_ref(image),
-                                                                       gl_renderer_destroy_gbm_buffer);
+	if (!image)
+			return NULL;
 
-       return image;
+	/* The cache owns one ref. The caller gets another. */
+	image->gbmbuf = gbmbuf;
+	wl_list_insert(&gr->gbmbuf_images, &image->link);
+	gbm_buffer_backend_set_user_data(gbmbuf, egl_image_ref(image), gl_renderer_destroy_gbm_buffer);
+
+	return image;
 }
 
 static bool
