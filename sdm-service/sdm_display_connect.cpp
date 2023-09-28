@@ -319,7 +319,7 @@ int Commit(int display_id, struct drm_output *output) {
   return kErrorNone;
 }
 
-int Flush(int display_id) {
+int Flush(int display_id, struct drm_output *output) {
   DisplayError error = kErrorNone;
 
   if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
@@ -333,7 +333,7 @@ int Flush(int display_id) {
     return kErrorNotSupported;
   }
 
-  error = display_[display_id]->Flush();
+  error = display_[display_id]->Flush(output);
   if (error != kErrorNone) {
     DLOGE("function failed with error = %d", error);
     return error;
@@ -541,6 +541,22 @@ int SetPlaneInitState() {
   return notifier_intf_->PipesStateChanged();
 }
 
+void FlushConcurrentWriteback(int display_id)
+{
+  if (display_id >= MAX_SUPPORT_DISPLAYS || display_id < 0) {
+    DLOGE("Display id(%d) out of range.", display_id);
+    return;
+  }
+
+  if (!display_[display_id]) {
+    DLOGE("function failed as Display(%d) not created yet.",
+        display_id);
+    return;
+  }
+
+  display_[display_id]->FlushConcurrentWriteback();
+}
+
 WL_EXPORT struct sdm_service_interface sdm_service_interface {
   .CreateCore = CreateCore,
   .DestroyCore = DestroyCore,
@@ -561,7 +577,8 @@ WL_EXPORT struct sdm_service_interface sdm_service_interface {
   .UpdateDisplayPll = UpdateDisplayPll,
   .SetPlaneInitState = SetPlaneInitState,
   .GetConnectorName = GetConnectorName,
-  .GetConnectorId = GetConnectorId
+  .GetConnectorId = GetConnectorId,
+  .FlushConcurrentWriteback = FlushConcurrentWriteback
 };
 
 }// namespace sdm

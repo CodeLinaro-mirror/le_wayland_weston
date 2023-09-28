@@ -263,6 +263,9 @@ DisplayError SdmDisplay::SetDisplayState(DisplayState state) {
   int release_fence = -1;
 
   error = display_intf_->SetDisplayState(state, false /* teardown */, &release_fence);
+  if (release_fence >= 0)
+    close(release_fence);
+
   if (error != kErrorNone) {
     DLOGE("function failed. Error = %d", error);
   return error;
@@ -1003,8 +1006,8 @@ DisplayError SdmDisplay::Prepare(struct drm_output *output) {
   if (output->cap_buffer) {
     /* check if CWB is avaiable or not by return value of Prepare() */
     if (error == kErrorNoAppLayers) {
-      output->cap_fallback_gpu = true;
-      layer_stack_.output_buffer = NULL;
+      /* null surface case, will judge cwb capability in FLush */
+      output->cap_fallback_gpu = false;
     } else if (error != kErrorNone) {
       output->cap_fallback_gpu = true;
       layer_stack_.output_buffer = NULL;
@@ -1084,12 +1087,30 @@ DisplayError SdmDisplay::Commit(struct drm_output *output) {
   return ret;
 }
 
-DisplayError SdmDisplay::Flush() {
+DisplayError SdmDisplay::Flush(struct drm_output *output) {
   DisplayError ret = kErrorNone;
 
   ret = display_intf_->Flush(&layer_stack_);
 
+  if (ret && output->cap_buffer) {
+    output->cap_fallback_gpu = true;
+    if (layer_stack_.output_buffer->release_fence_fd >= 0)
+      close(layer_stack_.output_buffer->release_fence_fd);
+    layer_stack_.output_buffer->release_fence_fd = -1;
+    layer_stack_.output_buffer = NULL;
+    ret = display_intf_->Flush(&layer_stack_);
+  } else if (output->cap_buffer) {
+    output->cap_buffer->release_fence_fd = layer_stack_.output_buffer->release_fence_fd;
+    layer_stack_.output_buffer->release_fence_fd = -1;
+    layer_stack_.output_buffer = NULL;
+  }
+
   return ret;
+}
+
+void SdmDisplay::FlushConcurrentWriteback()
+{
+  display_intf_->FlushConcurrentWriteback();
 }
 
 /* Adding following  support functions */
@@ -1641,7 +1662,7 @@ DisplayError SdmNullDisplay::Prepare(struct drm_output *output) {
 DisplayError SdmNullDisplay::Commit(struct drm_output *output) {
   return kErrorNone;
 }
-DisplayError SdmNullDisplay::Flush() {
+DisplayError SdmNullDisplay::Flush(struct drm_output *output) {
   return kErrorNone;
 }
 DisplayError SdmNullDisplay::SetDisplayState(DisplayState state) {

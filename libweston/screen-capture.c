@@ -199,8 +199,11 @@ screen_capture_exit(struct screen_capture *screen_cap)
 		return true;
 
 	/*flush one frame to let CWB unregister display*/
-	if (screen_cap->main_output)
+	if (screen_cap->main_output) {
 		weston_output_damage(&screen_cap->main_output->base);
+		/*unbind cwb display_id in SDM*/
+		screen_cap->main_output->flush_cwb(screen_cap->main_output);
+	}
 
 	/* Clear those buffers which have not been consumed yet. */
 	wl_list_for_each_safe(cap_buf, next, &screen_cap->attached_buf_list, link) {
@@ -247,7 +250,9 @@ screen_capture_destroy_screen(struct wl_client *client,
 		return;
 	}
 
+	screen_cap->force_gpu = false;
 	screen_cap->output_destroy_pending = true;
+
 	if (screen_capture_exit(screen_cap))
 		screen_capture_post_exit(screen_cap);
 }

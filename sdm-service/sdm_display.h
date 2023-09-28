@@ -112,7 +112,7 @@ public:
   virtual DisplayError DestroyDisplay() = 0;
   virtual DisplayError Prepare(struct drm_output *output) = 0;
   virtual DisplayError Commit(struct drm_output *output) = 0;
-  virtual DisplayError Flush() = 0;
+  virtual DisplayError Flush(struct drm_output *output) = 0;
   virtual DisplayError SetDisplayState(DisplayState state) = 0;
   virtual DisplayError SetVSyncState(bool enable, struct drm_output *output) = 0;
   virtual DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config) = 0;
@@ -120,6 +120,7 @@ public:
   virtual DisplayError UpdateDisplayPll(int32_t ppm) = 0;
   virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
   virtual SdmDisplayIntfType GetDisplayIntfType() = 0;
+  virtual void FlushConcurrentWriteback() = 0;
 
   virtual struct drm_output * GetOutput() = 0;
 
@@ -138,13 +139,14 @@ public:
   DisplayError DestroyDisplay();
   DisplayError Prepare(struct drm_output *output);
   DisplayError Commit(struct drm_output *output);
-  DisplayError Flush();
+  DisplayError Flush(struct drm_output *output);
   DisplayError SetDisplayState(DisplayState state);
   DisplayError SetVSyncState(bool enable, struct drm_output *output);
   DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
   DisplayError EnablePllUpdate(int32_t enable);
   DisplayError UpdateDisplayPll(int32_t ppm);
   DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
+  void FlushConcurrentWriteback() { };
 
   struct drm_output * GetOutput() { return NULL; };
 };
@@ -162,7 +164,7 @@ public:
   DisplayError DestroyDisplay();
   DisplayError Prepare(struct drm_output *output);
   DisplayError Commit(struct drm_output *output);
-  DisplayError Flush();
+  DisplayError Flush(struct drm_output *output);
   DisplayError SetDisplayState(DisplayState state);
   DisplayError SetVSyncState(bool enable, struct drm_output *output);
   DisplayError GetDisplayConfiguration(struct DisplayConfigInfo *display_config);
@@ -172,6 +174,7 @@ public:
   DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info);
 
   struct drm_output * GetOutput() { return drm_output_; };
+  void FlushConcurrentWriteback();
 
 protected:
   virtual DisplayError VSync(const DisplayEventVSync &vsync);
@@ -262,8 +265,8 @@ public:
   DisplayError Commit(struct drm_output *output) {
     return display_intf_->Commit(output);
   }
-  DisplayError Flush() {
-    return display_intf_->Flush();
+  DisplayError Flush(struct drm_output *output) {
+    return display_intf_->Flush(output);
   }
   DisplayError SetDisplayState(DisplayState state) {
     return display_intf_->SetDisplayState(state);
@@ -289,6 +292,9 @@ public:
   }
 
   int HandleHotplug(bool connected);
+  void FlushConcurrentWriteback() {
+    return display_intf_->FlushConcurrentWriteback();
+  }
 
 private:
   // Uevent thread

@@ -741,10 +741,10 @@ output_repaint(struct weston_output *output_base,
 	assert(wl_list_empty(&output->plane_flip_list));
 
 	sdm_service->SetVSyncState(output->display_id, ENABLE, output);
-	if (output->prev_layer_none_commit && output->layer_none_commit)
+	if (output->prev_layer_none_commit && output->layer_none_commit && !output->cap_buffer)
 		weston_log("skip commit if two consecutive frames have no layers\n");
 	else if (output->layer_none_commit){
-		sdm_service->Flush(output->display_id);
+		sdm_service->Flush(output->display_id, output);
 	} else {
 		ret = sdm_service->Commit(output->display_id, output);
 
@@ -847,6 +847,8 @@ do_screen_capture(struct screen_capture *screen_cap,
 	struct drm_backend *b = to_drm_backend(screen_cap->compositor);
 
 	if (screen_cap->fallback_gpu) {
+		weston_log("screen_capture falls back to GPU output %s\n", output->base.name);
+
 		screen_cap->compositor->renderer->capture_screen(screen_cap->virtual_output,
 														 cap_buf->buffer, damage);
 
@@ -901,6 +903,11 @@ drm_output_repaint(struct weston_output *output_base,
 	/* Do screen capture for current output. */
 	if (is_capture_ready(screen_cap, output_base) && screen_cap->next &&
 		(screen_cap->fallback_gpu || screen_cap->main_output->cap_buffer)) {
+		if (screen_cap->main_output->cap_fallback_gpu) {
+			screen_cap->fallback_gpu = true;
+			screen_cap->force_gpu = true;
+		}
+
 		do_screen_capture(screen_cap, damage);
 		screen_cap->main_output->cap_buffer = NULL;
 	}
@@ -1849,7 +1856,7 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level)
 		return;
 	}
 
-	weston_log("drm_set_dpms: Calling SDM to SetDisplaySatte.");
+	weston_log("drm_set_dpms: Calling SDM to SetDisplayState. id %d\n", output->display_id);
 	int ret = sdm_service->SetDisplayState(output->display_id, level);
 
 	if (ret) {
@@ -2631,6 +2638,13 @@ drm_output_disable(struct weston_output *base)
 	return 0;
 }
 
+static void drm_output_flush_cwb(struct drm_output* output)
+{
+    if (output && sdm_service) {
+        weston_log("flush output %s cwb\n", output->base.name);
+        sdm_service->FlushConcurrentWriteback(output->display_id);
+    }
+}
 
 /**
  * Create a Weston output structure
@@ -2662,6 +2676,7 @@ drm_output_create(struct weston_compositor *compositor, const char *name)
 	output->base.disable = drm_output_disable;
 	output->base.attach_head = drm_output_attach_head;
 	output->base.detach_head = drm_output_detach_head;
+	output->flush_cwb = drm_output_flush_cwb;
 
 	output->destroy_pending = 0;
 	output->disable_pending = 0;

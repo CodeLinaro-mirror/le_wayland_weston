@@ -301,4 +301,6 @@ struct drm_output {
   struct screen_capture_buffer *cap_buffer;
   /* Indicate screen capture by GPU or CWB */
   bool cap_fallback_gpu;
+  /* unregister cwb and reset cwb display id */
+  void (*flush_cwb)(struct drm_output *output);
 };

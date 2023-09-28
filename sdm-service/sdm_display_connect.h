@@ -170,13 +170,14 @@ int (*Commit)(int display_id, struct drm_output *output);
     For virtual displays this would result in output buffer getting cleared with border color.
 
     @param[in] display_id \link int \endlink
+    @param[in] output \link struct drm_output \endlink
 
     @return \link DisplayError \endlink
 
     @sa Prepare
     @sa Commit
 */
-int (*Flush)(int display_id);
+int (*Flush)(int display_id, struct drm_output *output);
 
 /*! @brief Method to obtain display property for a display_id requested.
     @details Client shall use this method to display properties of requested
@@ -307,6 +308,14 @@ char* (*GetConnectorName)(uint32_t display_id);
     @sa
 */
 uint32_t (*GetConnectorId)(uint32_t display_id);
+
+/*! @brief Method to flush CWB
+
+    @param[in] display_id \link int \endlink
+
+    @return \link void \endlink
+  */
+void (*FlushConcurrentWriteback)(int display_id);
 };
 #ifdef __cplusplus
 }
