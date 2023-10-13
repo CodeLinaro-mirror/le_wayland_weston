@@ -206,7 +206,6 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     void RefreshWithCachedLayerstack();
     CoreInterface *core_intf_ = NULL;
     SdmDisplayBufferAllocator *buffer_allocator_;
-    SdmDisplayBufferSyncHandler buffer_sync_handler_;
     SdmDisplaySocketHandler socket_handler_;
     DisplayEventHandler *client_event_handler_ = NULL;
     DisplayInterface *display_intf_ = NULL;
