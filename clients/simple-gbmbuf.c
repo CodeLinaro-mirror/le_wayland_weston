@@ -386,14 +386,9 @@ create_gbmbuf_buffer(struct display *display, struct buffer *buffer,
 	}
 
 	if (buffer->bo && window->is_hdr_mode) {
-		struct ColorMetaData clr_mta;
-
-		if (GBM_ERROR_NONE !=
-				gbm_perform(GBM_PERFORM_DEFAULT_INIT_COLOR_META,
-					buffer->bo, &clr_mta)) {
-			fprintf(stderr, "error: Color metadata init failed\n");
-			goto error2;
-		}
+		struct ColorMetaData clr_mta = {};
+		clr_mta.colorPrimaries = ColorPrimaries_BT2020;
+		clr_mta.transfer = Transfer_SMPTE_ST2084;
 
 		if (GBM_ERROR_NONE !=
 				gbm_perform(GBM_PERFORM_SET_METADATA, buffer->bo,
