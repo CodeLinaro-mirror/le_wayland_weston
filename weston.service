@@ -15,6 +15,9 @@ ExecStart=weston --idle-time=0 --socket=wayland-0 --log=/tmp/weston.log
 Type=simple
 PIDFile=/run/early/weston.pid
 Restart=always
+RestartSec=2
+StartLimitInterval=100s
+StartLimitBurst=5
 TTYPath=/dev/tty2
 
 [Install]
