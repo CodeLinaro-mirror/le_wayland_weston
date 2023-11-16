@@ -259,9 +259,6 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     int disable_skip_prepare_ = 0;
     int  display_id_ = -1;
     uint32_t fps_ = 0;
-    float max_luminance_ = 0.0;
-    float max_average_luminance_ = 0.0;
-    float min_luminance_ = 0.0;
     int previous_retire_fence_fd_ = -1;
     bool esd_reset_panel_ = false;
     int disable_hdr_handling_ = 0;
