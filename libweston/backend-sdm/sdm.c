@@ -160,18 +160,6 @@ vblank_handler(int display_id, int64_t timestamp, void *data)
 	struct drm_output *output = (struct drm_output *) data;
 	uint64_t v = 1;
 
-	if(output->retire_fence_fd > 0)
-	{
-		int error = sync_wait(output->retire_fence_fd, FENCE_TIMEOUT);
-		close(output->retire_fence_fd);
-		output->retire_fence_fd = -1;
-		if (error < 0)
-		{
-			weston_log("Error: retire fence timed out!");
-			return;
-		}
-	}
-
 	output->last_vblank.sec = timestamp / 1000000000LL;
 	output->last_vblank.usec = (timestamp % 1000000000LL) / 1000;
 

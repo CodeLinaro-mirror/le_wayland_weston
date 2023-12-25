@@ -180,7 +180,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError PostPrepare(struct drm_output *output);
     DisplayError PreCommit();
 
-    DisplayError PostCommit(int *retire_fence_fd);
+    DisplayError PostCommit();
     LayerBufferFormat GetSDMFormat(uint32_t src_fmt,
                                    struct LayerGeometryFlags flags);
     LayerBlending GetSDMBlending(uint32_t source);
@@ -219,7 +219,6 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     float max_luminance_ = 0.0;
     float max_average_luminance_ = 0.0;
     float min_luminance_ = 0.0;
-    int previous_retire_fence_fd_ = -1;
     LayerStack prev_layer_stack_;
     bool esd_reset_panel_ = false;
 };
