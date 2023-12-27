@@ -1756,12 +1756,6 @@ DisplayError SdmDisplay::GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) {
         return error;
     }
 
-    static const float kLuminanceFactor = 10000.0;
-    // luminance is expressed in the unit of 0.0001 cd/m2, convert it to 1cd/m2.
-    max_luminance_ = FLOAT(fixed_info.max_luminance)/kLuminanceFactor;
-    max_average_luminance_ = FLOAT(fixed_info.average_luminance)/kLuminanceFactor;
-    min_luminance_ = FLOAT(fixed_info.min_luminance)/kLuminanceFactor;
-
     display_hdr_info->hdr_supported = fixed_info.hdr_supported;
     display_hdr_info->hdr_eotf = fixed_info.hdr_eotf;
     display_hdr_info->hdr_metadata_type_one = fixed_info.hdr_metadata_type_one;
