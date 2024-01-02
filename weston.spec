@@ -102,6 +102,7 @@ mkdir -p %{buildroot}%{_sysconfdir}/pam.d
 install -DpZm 0644 weston-autologin %{buildroot}%{_sysconfdir}/pam.d/weston-autologin
 mkdir -p %{buildroot}%{_unitdir}
 install -DpZm 0644 weston.service %{buildroot}%{_unitdir}/weston.service
+install -DpZm 0644 weston.socket %{buildroot}%{_unitdir}/weston.socket
 mkdir -p %{buildroot}%{_sysconfdir}/xdg/weston
 install -DpZm 0644 weston.ini %{buildroot}%{_sysconfdir}/xdg/weston/weston.ini
 
@@ -152,6 +153,7 @@ systemctl enable weston.service
 %{_datadir}/weston/wayland.svg
 %{_datadir}/wayland-sessions/weston.desktop
 %{_unitdir}/weston.service
+%{_unitdir}/weston.socket
 %{_sysconfdir}/pam.d/weston-autologin
 %{_sysconfdir}/xdg/weston/weston.ini
 
