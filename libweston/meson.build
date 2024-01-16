@@ -257,6 +257,7 @@ install_headers(
 	'libinput-seat.h',
 	'libweston-internal.h',
 	'linux-dmabuf.h',
+	'linux-explicit-synchronization.h',
 	'color.h',
 	'launcher-util.h',
 	'pixman-renderer.h',
