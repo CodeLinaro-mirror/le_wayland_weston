@@ -26,7 +26,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -68,6 +68,7 @@
 #include "gbm_priv.h"
 #include "gbm-buffer-backend.h"
 #include "screen-capture.h"
+#include "bootkpi/logging.h"
 
 #define BUFFER_DAMAGE_COUNT 2
 
@@ -4086,7 +4087,8 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 	static bool firstCreateWin = true;
 	if (firstCreateWin)
 	{
-		weston_place_marker("G - first create window start");
+		bootkpi_log_init();
+		bootkpi_log_line("G - first create window start");
 	}
 
 	EGLSurface egl_surface = EGL_NO_SURFACE;
@@ -4121,7 +4123,8 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 
 	if (firstCreateWin)
 	{
-		weston_place_marker("G - first create window end");
+		bootkpi_log_init();
+		bootkpi_log_line("G - first create window end");
 		firstCreateWin = false;
 	}
 
@@ -4444,7 +4447,8 @@ gl_renderer_display_create(struct weston_compositor *ec,
 	static bool firstCreateDisplay = true;
 	if (firstCreateDisplay)
 	{
-		weston_place_marker("G - setup egl start");
+		bootkpi_log_init();
+		bootkpi_log_line("G - setup egl start");
 	}
 
 	gr = zalloc(sizeof *gr);
@@ -4507,7 +4511,8 @@ gl_renderer_display_create(struct weston_compositor *ec,
 
 	if (firstCreateDisplay)
 	{
-		weston_place_marker("G - setup egl end");
+		bootkpi_log_init();
+		bootkpi_log_line("G - setup egl end");
 		firstCreateDisplay = false;
 	}
 
