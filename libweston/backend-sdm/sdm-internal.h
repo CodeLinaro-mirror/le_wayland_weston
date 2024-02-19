@@ -27,7 +27,7 @@
  * SOFTWARE.
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  *
  */
@@ -258,6 +258,7 @@ struct sdm_layer {
 	struct drm_fb *fb;
 	uint32_t composition_type; /* type: enum SDM_COMPOSITION_XXXXX */
 	pixman_region32_t overlap;
+	int acquire_fence_fd;
 };
 
 struct drm_head {

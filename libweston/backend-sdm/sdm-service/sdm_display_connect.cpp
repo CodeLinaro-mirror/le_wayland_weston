@@ -548,6 +548,18 @@ static HWDisplayInfo GetSdmDisplayInfo(int display_id) {
   return iter->second;
 }
 
+int GetDisplayType(uint32_t display_id) {
+
+  auto it = hw_displays_info_.find(display_id);
+  if (it == hw_displays_info_.end()) {
+    DLOGE("No display information available for display_id: %d.", display_id);
+    return -1;
+  }
+
+  return (it->second.display_type);
+}
+
+
 }// namespace sdm
 #ifdef __cplusplus
 }

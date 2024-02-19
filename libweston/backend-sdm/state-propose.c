@@ -29,7 +29,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -66,6 +66,7 @@ create_sdm_layer(struct drm_output *output, struct weston_view *ev,
 	}
 
 	layer->view = ev;
+	layer->acquire_fence_fd = ev->surface->acquire_fence_fd;
 	layer->is_cursor = is_cursor;
 	layer->is_skip = is_skip;
 	if (!is_skip)

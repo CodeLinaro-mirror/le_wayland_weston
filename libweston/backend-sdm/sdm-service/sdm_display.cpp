@@ -48,7 +48,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -102,6 +102,7 @@ namespace sdm {
 #define SDM_NULL_DISPLAY_RESOLUTON_PROP_NAME "weston.sdm.default.resolution"
 #define SDM_DISABLE_HDR_HANDLING "vendor.display.disable_hdr"
 
+std::atomic<uint64_t> SdmDisplay::next_id_(1);
 SdmDisplay::SdmDisplay(DisplayType type, CoreInterface *core_intf,
                                          SdmDisplayBufferAllocator *buffer_allocator) {
     display_type_ = type;
@@ -594,6 +595,12 @@ DisplayError SdmDisplay::AllocLayerStackMemory(struct drm_output *output) {
     return kErrorNone;
 }
 
+void SdmDisplay::InitializeLayerIds() {
+    for (auto &layer: layer_stack_.layers) {
+         layer->layer_id = next_id_++;
+    }
+}
+
 static void SetRect(sdm::LayerRect *dst, struct Rect *src)
 {
     dst->left = src->left;
@@ -932,6 +939,7 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
 
     FreeLayerStack();
     AllocLayerStackMemory(output);
+    InitializeLayerIds();
 
     DLOGI("gpu_target_index = %d\n", gpu_target_index);
 
@@ -956,12 +964,19 @@ DisplayError SdmDisplay::PrePrepareLayerStack(struct drm_output *output) {
             // to use it for egl image creation in tone mapping
             layerBufferFlags = layer_stack_.layers.at(index)->input_buffer.flags;
 
+            layer_stack_.layers.at(index)->input_buffer.acquire_fence =
+                               Fence::Create(dup(sdm_layer->acquire_fence_fd), "App_Layer_Fence");
+            DLOGD_IF(kTagNone, "Acquire fence fd: %s for layer index %d",
+                 Fence::GetStr(layer_stack_.layers.at(index)->input_buffer.acquire_fence).c_str(),
+                 index);
+            //Acquire fence fd is not received for frame buffer target layer as gl-renderer is not
+            //sending it. Hence not adding acquire fence for frame buffer target
+
             index++;
             if (sdm_layer->is_skip)
                 layer_stack_.flags.skip_present = true;
         }
     }
-
     int err = PrepareFbLayerGeometry(output, &glayer);
     if (err) {
         DLOGE("failed to prepare Layer Geometry Fb target\n");
@@ -1735,7 +1750,7 @@ void *SdmDisplayProxy::UeventThreadHandler() {
   prctl(PR_SET_NAME, uevent_thread_name_, 0, 0, 0);
   setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
   if (!uevent_init()) {
-    DLOGE("Failed to init uevent");
+    DLOGW("Failed to init uevent");
     pthread_exit(0);
     return NULL;
   }

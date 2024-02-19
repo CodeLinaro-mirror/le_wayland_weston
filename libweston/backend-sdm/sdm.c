@@ -879,6 +879,18 @@ drm_output_enable(struct weston_output *base)
 
 	drm_output_print_modes(output);
 
+       // weston treats 255 as max brightness setting initial brightness to ~50% on builtin display
+
+        uint32_t disp_id = output->display_id;
+        int type = GetDisplayType(disp_id);
+        if (type == 0) {
+               int ret = drm_set_backlight(base, 127);
+               if (ret != 0) {
+                       weston_log("Failed to Init backlight\n");
+                       return -1;
+                }
+       }
+
 	return 0;
 }
 
@@ -1618,8 +1630,9 @@ drm_backend_create(struct weston_compositor *compositor,
 	const char *seat_id = default_seat;
 	const char *session_seat;
 	sdm_cbs_t sdm_cbs;
-	int ret;
+	int ret, count;
 	bool is_gpu_available = true;
+	const int max_retries = 10;
 
 	session_seat = getenv("XDG_SEAT");
 	if (session_seat)
@@ -1690,10 +1703,19 @@ drm_backend_create(struct weston_compositor *compositor,
 	b->session_listener.notify = session_notify;
 	wl_signal_add(&compositor->session_signal, &b->session_listener);
 
-	if (config->specific_device)
-		drm_device = open_specific_drm_device(b, config->specific_device);
-	else
-		drm_device = find_primary_gpu(b, seat_id);
+	count = 0;
+	while (count++ < max_retries) {
+		weston_log("Loading drm_device: try %d\n", count);
+		if (config->specific_device)
+			drm_device = open_specific_drm_device(b, config->specific_device);
+		else
+			drm_device = find_primary_gpu(b, seat_id);
+
+		if (drm_device == NULL)
+			sleep(1);	// Wait for 1 second before retrying
+		else
+			break;
+	}
 
 	if (drm_device == NULL) {
 		weston_log("no drm device found\n");

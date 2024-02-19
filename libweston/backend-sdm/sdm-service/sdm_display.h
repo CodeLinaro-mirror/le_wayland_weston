@@ -22,7 +22,7 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 *
 */
@@ -45,6 +45,8 @@
 #include <vector>
 #include <iostream>
 #include <thread>
+#include <atomic>
+#include <memory>
 
 #include "sdm-service/sdm_display_debugger.h"
 #include "sdm-service/sdm_display_interface.h"
@@ -164,6 +166,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
 
  private:
     static const int kBufferDepth = 2;
+    static std::atomic<uint64_t> next_id_;
     DisplayError FreeLayerStack();
     DisplayError FreeLayerGeometry(struct LayerGeometry *glayer);
     DisplayError AllocateMemoryForLayerGeometry(struct drm_output *output,
@@ -215,6 +218,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError SetColorModeWithRenderIntent(ColorMode color_mode);
     ColorMode SelectBestColorSpace(bool isHdrSupported);
     ColorMode GetBestHDRColorMode(ColorPrimaries layer_gamut, GammaTransfer layer_gamma);
+    void InitializeLayerIds();
 
     CoreInterface *core_intf_ = NULL;
     SdmDisplayBufferAllocator *buffer_allocator_;
