@@ -158,7 +158,7 @@ const char * SdmDisplay::FourccToString(uint32_t fourcc)
 DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
     DisplayError error = kErrorNone;
 
-    error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
+    error = core_intf_->CreateDisplay(display_id, this, &display_intf_);
 
     if (error != kErrorNone) {
         DLOGE("Display creation failed. Error = %d", error);
