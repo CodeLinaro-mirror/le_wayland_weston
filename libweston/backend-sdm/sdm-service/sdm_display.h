@@ -22,7 +22,7 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
@@ -90,6 +90,7 @@ class SdmDisplayInterface {
     static int GetDrmMasterFd();
     struct drm_output *drm_output_;
     struct drm_output *prev_output_;
+    vblank_cb_t vblank_cb_;
 };
 
 class SdmNullDisplay : public SdmDisplayInterface {
