@@ -234,7 +234,7 @@ class SdmDisplayProxy {
       DisplayError rc = display_intf_->CreateDisplay(display_id);
       if (rc != kErrorNone)
         display_intf_ = &null_disp_;
-      return kErrorNone;
+      return rc;
     }
     DisplayError CreateDummyDisplay() {
         display_intf_ = &null_disp_;
