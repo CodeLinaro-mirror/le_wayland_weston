@@ -46,7 +46,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Changes from Qualcomm Innovation Center are provided under the following license:
+ * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
  *
  * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
@@ -156,15 +156,19 @@ DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
         DLOGW("Failed to Disable HDR Support on Client");
     }
 
-    error = display_intf_->GetStcColorModes(&stc_mode_list_);
-    if (error != kErrorNone) {
-        DLOGW("Failed to get Stc color modes, error %d", error);
-        stc_mode_list_.list.clear();
+    SDMColorModeIntfFactory *color_mode_factory = GetSDMColorModeIntfFactory();
+    color_mode_intf_ = color_mode_factory->GetSDMColorModeIntf(display_type_,
+                                                            display_intf_);
+    if (color_mode_intf_) {
+        error = color_mode_intf_->Init();
+        if (error != kErrorNone) {
+            DLOGW("Failed to initialize color mode intf, error %d !", error);
+            color_mode_intf_ = nullptr;
+        }
     } else {
-        DLOGI("Stc mode count %d", stc_mode_list_.list.size());
+        DLOGW("Display %d-%d, failed to creare color mode intf!!", display_id_, display_type_);
     }
 
-    PopulateColorModes();
     return kErrorNone;
 }
 
@@ -174,7 +178,10 @@ DisplayError SdmDisplay::DestroyDisplay() {
     error = core_intf_->DestroyDisplay(display_intf_);
     display_intf_ = NULL;
 
-    color_mode_map_.clear();
+    if (color_mode_intf_) {
+        error = color_mode_intf_->DeInit();
+        color_mode_intf_ = nullptr;
+    }
     return error;
 }
 
@@ -301,114 +308,25 @@ void SdmDisplay::HandlePanelDead()
     esd_reset_panel_ = false;
 }
 
-void SdmDisplay::PopulateColorModes() {
-    for (uint32_t i = 0; i < stc_mode_list_.list.size(); i++) {
-        snapdragoncolor::ColorMode stc_mode = stc_mode_list_.list[i];
-        ColorPrimaries gamut = static_cast<ColorPrimaries>(stc_mode.gamut);
-        GammaTransfer gamma = static_cast<GammaTransfer>(stc_mode.gamma);
-        RenderIntent intent = static_cast<RenderIntent>(stc_mode.intent);
-        DynamicRangeType dynamic_range = kSdrType;
-        if (std::find(stc_mode.hw_assets.begin(), stc_mode.hw_assets.end(),
-                        snapdragoncolor::kPbHdrBlob) != stc_mode.hw_assets.end()) {
-            dynamic_range = kHdrType;
-        }
-        if (gamut == ColorPrimaries_BT2020 &&
-            (gamma == Transfer_SMPTE_ST2084 || gamma == Transfer_HLG)) {
-            dynamic_range = kHdrType;
-            hdr_mode_present_ = true;
-        }
-        color_mode_map_[gamut][gamma][intent][dynamic_range] = stc_mode;
-    }
-}
-
-DisplayError SdmDisplay::ValidateColorMode(ColorMode color_mode, DynamicRangeType dynamic_range) {
-    ColorPrimaries primary = color_mode.gamut;
-    GammaTransfer transfer = color_mode.gamma;
-    RenderIntent intent = color_mode.intent;
-
-    if (color_mode_map_.find(primary) == color_mode_map_.end()) {
-        DLOGE("Could not find color primary: %d", primary);
-        return kErrorNotSupported;
-    }
-    if (color_mode_map_[primary].find(transfer) == color_mode_map_[primary].end()) {
-        DLOGE("Could not find transfer %d in primary %d", transfer, primary);
-        return kErrorNotSupported;
-    }
-    if (color_mode_map_[primary][transfer].find(intent) ==
-                                        color_mode_map_[primary][transfer].end()) {
-        DLOGE("Could not find intent %d in primary %d, transfer %d",
-                                                    intent, primary, transfer);
-        return kErrorNotSupported;
-    }
-    if (color_mode_map_[primary][transfer][intent].find(dynamic_range) ==
-                                color_mode_map_[primary][transfer][intent].end()) {
-        DLOGE("Could not find dynamic range %d in intent %d, primary %d, transfer %d",
-                                        dynamic_range, intent, primary, transfer);
-        return kErrorNotSupported;
-    }
-    return kErrorNone;
-}
-
-DisplayError SdmDisplay::SetColorModeWithRenderIntent(ColorMode color_mode) {
-    bool hdr_present = layer_stack_.flags.hdr_present;
-
-    if (current_color_mode_.gamut == color_mode.gamut &&
-        current_color_mode_.gamma == color_mode.gamma &&
-        current_color_mode_.intent == color_mode.intent &&
-        ((hdr_present && (curr_dynamic_range_ == kHdrType)) ||
-        (!hdr_present && (curr_dynamic_range_ == kSdrType)))) {
-        return kErrorNone;
-    }
-
-    DynamicRangeType dynamic_range = hdr_present ? kHdrType : kSdrType;
-
-    DisplayError error = ValidateColorMode(color_mode, dynamic_range);
-    if (error != kErrorNone) {
-        return error;
-    }
-
-    snapdragoncolor::ColorMode stc_mode = \
-        color_mode_map_[color_mode.gamut][color_mode.gamma][color_mode.intent][dynamic_range];
-    DLOGI("Applying Stc mode (gamut %d gamma %d intent %d hw_assets.size %d)",
-        stc_mode.gamut, stc_mode.gamma, stc_mode.intent, stc_mode.hw_assets.size());
-
-    error = display_intf_->SetStcColorMode(stc_mode);
-    if (error != kErrorNone) {
-        DLOGE("Failed to apply Stc color mode: gamut %d gamma %d intent %d err %d",
-            stc_mode.gamut, stc_mode.gamma, stc_mode.intent, error);
-        return kErrorNotSupported;
-    }
-
-    current_color_mode_ = color_mode;
-    curr_dynamic_range_ = dynamic_range;
-    DLOGV("Successfully applied mode gamut = %d, gamma = %d, intent = %d, dynamic range = %d",
-           color_mode.gamut, color_mode.gamma, color_mode.intent, dynamic_range);
-    return kErrorNone;
-}
-
 ColorMode SdmDisplay::GetBestHDRColorMode(ColorPrimaries layer_gamut,
                                                 GammaTransfer layer_gamma) {
-    ColorMode hdr_mode = {.gamut = layer_gamut,
-                        .gamma = layer_gamma,
-                        .intent = kRenderIntentColorimetric};
+  ColorMode hdr_mode = {.gamut = layer_gamut,
+                      .gamma = layer_gamma,
+                      .intent = kRenderIntentColorimetric};
 
-    if (ValidateColorMode(hdr_mode, kHdrType) == kErrorNone) {
-        return hdr_mode;
-    }
-
-    hdr_mode.gamma = Transfer_SMPTE_ST2084;
-    if (ValidateColorMode(hdr_mode, kHdrType) == kErrorNone) {
-        return hdr_mode;
-    }
-
-    hdr_mode.gamma = Transfer_HLG;
-    if (ValidateColorMode(hdr_mode, kHdrType) == kErrorNone) {
-        return hdr_mode;
-    }
-
-    hdr_mode.gamut = ColorPrimaries_Max;
-    hdr_mode.gamma = Transfer_Max;
+  if (color_mode_intf_->IsModeSupported(hdr_mode.gamut, hdr_mode.gamma, hdr_mode.intent)) {
     return hdr_mode;
+  }
+
+  // Fallback to Gamma HDR if HLG not present
+  hdr_mode.gamma = Transfer_SMPTE_ST2084;
+  if (color_mode_intf_->IsModeSupported(hdr_mode.gamut, hdr_mode.gamma, hdr_mode.intent)) {
+    return hdr_mode;
+  }
+
+  hdr_mode.gamut = ColorPrimaries_Max;
+  hdr_mode.gamma = Transfer_Max;
+  return hdr_mode;
 }
 
 ColorMode SdmDisplay::SelectBestColorSpace(bool isHdrSupported) {
@@ -442,27 +360,52 @@ ColorMode SdmDisplay::SelectBestColorSpace(bool isHdrSupported) {
                 best_color_mode.gamut = ColorPrimaries_DCIP3;
                 best_color_mode.gamma = Transfer_sRGB;
 
-                if (!isHdrSupported || !hdr_mode_present_) {
+                if (!isHdrSupported) {
                     continue;
                 }
 
+                // Prioritize Mode with PQ Gamma over HLG as
+                // conversion PQ->HLG is unsupported use case
                 if (color_mode.gamma == Transfer_HLG &&
-                    best_hdr_mode.gamma != Transfer_SMPTE_ST2084) {
-                    best_hdr_mode = GetBestHDRColorMode(color_mode.gamut, color_mode.gamma);
-                } else {
-                    best_hdr_mode = GetBestHDRColorMode(color_mode.gamut, color_mode.gamma);
+                    best_hdr_mode.gamma == Transfer_SMPTE_ST2084) {
+                    continue;
                 }
+                best_hdr_mode = GetBestHDRColorMode(color_mode.gamut, color_mode.gamma);
                 break;
             default:
                 break;
         }
     }
 
-    if (best_hdr_mode.gamut == ColorPrimaries_Max || best_hdr_mode.gamma == Transfer_Max) {
-        return best_color_mode;
+    if (best_hdr_mode.gamut != ColorPrimaries_Max && best_hdr_mode.gamma != Transfer_Max) {
+        return best_hdr_mode;
     }
 
-    return best_hdr_mode;
+    // Handle case where external displays only support sRGB or BT2020
+    if (best_color_mode.gamut == ColorPrimaries_DCIP3) {
+      if (color_mode_intf_->IsModeSupported(best_color_mode.gamut, best_color_mode.gamma,
+                                            best_color_mode.intent)) {
+        return best_color_mode;
+      }
+
+      best_color_mode.gamut = ColorPrimaries_BT2020;
+      best_color_mode.gamma = Transfer_sRGB;
+      if (color_mode_intf_->IsModeSupported(best_color_mode.gamut, best_color_mode.gamma,
+                                            best_color_mode.intent)) {
+        return best_color_mode;
+      }
+
+      // Fallback to sRGB if both Display_BT2020 and Display_P3 not supported
+      best_color_mode.gamut = ColorPrimaries_BT709_5;
+    }
+
+    // Switch to Native if sRGB mode not present
+    if (!color_mode_intf_->IsModeSupported(best_color_mode.gamut, best_color_mode.gamma,
+                                            best_color_mode.intent)) {
+      best_color_mode.intent = kRenderIntentNative;
+    }
+
+    return best_color_mode;
 }
 
 DisplayError SdmDisplay::HandleEvent(DisplayEvent event) {
@@ -1003,11 +946,14 @@ DisplayError SdmDisplay::PrePrepare(struct drm_output *output)
         DLOGE("function failed!\n", error);
     }
 
-    if (hdr_supported_ && !disable_hdr_handling_) {
-        ColorMode best_color_mode = SelectBestColorSpace(hdr_supported_);
-        error = SetColorModeWithRenderIntent(best_color_mode);
+    if (hdr_supported_ && !disable_hdr_handling_ && color_mode_intf_) {
+        ColorMode mode = SelectBestColorSpace(hdr_supported_);
+        DLOGV("Display: %d-%d Setting Best Color Mode: gamut %d gamma %d intent %d",
+                display_id_, display_type_, mode.gamut, mode.gamma, mode.intent);
+        error = color_mode_intf_->SetColorModeWithRenderIntent(mode,
+                    static_cast<bool>(layer_stack_.flags.hdr_present));
         if (error != kErrorNone) {
-            DLOGE("Setting color mode failed.");
+            DLOGE("Setting color mode failed, error %d !",error);
         }
     }
 

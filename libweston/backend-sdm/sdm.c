@@ -28,7 +28,7 @@
  * SOFTWARE.
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  *
  */
@@ -1630,9 +1630,8 @@ drm_backend_create(struct weston_compositor *compositor,
 	const char *seat_id = default_seat;
 	const char *session_seat;
 	sdm_cbs_t sdm_cbs;
-	int ret, count;
+	int ret;
 	bool is_gpu_available = true;
-	const int max_retries = 10;
 
 	session_seat = getenv("XDG_SEAT");
 	if (session_seat)
@@ -1703,19 +1702,10 @@ drm_backend_create(struct weston_compositor *compositor,
 	b->session_listener.notify = session_notify;
 	wl_signal_add(&compositor->session_signal, &b->session_listener);
 
-	count = 0;
-	while (count++ < max_retries) {
-		weston_log("Loading drm_device: try %d\n", count);
-		if (config->specific_device)
-			drm_device = open_specific_drm_device(b, config->specific_device);
-		else
-			drm_device = find_primary_gpu(b, seat_id);
-
-		if (drm_device == NULL)
-			sleep(1);	// Wait for 1 second before retrying
-		else
-			break;
-	}
+	if (config->specific_device)
+		drm_device = open_specific_drm_device(b, config->specific_device);
+	else
+		drm_device = find_primary_gpu(b, seat_id);
 
 	if (drm_device == NULL) {
 		weston_log("no drm device found\n");

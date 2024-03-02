@@ -21,7 +21,7 @@
 * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
-* Changes from Qualcomm Innovation Center are provided under the following license:
+* Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
 * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 *
@@ -53,6 +53,7 @@
 #include "sdm-service/sdm_display_buffer_allocator.h"
 #include "sdm-service/sdm_display_buffer_sync_handler.h"
 #include "sdm-service/sdm_display_socket_handler.h"
+#include "sdm-service/sdm_color_mode_intf.h"
 #include "sdm-internal.h"
 #include "drm_master.h"
 
@@ -213,9 +214,6 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     bool IsTransparentGbmFormat(uint32_t format);
     void HandlePanelDead();
     void RefreshWithCachedLayerstack();
-    void PopulateColorModes();
-    DisplayError ValidateColorMode(ColorMode color_mode, DynamicRangeType dynamic_range);
-    DisplayError SetColorModeWithRenderIntent(ColorMode color_mode);
     ColorMode SelectBestColorSpace(bool isHdrSupported);
     ColorMode GetBestHDRColorMode(ColorPrimaries layer_gamut, GammaTransfer layer_gamma);
     void InitializeLayerIds();
@@ -240,15 +238,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
 
     int disable_hdr_handling_ = 1;
     bool hdr_supported_ = false;
-    bool apply_mode_ = false;
-    bool hdr_mode_present_ = false;
-    ColorMode current_color_mode_ = {};
-    DynamicRangeType curr_dynamic_range_ = kSdrType;
-    snapdragoncolor::ColorModeList stc_mode_list_ = {};
-    typedef std::map<DynamicRangeType, snapdragoncolor::ColorMode> DynamicRangeMap;
-    typedef std::map<RenderIntent, DynamicRangeMap> RenderIntentMap;
-    typedef std::map<GammaTransfer, RenderIntentMap> TransferMap;
-    std::map<ColorPrimaries, TransferMap> color_mode_map_ = {};
+    std::unique_ptr<SDMColorModeIntf> color_mode_intf_ = nullptr;
 };
 
 class SdmDisplayProxy {
