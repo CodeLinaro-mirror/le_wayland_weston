@@ -51,7 +51,7 @@
 /*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -112,8 +112,6 @@
 #define __CLASS__ "SdmDisplay"
 extern "C" void NotifyOnRefresh(struct drm_output *);
 
-vblank_cb_t vblank_cb_;
-
 namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
@@ -158,7 +156,7 @@ const char * SdmDisplay::FourccToString(uint32_t fourcc)
 DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
     DisplayError error = kErrorNone;
 
-    error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
+    error = core_intf_->CreateDisplay(display_id, this, &display_intf_);
 
     if (error != kErrorNone) {
         DLOGE("Display creation failed. Error = %d", error);
