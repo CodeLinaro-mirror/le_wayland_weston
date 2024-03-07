@@ -137,6 +137,9 @@ on_vblank(int fd, uint32_t mask, void *data)
 		sec = output->last_vblank.sec;
 		drm_output_update_complete(output, flags, sec, usec);
 	}
+
+	// turn off vsync at end of frame completion
+	SetVSyncState(output->display_id, false, output);
 	return 0;
 }
 
