@@ -169,6 +169,15 @@ DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
         DLOGW("Display %d-%d, failed to creare color mode intf!!", display_id_, display_type_);
     }
 
+    std::bitset<kClientCapabilityMax> client_capabilities =
+                                 std::bitset<kClientCapabilityMax>().set();
+    client_capabilities.reset(kPunchholeSupported);
+
+    error = display_intf_->SetClientTargetCapability(client_capabilities);
+    if (error != kErrorNone) {
+        DLOGW("Failed to populate client capabilities");
+    }
+
     return kErrorNone;
 }
 
