@@ -26,6 +26,12 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ *
  */
 
 #include "config.h"
@@ -65,6 +71,7 @@
 #include <libweston/weston-log.h>
 #include <libweston/remoting-plugin.h>
 #include <libweston/pipewire-plugin.h>
+#include "bootkpi/logging.h"
 
 #define WINDOW_TITLE "Weston Compositor"
 /* flight recorder size (in bytes) */
@@ -3326,7 +3333,8 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 		{ WESTON_OPTION_STRING, "flight-rec-scopes", 'f', &flight_rec_scopes },
 	};
 
-	weston_place_marker("W - weston main begin");
+	bootkpi_log_init();
+	bootkpi_log_line("W - weston main begin");
 
 	wl_list_init(&wet.layoutput_list);
 

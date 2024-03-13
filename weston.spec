@@ -43,6 +43,7 @@ BuildRequires:  gstreamer1-devel
 BuildRequires:  libgbm-dev
 BuildRequires:  weston-sdm-extension-headers
 BuildRequires: systemd systemd-rpm-macros
+BuildRequires: bootkpi-logging
 
 Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
 Requires:       libcutils systemd libevdev mtdev libgudev libwacom-data libwacom libinput libwayland-cursor libwayland-egl
