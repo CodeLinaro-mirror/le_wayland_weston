@@ -22,7 +22,7 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
@@ -90,6 +90,7 @@ class SdmDisplayInterface {
     static int GetDrmMasterFd();
     struct drm_output *drm_output_;
     struct drm_output *prev_output_;
+    vblank_cb_t vblank_cb_;
 };
 
 class SdmNullDisplay : public SdmDisplayInterface {
@@ -180,7 +181,7 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     DisplayError PostPrepare(struct drm_output *output);
     DisplayError PreCommit();
 
-    DisplayError PostCommit(int *retire_fence_fd);
+    DisplayError PostCommit();
     LayerBufferFormat GetSDMFormat(uint32_t src_fmt,
                                    struct LayerGeometryFlags flags);
     LayerBlending GetSDMBlending(uint32_t source);
@@ -219,7 +220,6 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     float max_luminance_ = 0.0;
     float max_average_luminance_ = 0.0;
     float min_luminance_ = 0.0;
-    int previous_retire_fence_fd_ = -1;
     LayerStack prev_layer_stack_;
     bool esd_reset_panel_ = false;
 };
@@ -234,7 +234,7 @@ class SdmDisplayProxy {
       DisplayError rc = display_intf_->CreateDisplay(display_id);
       if (rc != kErrorNone)
         display_intf_ = &null_disp_;
-      return kErrorNone;
+      return rc;
     }
     DisplayError CreateDummyDisplay() {
         display_intf_ = &null_disp_;

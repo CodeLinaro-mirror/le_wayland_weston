@@ -51,7 +51,7 @@
 /*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -112,8 +112,6 @@
 #define __CLASS__ "SdmDisplay"
 extern "C" void NotifyOnRefresh(struct drm_output *);
 
-vblank_cb_t vblank_cb_;
-
 namespace sdm {
 #define GET_GPU_TARGET_SLOT(max_layers) ((max_layers) - 1)
 /* Cursor is fixed in (gpu_target_index-1) slot in SDM */
@@ -158,7 +156,7 @@ const char * SdmDisplay::FourccToString(uint32_t fourcc)
 DisplayError SdmDisplay::CreateDisplay(uint32_t display_id) {
     DisplayError error = kErrorNone;
 
-    error = core_intf_->CreateDisplay(display_type_, this, &display_intf_);
+    error = core_intf_->CreateDisplay(display_id, this, &display_intf_);
 
     if (error != kErrorNone) {
         DLOGE("Display creation failed. Error = %d", error);
@@ -251,7 +249,7 @@ void SdmDisplay::RefreshWithCachedLayerstack()
         DLOGE("Commit failed with error %d", error);
         return;
     } else{
-        PostCommit(&prev_output_->retire_fence_fd);
+        PostCommit();
         NotifyOnRefresh(prev_output_);
     }
 }
@@ -930,21 +928,24 @@ DisplayError SdmDisplay::PreCommit()
 }
 
 
-DisplayError SdmDisplay::PostCommit(int *retire_fence_fd)
+DisplayError SdmDisplay::PostCommit()
 {
     DisplayError error = kErrorNone;
+
+    //Wait for retire fence fds
+    if (prev_layer_stack_.retire_fence) {
+        int ret = -1;
+        ret = Fence::Wait(prev_layer_stack_.retire_fence);
+        if (ret != kErrorNone) {
+            DLOGE("retire_fence wait timeout! ret=%d\n", ret);
+        }
+    }
 
     prev_layer_stack_ = layer_stack_;
     //Iterate through the layer buffer and close release fences
     for (uint32_t i = 0; i < layer_stack_.layers.size(); i++) {
         Layer *layer = layer_stack_.layers.at(i);
         LayerBuffer *layer_buffer = &layer->input_buffer;
-    }
-
-    //close release fence fds
-    if (layer_stack_.retire_fence) {
-      *retire_fence_fd = previous_retire_fence_fd_;
-      previous_retire_fence_fd_ = Fence::Dup(layer_stack_.retire_fence);
     }
 
     return error;
@@ -977,7 +978,7 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     prev_output_ = output;
     ret = display_intf_->Commit(&layer_stack_);
 
-    PostCommit(&output->retire_fence_fd);
+    PostCommit();
 
     DLOGV("success");
     return ret;
