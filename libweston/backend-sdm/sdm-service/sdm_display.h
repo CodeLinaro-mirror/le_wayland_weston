@@ -228,6 +228,9 @@ class SdmDisplay : public SdmDisplayInterface, DisplayEventHandler, SdmDisplayDe
     HWDisplayInterfaceInfo hw_disp_info_;
     bool shutdown_pending_ = false;
     LayerStack layer_stack_;
+    shared_ptr<Fence> current_release_fence_ = nullptr;
+    shared_ptr<Fence> previous_release_fence_ = nullptr;
+    int64_t vsync_timestamp_ = 0;
     int  display_id_ = -1;
     uint32_t fps_ = 0;
     float max_luminance_ = 0.0;

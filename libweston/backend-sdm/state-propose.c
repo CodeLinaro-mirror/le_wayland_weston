@@ -89,7 +89,9 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 	struct sdm_layer *sdm_layer, *next_sdm_layer;
 	bool is_skip = false;
 	struct weston_surface *es;
-
+	pthread_mutex_lock(&output->commit_mtx);
+	output->commit = true;
+	pthread_mutex_unlock(&output->commit_mtx);
 	pixman_region32_t overlap, surface_overlap;
 
 	pixman_region32_init(&overlap);

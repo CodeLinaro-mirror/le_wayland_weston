@@ -195,10 +195,16 @@ DisplayError SdmDisplay::DestroyDisplay() {
 }
 
 DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
-    if (vblank_cb_)
-      vblank_cb_(display_id_, vsync.timestamp, drm_output_);
-    else
-      DLOGE("vsync not registered");
+    vsync_timestamp_ = vsync.timestamp;
+    pthread_mutex_lock(&drm_output_->commit_mtx);
+    if (!drm_output_->commit) {
+      if (vblank_cb_) {
+        vblank_cb_(display_id_, vsync.timestamp, drm_output_);
+      } else {
+        DLOGE("vsync not registered");
+      }
+    }
+    pthread_mutex_unlock(&drm_output_->commit_mtx);
 
     return kErrorNone;
 }
@@ -1100,6 +1106,14 @@ DisplayError SdmDisplay::PostCommit()
 {
     DisplayError error = kErrorNone;
 
+    for (int i = 0; i < layer_stack_.layers.size(); i++) {
+      if (!layer_stack_.layers[i]->input_buffer.release_fence) {
+        continue;
+      }
+      current_release_fence_ = layer_stack_.layers[i]->input_buffer.release_fence;
+      break;
+    }
+
     //Wait for retire fence fds
     if (prev_layer_stack_.retire_fence) {
         int ret = -1;
@@ -1115,6 +1129,16 @@ DisplayError SdmDisplay::PostCommit()
         Layer *layer = layer_stack_.layers.at(i);
         LayerBuffer *layer_buffer = &layer->input_buffer;
     }
+
+    int ret = Fence::Wait(previous_release_fence_);
+    if (ret != 0) {
+      DLOGW("Fence timeout for previous release fence! ret=%d\n", ret);
+    }
+
+    if (vblank_cb_) {
+      vblank_cb_(display_id_, vsync_timestamp_, drm_output_);
+    }
+    previous_release_fence_ = current_release_fence_;
 
     return error;
 }
