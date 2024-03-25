@@ -25,6 +25,13 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+/*
+ * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
+ *
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ *
+ */
 
 #include "config.h"
 
@@ -2888,6 +2895,7 @@ weston_output_repaint(struct weston_output *output, void *repaint_data)
 		return 0;
 
 	TL_POINT(ec, "core_repaint_begin", TLP_OUTPUT(output), TLP_END);
+	ATRACE_BEGIN("%s", __func__);
 
 	/* Rebuild the surface list and update surface transforms up front. */
 	weston_compositor_build_view_list(ec, output);
@@ -2970,6 +2978,7 @@ weston_output_repaint(struct weston_output *output, void *repaint_data)
 	}
 
 	TL_POINT(ec, "core_repaint_posted", TLP_OUTPUT(output), TLP_END);
+	ATRACE_END("%s", __func__);
 
 	return r;
 }
@@ -3159,6 +3168,7 @@ weston_output_finish_frame(struct weston_output *output,
 	struct timespec vblank_monotonic;
 	int64_t msec_rel;
 
+	ATRACE_BEGIN("%s", __func__);
 	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
 
 	/*
@@ -3226,6 +3236,7 @@ weston_output_finish_frame(struct weston_output *output,
 out:
 	output->repaint_status = REPAINT_SCHEDULED;
 	output_repaint_timer_arm(compositor);
+	ATRACE_END("%s", __func__);
 }
 
 
@@ -3991,12 +4002,14 @@ surface_commit(struct wl_client *client, struct wl_resource *resource)
 		return;
 	}
 
+	ATRACE_BEGIN("%s", __func__);
 	weston_surface_commit(surface);
 
 	wl_list_for_each(sub, &surface->subsurface_list, parent_link) {
 		if (sub->surface != surface)
 			weston_subsurface_parent_commit(sub, 0);
 	}
+	ATRACE_END("%s", __func__);
 }
 
 static void
@@ -4288,6 +4301,7 @@ weston_subsurface_commit(struct weston_subsurface *sub)
 	struct weston_surface *surface = sub->surface;
 	struct weston_subsurface *tmp;
 
+	ATRACE_BEGIN("%s", __func__);
 	/* Recursive check for effectively synchronized. */
 	if (weston_subsurface_is_synchronized(sub)) {
 		weston_subsurface_commit_to_cache(sub);
@@ -4305,6 +4319,7 @@ weston_subsurface_commit(struct weston_subsurface *sub)
 				weston_subsurface_parent_commit(tmp, 0);
 		}
 	}
+	ATRACE_END("%s", __func__);
 }
 
 static void
