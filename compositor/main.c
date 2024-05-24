@@ -52,7 +52,7 @@
  * SOFTWARE.
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -3540,13 +3540,6 @@ out:
 	protocol_scope = NULL;
 	weston_compositor_tear_down(wet.compositor);
 
-	weston_compositor_log_scope_destroy(log_scope);
-	log_scope = NULL;
-	weston_log_ctx_compositor_destroy(wet.compositor);
-	weston_compositor_destroy(wet.compositor);
-	weston_log_subscriber_destroy_log(logger);
-	weston_log_subscriber_destroy_flight_rec(flight_rec);
-
 out_signals:
 	for (i = ARRAY_LENGTH(signals) - 1; i >= 0; i--)
 		if (signals[i])
@@ -3555,6 +3548,12 @@ out_signals:
 	wl_display_destroy(display);
 
 out_display:
+	weston_compositor_log_scope_destroy(log_scope);
+	log_scope = NULL;
+	weston_log_ctx_compositor_destroy(wet.compositor);
+	weston_compositor_destroy(wet.compositor);
+	weston_log_subscriber_destroy_log(logger);
+	weston_log_subscriber_destroy_flight_rec(flight_rec);
 	weston_log_file_close();
 
 	if (config)
