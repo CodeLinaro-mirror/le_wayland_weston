@@ -3,9 +3,11 @@
 
 [Unit]
 Description=Weston reference Wayland compositor
-Conflicts=getty@tty2.service
+Conflicts=getty@tty2.service shutdown.target
 Requires=openwfd_server_@0.service kgsl.service
 After=dbus.service rc.pvr.service openwfd_server_@0.service kgsl.service
+DefaultDependencies=no
+Before=shutdown.target
 
 [Service]
 User=root
