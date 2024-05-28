@@ -11,7 +11,7 @@ After=dbus.service rc.pvr.service openwfd_server_@0.service kgsl.service
 User=root
 PAMName=weston-autologin
 Environment="XDG_RUNTIME_DIR=/run/user/0"
-ExecStart=weston --idle-time=0 --socket=wayland-0 --modules=systemd-notify.so --log=/tmp/weston.log
+ExecStart=weston --idle-time=0 --socket=wayland-0 --modules=systemd-notify.so,compositor-pm-ds.so --log=/tmp/weston.log
 Type=notify
 PIDFile=/run/early/weston.pid
 Restart=always
