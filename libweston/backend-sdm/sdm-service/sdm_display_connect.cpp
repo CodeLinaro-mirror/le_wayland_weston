@@ -22,7 +22,7 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
@@ -366,6 +366,16 @@ int get_drm_master_fd(void) {
     return fd;
 }
 
+
+void set_drm_master_fd(int fd) {
+
+    SdmDisplayInterface::SetDrmMasterFd(fd);
+
+    #if SDM_DISPLAY_DEBUG
+    DLOGD("master fd is: %d \n", fd);
+    #endif
+}
+
 int SetDisplayState(uint32_t display_id, int power_mode) {
     DisplayError error = kErrorNone;
     bool teardown;
@@ -559,6 +569,22 @@ int GetDisplayType(uint32_t display_id) {
   return (it->second.display_type);
 }
 
+void ClearSDMLayers(struct drm_output *output) {
+  struct sdm_layer *sdm_layer, *tmp_layer;
+  wl_list_for_each_safe(sdm_layer, tmp_layer, &output->prev_sdm_layer_list, link) {
+    shared_ptr<Fence> release_fence = Fence::Create(INT(sdm_layer->release_fence_fd), "release");
+    if (!Fence::Wait(release_fence)) {
+      destroy_sdm_layer(sdm_layer);
+    }
+  }
+
+  wl_list_init(&output->prev_sdm_layer_list);
+  wl_list_for_each_safe(sdm_layer, tmp_layer, &output->sdm_layer_list, link) {
+    wl_list_insert(output->prev_sdm_layer_list.prev, &sdm_layer->link);
+  }
+
+  wl_list_init(&output->sdm_layer_list);
+}
 
 }// namespace sdm
 #ifdef __cplusplus

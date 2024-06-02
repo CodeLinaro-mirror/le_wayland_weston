@@ -195,16 +195,11 @@ DisplayError SdmDisplay::DestroyDisplay() {
 }
 
 DisplayError SdmDisplay::VSync(const DisplayEventVSync &vsync) {
-    vsync_timestamp_ = vsync.timestamp;
-    pthread_mutex_lock(&drm_output_->commit_mtx);
-    if (!drm_output_->commit) {
-      if (vblank_cb_) {
-        vblank_cb_(display_id_, vsync.timestamp, drm_output_);
-      } else {
-        DLOGE("vsync not registered");
-      }
+    if (vblank_cb_) {
+      vblank_cb_(display_id_, vsync.timestamp, drm_output_);
+    } else {
+      DLOGE("vsync not registered");
     }
-    pthread_mutex_unlock(&drm_output_->commit_mtx);
 
     return kErrorNone;
 }
@@ -702,22 +697,24 @@ int SdmDisplay::PrepareFbLayerGeometry(struct drm_output *output,
         return -1;
     }
 
-    fb_layer->width = output->base.width;
-    fb_layer->height = output->base.height;
-    fb_layer->unaligned_width = output->base.width;
-    fb_layer->unaligned_height = output->base.height;
+    int32_t mode_width = output->base.current_mode->width;
+    int32_t mode_height = output->base.current_mode->height;
+    fb_layer->width = mode_width;
+    fb_layer->height = mode_height;
+    fb_layer->unaligned_width = mode_width;
+    fb_layer->unaligned_height = mode_height;
 
     fb_layer->format = GetMappedFormatFromGbm(output->gbm_format);
     fb_layer->composition = SDM_COMPOSITION_FB_TARGET;
 
     fb_layer->src_rect.left = (float)0.0;
     fb_layer->src_rect.top = (float)0.0;
-    fb_layer->src_rect.right = (float)output->base.width;
-    fb_layer->src_rect.bottom = (float)output->base.height;
+    fb_layer->src_rect.right = (float)mode_width;
+    fb_layer->src_rect.bottom = (float)mode_height;
     fb_layer->dst_rect.left = (float)0.0;
     fb_layer->dst_rect.top = (float)0.0;
-    fb_layer->dst_rect.right = (float)output->base.width;
-    fb_layer->dst_rect.bottom = (float)output->base.height;
+    fb_layer->dst_rect.right = (float)mode_width;
+    fb_layer->dst_rect.bottom = (float)mode_height;
 
     fb_layer->visible_regions.rects = reinterpret_cast<struct Rect *> \
                               (zalloc(sizeof(struct Rect)));
@@ -764,6 +761,11 @@ int SdmDisplayInterface::GetDrmMasterFd() {
         }
     master->GetHandle(&fd);
     return fd;
+}
+
+
+void SdmDisplayInterface::SetDrmMasterFd(int fd) {
+    DRMMaster::SetHandle(fd);
 }
 
 int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
@@ -1106,14 +1108,6 @@ DisplayError SdmDisplay::PostCommit()
 {
     DisplayError error = kErrorNone;
 
-    for (int i = 0; i < layer_stack_.layers.size(); i++) {
-      if (!layer_stack_.layers[i]->input_buffer.release_fence) {
-        continue;
-      }
-      current_release_fence_ = layer_stack_.layers[i]->input_buffer.release_fence;
-      break;
-    }
-
     //Wait for retire fence fds
     if (prev_layer_stack_.retire_fence) {
         int ret = -1;
@@ -1129,16 +1123,6 @@ DisplayError SdmDisplay::PostCommit()
         Layer *layer = layer_stack_.layers.at(i);
         LayerBuffer *layer_buffer = &layer->input_buffer;
     }
-
-    int ret = Fence::Wait(previous_release_fence_);
-    if (ret != 0) {
-      DLOGW("Fence timeout for previous release fence! ret=%d\n", ret);
-    }
-
-    if (vblank_cb_) {
-      vblank_cb_(display_id_, vsync_timestamp_, drm_output_);
-    }
-    previous_release_fence_ = current_release_fence_;
 
     return error;
 }
@@ -1171,6 +1155,14 @@ DisplayError SdmDisplay::Commit(struct drm_output *output)
     ret = display_intf_->Commit(&layer_stack_);
 
     PostCommit();
+
+    // Caching release fence for buffer synchronization during buffer release.
+    struct sdm_layer *sdm_layer = NULL;
+    uint32_t index = 0;
+    wl_list_for_each_reverse(sdm_layer, &output->sdm_layer_list, link) {
+         Layer *layer = layer_stack_.layers.at(index);
+         sdm_layer->release_fence_fd = Fence::Dup(layer->input_buffer.release_fence);
+    }
 
     DLOGV("success");
     return ret;

@@ -95,6 +95,7 @@ class SdmDisplayInterface {
     virtual DisplayError GetPanelBrightness(float *brightness) = 0;
     virtual DisplayError GetHdrInfo(struct DisplayHdrInfo *display_hdr_info) = 0;
     static int GetDrmMasterFd();
+    static void SetDrmMasterFd(int fd);
     struct drm_output *drm_output_;
     struct drm_output *prev_output_;
 };

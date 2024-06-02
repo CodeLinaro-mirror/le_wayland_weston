@@ -126,7 +126,9 @@ on_vblank(int fd, uint32_t mask, void *data)
 	uint32_t flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC |
 			 WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION |
 			 WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
-
+	if (!output->atomic_complete_pending) {
+		SetVSyncState(output->display_id, false, output);
+	}
 	if (output->atomic_complete_pending) {
 		drm_output_update_msc(output, output->last_vblank.frame);
 		output->atomic_complete_pending = false;
@@ -137,9 +139,6 @@ on_vblank(int fd, uint32_t mask, void *data)
 		sec = output->last_vblank.sec;
 		drm_output_update_complete(output, flags, sec, usec);
 	}
-
-	// turn off vsync at end of frame completion
-	SetVSyncState(output->display_id, false, output);
 	return 0;
 }
 
@@ -265,19 +264,7 @@ drm_output_update_complete(struct drm_output *output, uint32_t flags,
 	drm_fb_unref(output->next_fb);
 	output->next_fb = NULL;
 
-	pthread_mutex_lock(&output->commit_mtx);
-	if (output->commit) {
-		wl_list_for_each_safe(sdm_layer, tmp_layer, &output->prev_sdm_layer_list, link) {
-			destroy_sdm_layer(sdm_layer);
-		}
-		wl_list_init(&output->prev_sdm_layer_list);
-		wl_list_for_each_safe(sdm_layer, tmp_layer, &output->sdm_layer_list, link) {
-			wl_list_insert(output->prev_sdm_layer_list.prev, &sdm_layer->link);
-		}
-		wl_list_init(&output->sdm_layer_list);
-		output->commit = false;
-	}
-	pthread_mutex_unlock(&output->commit_mtx);
+        ClearSDMLayers(output);
 
 	if (output->dpms != WESTON_DPMS_ON) {
 		if (output->destroy_pending) {
@@ -1140,9 +1127,6 @@ drm_output_create(struct weston_compositor *compositor, const char *name)
 
 	wl_list_init(&output->sdm_layer_list);
 	wl_list_init(&output->prev_sdm_layer_list);
-	pthread_mutex_lock(&output->commit_mtx);
-	output->commit = false;
-	pthread_mutex_unlock(&output->commit_mtx);
 
 	output->base.enable = drm_output_enable;
 	output->base.destroy = drm_output_destroy;
@@ -1488,7 +1472,7 @@ drm_device_is_kms(struct drm_backend *b, struct udev_device *device)
 	b->drm.devnum = devnum;
 
 	drmModeFreeResources(res);
-
+	set_drm_master_fd(fd);
 	return true;
 
 out_res:
