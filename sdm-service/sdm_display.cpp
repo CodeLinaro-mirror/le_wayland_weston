@@ -29,7 +29,7 @@
 * Changes from Qualcomm Innovation Center are provided under the following
 * license:
 *
-* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 /*
@@ -631,6 +631,7 @@ static bool SetCSC(int32_t color_space, ColorMetaData *color_metadata) {
    * of meta data.
    */
   if (color_space == GBM_METADATA_COLOR_SPACE_ITU_R_601_FR ||
+      color_space == GBM_METADATA_COLOR_SPACE_ITU_R_709_FR ||
       color_space == GBM_METADATA_COLOR_SPACE_ITU_R_2020_FR)
     color_metadata->range = Range_Full;
 
@@ -642,6 +643,7 @@ static bool SetCSC(int32_t color_space, ColorMetaData *color_metadata) {
       csc_updated = true;
       break;
     case GBM_METADATA_COLOR_SPACE_ITU_R_709:
+    case GBM_METADATA_COLOR_SPACE_ITU_R_709_FR:
       color_metadata->colorPrimaries = ColorPrimaries_BT709_5;
       color_metadata->matrixCoefficients = MatrixCoEff_BT709_5;
       csc_updated = true;
