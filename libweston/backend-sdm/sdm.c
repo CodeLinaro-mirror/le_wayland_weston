@@ -916,12 +916,6 @@ drm_output_destroy(struct weston_output *base)
 	struct drm_output *output = to_drm_output(base);
 	struct drm_backend *b = to_drm_backend(base->compositor);
 
-	if (output->page_flip_pending || output->atomic_complete_pending) {
-		output->destroy_pending = true;
-		weston_log("destroy output while page flip pending\n");
-		return;
-	}
-
 	if (output->base.enabled)
 		drm_output_deinit(&output->base);
 
