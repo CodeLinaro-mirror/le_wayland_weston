@@ -1098,6 +1098,7 @@ draw_paint_node(struct weston_paint_node *pnode,
 	pixman_region32_t surface_blend;
 	GLint filter;
 	struct gl_shader_config sconf;
+	int i;
 
 	/* In case of a runtime switch of renderers, we may not have received
 	 * an attach for this surface since the switch. In that case we don't
@@ -1126,6 +1127,12 @@ draw_paint_node(struct weston_paint_node *pnode,
 
 	if (!gl_shader_config_init_for_paint_node(&sconf, pnode, filter))
 		goto out;
+
+	/* Reset sonf.input_tex if we have chosen SOLID shader */
+	if (gs->shader_variant == SHADER_VARIANT_SOLID) {
+		for (i = 0; i < gs->num_textures; i++)
+			sconf.input_tex[i] = 0;
+	}
 
 	/* blended region is whole surface minus opaque region: */
 	pixman_region32_init_rect(&surface_blend, 0, 0,
