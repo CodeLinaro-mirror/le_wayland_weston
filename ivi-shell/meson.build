@@ -20,7 +20,8 @@ if get_option('shell-ivi')
 		],
 		name_prefix: '',
 		install: true,
-		install_dir: dir_module_weston
+		install_dir: dir_module_weston,
+		install_rpath: '$ORIGIN'
 	)
 	env_modmap += 'ivi-shell.so=@0@;'.format(plugin_shell_ivi.full_path())
 
@@ -42,18 +43,17 @@ if get_option('shell-ivi')
 		],
 		name_prefix: '',
 		install: true,
-		install_dir: dir_module_weston
+		install_dir: dir_module_weston,
+		install_rpath: '$ORIGIN'
 	)
 	env_modmap += 'hmi-controller.so=@0@;'.format(plugin_ivi_hmi.full_path())
 
 	ivi_test_config = configuration_data()
 	ivi_test_config.set('bindir', dir_bin)
-	ivi_test_config.set('libexecdir', dir_libexec)
-	ivi_test_config.set('plugin_prefix', meson.current_build_dir())
-	ivi_test_config.set('westondatadir', join_paths(dir_data, 'weston'))
-	ivi_test_ini = configure_file(
-		input: '../ivi-shell/weston.ini.in',
-		output: 'weston-ivi-test.ini',
+	ivi_test_config.set('westondatadir', dir_data / 'weston')
+	configure_file(
+		input: 'weston.ini.in',
+		output: 'weston.ini',
 		configuration: ivi_test_config
 	)
 endif

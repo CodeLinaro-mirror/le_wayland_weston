@@ -1,7 +1,7 @@
 dep_scanner = dependency('wayland-scanner', native: true)
 prog_scanner = find_program(dep_scanner.get_pkgconfig_variable('wayland_scanner'))
 
-dep_wp = dependency('wayland-protocols', version: '>= 1.18')
+dep_wp = dependency('wayland-protocols', version: '>= 1.24')
 dir_wp_base = dep_wp.get_pkgconfig_variable('pkgdatadir')
 
 install_data(
@@ -9,6 +9,7 @@ install_data(
 		'weston-debug.xml',
 		'weston-direct-display.xml',
 		'weston-qti-extn.xml',
+		'gbm-buffer-backend.xml',
 	],
 	install_dir: join_paths(dir_data, dir_protocol_libweston)
 )

@@ -23,7 +23,9 @@
  * SOFTWARE.
  */
 
-#include "pipewire-plugin.h"
+#include "config.h"
+
+#include <libweston/pipewire-plugin.h>
 #include "backend.h"
 #include "libweston-internal.h"
 #include "shared/timespec-util.h"
@@ -34,20 +36,16 @@
 #include <errno.h>
 #include <unistd.h>
 
+#include <pipewire/pipewire.h>
+
 #include <spa/param/format-utils.h>
 #include <spa/param/video/format-utils.h>
 #include <spa/utils/defs.h>
 
-#include <pipewire/pipewire.h>
+#include <spa/buffer/meta.h>
+#include <spa/utils/result.h>
 
 #define PROP_RANGE(min, max) 2, (min), (max)
-
-struct type {
-	struct spa_type_media_type media_type;
-	struct spa_type_media_subtype media_subtype;
-	struct spa_type_format_video format_video;
-	struct spa_type_video_format video_format;
-};
 
 struct weston_pipewire {
 	struct weston_compositor *compositor;
@@ -60,12 +58,10 @@ struct weston_pipewire {
 	struct pw_loop *loop;
 	struct wl_event_source *loop_source;
 
+	struct pw_context *context;
 	struct pw_core *core;
 	struct pw_type *t;
-	struct type type;
-
-	struct pw_remote *remote;
-	struct spa_hook remote_listener;
+	struct spa_hook core_listener;
 };
 
 struct pipewire_output {
@@ -88,6 +84,7 @@ struct pipewire_output {
 	struct wl_event_source *finish_frame_timer;
 	struct wl_list link;
 	bool submitted_frame;
+	enum dpms_enum dpms;
 };
 
 struct pipewire_frame_data {
@@ -98,14 +95,6 @@ struct pipewire_frame_data {
 	int fence_sync_fd;
 	struct wl_event_source *fence_sync_event_source;
 };
-
-static inline void init_type(struct type *type, struct spa_type_map *map)
-{
-	spa_type_media_type_map(map, &type->media_type);
-	spa_type_media_subtype_map(map, &type->media_subtype);
-	spa_type_format_video_map(map, &type->format_video);
-	spa_type_video_format_map(map, &type->video_format);
-}
 
 static void
 pipewire_debug_impl(struct weston_pipewire *pipewire,
@@ -138,16 +127,6 @@ pipewire_debug_impl(struct weston_pipewire *pipewire,
 		weston_log_scope_write(pipewire->debug, logstr, logsize);
 
 	free(logstr);
-}
-
-static void
-pipewire_debug(struct weston_pipewire *pipewire, const char *fmt, ...)
-{
-	va_list ap;
-
-	va_start(ap, fmt);
-	pipewire_debug_impl(pipewire, NULL, fmt, ap);
-	va_end(ap);
 }
 
 static void
@@ -184,7 +163,6 @@ pipewire_output_handle_frame(struct pipewire_output *output, int fd,
 	const struct weston_drm_virtual_output_api *api =
 		output->pipewire->virtual_output_api;
 	size_t size = output->output->height * stride;
-	struct pw_type *t = output->pipewire->t;
 	struct pw_buffer *buffer;
 	struct spa_buffer *spa_buffer;
 	struct spa_meta_header *h;
@@ -202,7 +180,8 @@ pipewire_output_handle_frame(struct pipewire_output *output, int fd,
 
 	spa_buffer = buffer->buffer;
 
-	if ((h = spa_buffer_find_meta(spa_buffer, t->meta.Header))) {
+	if ((h = spa_buffer_find_meta_data(spa_buffer, SPA_META_Header,
+				     sizeof(struct spa_meta_header)))) {
 		h->pts = -1;
 		h->flags = 0;
 		h->seq = output->seq++;
@@ -317,7 +296,11 @@ pipewire_output_finish_frame_handler(void *data)
 		api->finish_frame(output->output, &now, 0);
 	}
 
-	pipewire_output_timer_update(output);
+	if (output->dpms == WESTON_DPMS_ON)
+		pipewire_output_timer_update(output);
+	else
+		wl_event_source_timer_update(output->finish_frame_timer, 0);
+
 	return 0;
 }
 
@@ -355,37 +338,43 @@ pipewire_output_start_repaint_loop(struct weston_output *base_output)
 	return 0;
 }
 
+static void
+pipewire_set_dpms(struct weston_output *base_output, enum dpms_enum level)
+{
+	struct pipewire_output *output = lookup_pipewire_output(base_output);
+
+	if (output->dpms == level)
+		return;
+
+	output->dpms = level;
+	pipewire_output_finish_frame_handler(output);
+}
+
 static int
 pipewire_output_connect(struct pipewire_output *output)
 {
-	struct weston_pipewire *pipewire = output->pipewire;
-	struct type *type = &pipewire->type;
 	uint8_t buffer[1024];
 	struct spa_pod_builder builder =
 		SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
 	const struct spa_pod *params[1];
-	struct pw_type *t = pipewire->t;
 	int frame_rate = output->output->current_mode->refresh / 1000;
 	int width = output->output->width;
 	int height = output->output->height;
 	int ret;
 
-	params[0] = spa_pod_builder_object(&builder,
-		t->param.idEnumFormat, t->spa_format,
-		"I", type->media_type.video,
-		"I", type->media_subtype.raw,
-		":", type->format_video.format,
-		"I", type->video_format.BGRx,
-		":", type->format_video.size,
-		"R", &SPA_RECTANGLE(width, height),
-		":", type->format_video.framerate,
-		"F", &SPA_FRACTION(0, 1),
-		":", type->format_video.max_framerate,
-		"Fru", &SPA_FRACTION(frame_rate, 1),
-		       PROP_RANGE(&SPA_FRACTION(1, 1),
-				  &SPA_FRACTION(frame_rate, 1)));
+	params[0] = spa_pod_builder_add_object(&builder,
+		SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+		SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
+		SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+		SPA_FORMAT_VIDEO_format, SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx),
+		SPA_FORMAT_VIDEO_size, SPA_POD_Rectangle(&SPA_RECTANGLE(width, height)),
+		SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&SPA_FRACTION (0, 1)),
+		SPA_FORMAT_VIDEO_maxFramerate,
+		SPA_POD_CHOICE_RANGE_Fraction(&SPA_FRACTION(frame_rate, 1),
+			&SPA_FRACTION(1, 1),
+			&SPA_FRACTION(frame_rate, 1)));
 
-	ret = pw_stream_connect(output->stream, PW_DIRECTION_OUTPUT, NULL,
+	ret = pw_stream_connect(output->stream, PW_DIRECTION_OUTPUT, SPA_ID_INVALID,
 				(PW_STREAM_FLAG_DRIVER |
 				 PW_STREAM_FLAG_MAP_BUFFERS),
 				params, 1);
@@ -420,12 +409,14 @@ pipewire_output_enable(struct weston_output *base_output)
 
 	output->saved_start_repaint_loop = base_output->start_repaint_loop;
 	base_output->start_repaint_loop = pipewire_output_start_repaint_loop;
+	base_output->set_dpms = pipewire_set_dpms;
 
 	loop = wl_display_get_event_loop(c->wl_display);
 	output->finish_frame_timer =
 		wl_event_loop_add_timer(loop,
 					pipewire_output_finish_frame_handler,
 					output);
+	output->dpms = WESTON_DPMS_ON;
 
 	return 0;
 }
@@ -463,26 +454,23 @@ pipewire_output_stream_state_changed(void *data, enum pw_stream_state old,
 }
 
 static void
-pipewire_output_stream_format_changed(void *data, const struct spa_pod *format)
+pipewire_output_stream_param_changed(void *data, uint32_t id, const struct spa_pod *format)
 {
 	struct pipewire_output *output = data;
-	struct weston_pipewire *pipewire = output->pipewire;
 	uint8_t buffer[1024];
 	struct spa_pod_builder builder =
 		SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
 	const struct spa_pod *params[2];
-	struct pw_type *t = pipewire->t;
 	int32_t width, height, stride, size;
 	const int bpp = 4;
 
 	if (!format) {
 		pipewire_output_debug(output, "format = None");
-		pw_stream_finish_format(output->stream, 0, NULL, 0);
+		pw_stream_update_params(output->stream, NULL, 0);
 		return;
 	}
 
-	spa_format_video_raw_parse(format, &output->video_format,
-				   &pipewire->type.format_video);
+	spa_format_video_raw_parse(format, &output->video_format);
 
 	width = output->video_format.size.width;
 	height = output->video_format.size.height;
@@ -491,29 +479,25 @@ pipewire_output_stream_format_changed(void *data, const struct spa_pod *format)
 
 	pipewire_output_debug(output, "format = %dx%d", width, height);
 
-	params[0] = spa_pod_builder_object(&builder,
-		t->param.idBuffers, t->param_buffers.Buffers,
-		":", t->param_buffers.size,
-		"i", size,
-		":", t->param_buffers.stride,
-		"i", stride,
-		":", t->param_buffers.buffers,
-		"iru", 4, PROP_RANGE(2, 8),
-		":", t->param_buffers.align,
-		"i", 16);
+	params[0] = spa_pod_builder_add_object(&builder,
+		SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
+		SPA_PARAM_BUFFERS_size, SPA_POD_Int(size),
+		SPA_PARAM_BUFFERS_stride, SPA_POD_Int(stride),
+		SPA_PARAM_BUFFERS_buffers, SPA_POD_CHOICE_RANGE_Int(4, 2, 8),
+		SPA_PARAM_BUFFERS_align, SPA_POD_Int(16));
 
-	params[1] = spa_pod_builder_object(&builder,
-		t->param.idMeta, t->param_meta.Meta,
-		":", t->param_meta.type, "I", t->meta.Header,
-		":", t->param_meta.size, "i", sizeof(struct spa_meta_header));
+	params[1] = spa_pod_builder_add_object(&builder,
+		SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+		SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Header),
+		SPA_PARAM_META_size, SPA_POD_Int(sizeof(struct spa_meta_header)));
 
-	pw_stream_finish_format(output->stream, 0, params, 2);
+	pw_stream_update_params(output->stream, params, 2);
 }
 
 static const struct pw_stream_events stream_events = {
 	PW_VERSION_STREAM_EVENTS,
 	.state_changed = pipewire_output_stream_state_changed,
-	.format_changed = pipewire_output_stream_format_changed,
+	.param_changed = pipewire_output_stream_param_changed,
 };
 
 static struct weston_output *
@@ -527,6 +511,7 @@ pipewire_output_create(struct weston_compositor *c, char *name)
 	const char *model = "Virtual Display";
 	const char *serial_number = "unknown";
 	const char *connector_name = "pipewire";
+	char *remoting_name;
 
 	if (!name || !strlen(name))
 		return NULL;
@@ -541,7 +526,7 @@ pipewire_output_create(struct weston_compositor *c, char *name)
 	if (!head)
 		goto err;
 
-	output->stream = pw_stream_new(pipewire->remote, name, NULL);
+	output->stream = pw_stream_new(pipewire->core, name, NULL);
 	if (!output->stream) {
 		weston_log("Cannot initialize pipewire stream\n");
 		goto err;
@@ -565,7 +550,8 @@ pipewire_output_create(struct weston_compositor *c, char *name)
 	output->pipewire = pipewire;
 	wl_list_insert(pipewire->output_list.prev, &output->link);
 
-	weston_head_init(head, connector_name);
+	asprintf(&remoting_name, "%s-%s", connector_name, name);
+	weston_head_init(head, remoting_name);
 	weston_head_set_subpixel(head, WL_OUTPUT_SUBPIXEL_NONE);
 	weston_head_set_monitor_strings(head, make, model, serial_number);
 	head->compositor = c;
@@ -573,6 +559,7 @@ pipewire_output_create(struct weston_compositor *c, char *name)
 
 	weston_output_attach_head(output->output, head);
 
+	free(remoting_name);
 	pipewire_output_debug(output, "created");
 
 	return output->output;
@@ -648,7 +635,7 @@ weston_pipewire_destroy(struct wl_listener *l, void *data)
 	struct weston_pipewire *pipewire =
 		wl_container_of(l, pipewire, destroy_listener);
 
-	weston_compositor_log_scope_destroy(pipewire->debug);
+	weston_log_scope_destroy(pipewire->debug);
 	pipewire->debug = NULL;
 
 	wl_event_source_remove(pipewire->loop_source);
@@ -686,31 +673,15 @@ weston_pipewire_loop_handler(int fd, uint32_t mask, void *data)
 }
 
 static void
-weston_pipewire_state_changed(void *data, enum pw_remote_state old,
-			      enum pw_remote_state state, const char *error)
+weston_pipewire_error(void *data, uint32_t id, int seq, int res,
+			      const char *error)
 {
-	struct weston_pipewire *pipewire = data;
-
-	pipewire_debug(pipewire, "[remote] state changed %s -> %s",
-		       pw_remote_state_as_string(old),
-		       pw_remote_state_as_string(state));
-
-	switch (state) {
-	case PW_REMOTE_STATE_ERROR:
-		weston_log("pipewire remote error: %s\n", error);
-		break;
-	case PW_REMOTE_STATE_CONNECTED:
-		weston_log("connected to pipewire daemon\n");
-		break;
-	default:
-		break;
-	}
+	weston_log("pipewire remote error: %s\n", error);
 }
 
-
-static const struct pw_remote_events remote_events = {
-	PW_VERSION_REMOTE_EVENTS,
-	.state_changed = weston_pipewire_state_changed,
+static const struct pw_core_events core_events = {
+	PW_VERSION_CORE_EVENTS,
+	.error = weston_pipewire_error,
 };
 
 static int
@@ -726,38 +697,12 @@ weston_pipewire_init(struct weston_pipewire *pipewire)
 
 	pw_loop_enter(pipewire->loop);
 
-	pipewire->core = pw_core_new(pipewire->loop, NULL);
-	pipewire->t = pw_core_get_type(pipewire->core);
-	init_type(&pipewire->type, pipewire->t->map);
+	pipewire->context = pw_context_new(pipewire->loop, NULL, 0);
+	pipewire->core = pw_context_connect(pipewire->context, NULL, 0);
 
-	pipewire->remote = pw_remote_new(pipewire->core, NULL, 0);
-	pw_remote_add_listener(pipewire->remote,
-			       &pipewire->remote_listener,
-			       &remote_events, pipewire);
-
-	pw_remote_connect(pipewire->remote);
-
-	while (true) {
-		enum pw_remote_state state;
-		const char *error = NULL;
-		int ret;
-
-		state = pw_remote_get_state(pipewire->remote, &error);
-		if (state == PW_REMOTE_STATE_CONNECTED)
-			break;
-
-		if (state == PW_REMOTE_STATE_ERROR) {
-			weston_log("pipewire error: %s\n", error);
-			goto err;
-		}
-
-		ret = pw_loop_iterate(pipewire->loop, -1);
-		if (ret < 0) {
-			weston_log("pipewire_loop_iterate failed: %s",
-				   spa_strerror(ret));
-			goto err;
-		}
-	}
+	pw_core_add_listener(pipewire->core,
+			       &pipewire->core_listener,
+			       &core_events, pipewire);
 
 	loop = wl_display_get_event_loop(pipewire->compositor->wl_display);
 	pipewire->loop_source =
@@ -767,12 +712,6 @@ weston_pipewire_init(struct weston_pipewire *pipewire)
 				     pipewire);
 
 	return 0;
-err:
-	if (pipewire->remote)
-		pw_remote_destroy(pipewire->remote);
-	pw_loop_leave(pipewire->loop);
-	pw_loop_destroy(pipewire->loop);
-	return -1;
 }
 
 static const struct weston_pipewire_api pipewire_api = {
@@ -822,11 +761,10 @@ weston_module_init(struct weston_compositor *compositor)
 		goto failed;
 	}
 
-	pipewire->debug = weston_compositor_add_log_scope(
-			compositor->weston_log_ctx,
-			"pipewire",
-			"Debug messages from pipewire plugin\n",
-			NULL, NULL, NULL);
+	pipewire->debug =
+		weston_compositor_add_log_scope(compositor, "pipewire",
+						"Debug messages from pipewire plugin\n",
+						NULL, NULL, NULL);
 
 	return 0;
 

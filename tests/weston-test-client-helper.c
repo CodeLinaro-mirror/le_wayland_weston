@@ -1,5 +1,7 @@
 /*
  * Copyright © 2012 Intel Corporation
+ * Copyright © 2015 Samsung Electronics Co., Ltd
+ * Copyright 2016, 2017 Collabora, Ltd.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -34,6 +36,7 @@
 #include <sys/mman.h>
 #include <cairo.h>
 
+#include "test-config.h"
 #include "shared/os-compatibility.h"
 #include "shared/xalloc.h"
 #include <libweston/zalloc.h>
@@ -127,6 +130,7 @@ pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
 	else
 		pointer->focus = NULL;
 
+	pointer->serial = serial;
 	pointer->x = wl_fixed_to_int(x);
 	pointer->y = wl_fixed_to_int(y);
 
@@ -140,6 +144,7 @@ pointer_handle_leave(void *data, struct wl_pointer *wl_pointer,
 {
 	struct pointer *pointer = data;
 
+	pointer->serial = serial;
 	pointer->focus = NULL;
 
 	testlog("test-client: got pointer leave, surface %p\n",
@@ -169,6 +174,7 @@ pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 {
 	struct pointer *pointer = data;
 
+	pointer->serial = serial;
 	pointer->button = button;
 	pointer->state = state;
 	pointer->button_time_msec = time_msec;
@@ -537,17 +543,20 @@ test_handle_pointer_position(void *data, struct weston_test *weston_test,
 }
 
 static void
-test_handle_capture_screenshot_done(void *data, struct weston_test *weston_test)
+test_handle_capture_screenshot_done(void *data, struct weston_screenshooter *screenshooter)
 {
-	struct test *test = data;
+	struct client *client = data;
 
 	testlog("Screenshot has been captured\n");
-	test->buffer_copy_done = 1;
+	client->buffer_copy_done = true;
 }
+
+static const struct weston_screenshooter_listener screenshooter_listener = {
+	test_handle_capture_screenshot_done
+};
 
 static const struct weston_test_listener test_listener = {
 	test_handle_pointer_position,
-	test_handle_capture_screenshot_done,
 };
 
 static void
@@ -723,6 +732,15 @@ static const struct wl_output_listener output_listener = {
 };
 
 static void
+output_destroy(struct output *output)
+{
+	assert(wl_proxy_get_version((struct wl_proxy *)output->wl_output) >= 3);
+	wl_output_release(output->wl_output);
+	wl_list_remove(&output->link);
+	free(output);
+}
+
+static void
 handle_global(void *data, struct wl_registry *registry,
 	      uint32_t id, const char *interface, uint32_t version)
 {
@@ -738,6 +756,13 @@ handle_global(void *data, struct wl_registry *registry,
 	assert(interface);
 	global->version = version;
 	wl_list_insert(client->global_list.prev, &global->link);
+
+	/* We deliberately bind all globals with the maximum (advertised)
+	 * version, because this test suite must be kept up-to-date with
+	 * Weston. We must always implement at least the version advertised
+	 * by Weston. This is not ok for normal clients, but it is ok in
+	 * this test suite.
+	 */
 
 	if (strcmp(interface, "wl_compositor") == 0) {
 		client->wl_compositor =
@@ -764,6 +789,7 @@ handle_global(void *data, struct wl_registry *registry,
 					 &wl_output_interface, version);
 		wl_output_add_listener(output->wl_output,
 				       &output_listener, output);
+		wl_list_insert(&client->output_list, &output->link);
 		client->output = output;
 	} else if (strcmp(interface, "weston_test") == 0) {
 		test = xzalloc(sizeof *test);
@@ -772,8 +798,12 @@ handle_global(void *data, struct wl_registry *registry,
 					 &weston_test_interface, version);
 		weston_test_add_listener(test->weston_test, &test_listener, test);
 		client->test = test;
-	} else if (strcmp(interface, "wl_drm") == 0) {
-		client->has_wl_drm = true;
+	} else if (strcmp(interface, "weston_screenshooter") == 0) {
+		client->screenshooter =
+			wl_registry_bind(registry, id,
+					 &weston_screenshooter_interface, 1);
+		weston_screenshooter_add_listener(client->screenshooter,
+						  &screenshooter_listener, client);
 	}
 }
 
@@ -804,6 +834,14 @@ client_find_input_with_name(struct client *client, uint32_t name)
 }
 
 static void
+global_destroy(struct global *global)
+{
+	wl_list_remove(&global->link);
+	free(global->interface);
+	free(global);
+}
+
+static void
 handle_global_remove(void *data, struct wl_registry *registry, uint32_t name)
 {
 	struct client *client = data;
@@ -822,9 +860,9 @@ handle_global_remove(void *data, struct wl_registry *registry, uint32_t name)
 		}
 	}
 
-	wl_list_remove(&global->link);
-	free(global->interface);
-	free(global);
+	/* XXX: handle wl_output */
+
+	global_destroy(global);
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -892,6 +930,8 @@ expect_protocol_error(struct client *client,
 	/* all OK */
 	testlog("Got expected protocol error on '%s' (object id: %d) "
 		"with code %d\n", interface->name, id, errcode);
+
+	client->errored_ok = true;
 }
 
 static void
@@ -914,6 +954,7 @@ create_client(void)
 	assert(client->wl_display);
 	wl_list_init(&client->global_list);
 	wl_list_init(&client->inputs);
+	wl_list_init(&client->output_list);
 
 	/* setup registry so we can bind to interfaces */
 	client->wl_registry = wl_display_get_registry(client->wl_display);
@@ -963,6 +1004,16 @@ create_test_surface(struct client *client)
 	return surface;
 }
 
+void
+surface_destroy(struct surface *surface)
+{
+	if (surface->wl_surface)
+		wl_surface_destroy(surface->wl_surface);
+	if (surface->buffer)
+		buffer_destroy(surface->buffer);
+	free(surface);
+}
+
 struct client *
 create_client_and_test_surface(int x, int y, int width, int height)
 {
@@ -997,6 +1048,52 @@ create_client_and_test_surface(int x, int y, int width, int height)
 	return client;
 }
 
+void
+client_destroy(struct client *client)
+{
+	int ret;
+
+	if (client->surface)
+		surface_destroy(client->surface);
+
+	while (!wl_list_empty(&client->inputs)) {
+		input_destroy(container_of(client->inputs.next,
+					   struct input, link));
+	}
+
+	while (!wl_list_empty(&client->output_list)) {
+		output_destroy(container_of(client->output_list.next,
+					    struct output, link));
+	}
+
+	while (!wl_list_empty(&client->global_list)) {
+		global_destroy(container_of(client->global_list.next,
+					    struct global, link));
+	}
+
+	if (client->test) {
+		weston_test_destroy(client->test->weston_test);
+		free(client->test);
+	}
+
+	if (client->screenshooter)
+		weston_screenshooter_destroy(client->screenshooter);
+	if (client->wl_shm)
+		wl_shm_destroy(client->wl_shm);
+	if (client->wl_compositor)
+		wl_compositor_destroy(client->wl_compositor);
+	if (client->wl_registry)
+		wl_registry_destroy(client->wl_registry);
+
+	if (client->wl_display) {
+		ret = wl_display_roundtrip(client->wl_display);
+		assert(client->errored_ok || ret >= 0);
+		wl_display_disconnect(client->wl_display);
+	}
+
+	free(client);
+}
+
 static const char*
 output_path(void)
 {
@@ -1025,7 +1122,7 @@ reference_path(void)
 	char *path = getenv("WESTON_TEST_REFERENCE_PATH");
 
 	if (!path)
-		return "./tests/reference";
+		return WESTON_TEST_REFERENCE_PATH;
 	return path;
 }
 
@@ -1037,6 +1134,16 @@ screenshot_reference_filename(const char *basename, uint32_t seq)
 	if (asprintf(&filename, "%s/%s-%02d.png",
 				 reference_path(), basename, seq) < 0)
 		return NULL;
+	return filename;
+}
+
+char *
+image_filename(const char *basename)
+{
+	char *filename;
+
+	if (asprintf(&filename, "%s/%s.png", reference_path(), basename) < 0)
+		assert(0);
 	return filename;
 }
 
@@ -1074,6 +1181,24 @@ format_pixman2cairo(pixman_format_code_t fmt)
 			return format_map[i].cairo;
 
 	assert(0 && "unknown Pixman pixel format");
+}
+
+/**
+ * Validate range
+ *
+ * \param r Range to validate or NULL.
+ * \return The given range, or {0, 0} for NULL.
+ *
+ * Will abort if range is invalid, that is a > b.
+ */
+static struct range
+range_get(const struct range *r)
+{
+	if (!r)
+		return (struct range){ 0, 0 };
+
+	assert(r->a <= r->b);
+	return *r;
 }
 
 /**
@@ -1156,8 +1281,51 @@ image_iter_get_row(struct image_iterator *it, int y)
 	return (uint32_t *)(it->data + y * it->stride);
 }
 
+struct pixel_diff_stat {
+	struct pixel_diff_stat_channel {
+		int min_diff;
+		int max_diff;
+	} ch[4];
+};
+
+static void
+testlog_pixel_diff_stat(const struct pixel_diff_stat *stat)
+{
+	int i;
+
+	testlog("Image difference statistics:\n");
+	for (i = 0; i < 4; i++) {
+		testlog("\tch %d: [%d, %d]\n",
+			i, stat->ch[i].min_diff, stat->ch[i].max_diff);
+	}
+}
+
+static bool
+fuzzy_match_pixels(uint32_t pix_a, uint32_t pix_b,
+		   const struct range *fuzz,
+		   struct pixel_diff_stat *stat)
+{
+	bool ret = true;
+	int shift;
+	int i;
+
+	for (shift = 0, i = 0; i < 4; shift += 8, i++) {
+		int val_a = (pix_a >> shift) & 0xffu;
+		int val_b = (pix_b >> shift) & 0xffu;
+		int d = val_b - val_a;
+
+		stat->ch[i].min_diff = min(stat->ch[i].min_diff, d);
+		stat->ch[i].max_diff = max(stat->ch[i].max_diff, d);
+
+		if (d < fuzz->a || d > fuzz->b)
+			ret = false;
+	}
+
+	return ret;
+}
+
 /**
- * Test if a given region within two images are pixel-identical.
+ * Test if a given region within two images are pixel-identical
  *
  * Returns true if the two images pixel-wise identical, and false otherwise.
  *
@@ -1165,15 +1333,24 @@ image_iter_get_row(struct image_iterator *it, int y)
  * \param img_b Second image.
  * \param clip_rect The region of interest, or NULL for comparing the whole
  * images.
+ * \param prec Per-channel allowed difference, or NULL for identical match
+ * required.
  *
  * This function hard-fails if clip_rect is not inside both images. If clip_rect
  * is given, the images do not have to match in size, otherwise size mismatch
  * will be a hard failure.
+ *
+ * The per-pixel, per-channel difference is computed as img_b - img_a which is
+ * required to be in the range [prec->a, prec->b] inclusive. The difference is
+ * signed. All four channels are compared the same way, without any special
+ * meaning on alpha channel.
  */
 bool
 check_images_match(pixman_image_t *img_a, pixman_image_t *img_b,
-		   const struct rectangle *clip_rect)
+		   const struct rectangle *clip_rect, const struct range *prec)
 {
+	struct range fuzz = range_get(prec);
+	struct pixel_diff_stat diffstat = {};
 	struct image_iterator it_a;
 	struct image_iterator it_b;
 	pixman_box32_t box;
@@ -1191,7 +1368,8 @@ check_images_match(pixman_image_t *img_a, pixman_image_t *img_b,
 		pix_b = image_iter_get_row(&it_b, y) + box.x1;
 
 		for (x = box.x1; x < box.x2; x++) {
-			if (*pix_a != *pix_b)
+			if (!fuzzy_match_pixels(*pix_a, *pix_b,
+						&fuzz, &diffstat))
 				return false;
 
 			pix_a++;
@@ -1231,6 +1409,8 @@ tint(uint32_t src, uint32_t add)
  * \param img_b Second image.
  * \param clip_rect The region of interest, or NULL for comparing the whole
  * images.
+ * \param prec Per-channel allowed difference, or NULL for identical match
+ * required.
  * \return A new image with the differences highlighted.
  *
  * Regions outside of the region of interest are shaded with black, matching
@@ -1240,11 +1420,19 @@ tint(uint32_t src, uint32_t add)
  * This function hard-fails if clip_rect is not inside both images. If clip_rect
  * is given, the images do not have to match in size, otherwise size mismatch
  * will be a hard failure.
+ *
+ * The per-pixel, per-channel difference is computed as img_b - img_a which is
+ * required to be in the range [prec->a, prec->b] inclusive. The difference is
+ * signed. All four channels are compared the same way, without any special
+ * meaning on alpha channel.
  */
 pixman_image_t *
 visualize_image_difference(pixman_image_t *img_a, pixman_image_t *img_b,
-			   const struct rectangle *clip_rect)
+			   const struct rectangle *clip_rect,
+			   const struct range *prec)
 {
+	struct range fuzz = range_get(prec);
+	struct pixel_diff_stat diffstat = {};
 	pixman_image_t *diffimg;
 	pixman_image_t *shade;
 	struct image_iterator it_a;
@@ -1287,7 +1475,8 @@ visualize_image_difference(pixman_image_t *img_a, pixman_image_t *img_b,
 		pix_d = image_iter_get_row(&it_d, y) + box.x1;
 
 		for (x = box.x1; x < box.x2; x++) {
-			if (*pix_a == *pix_b)
+			if (fuzzy_match_pixels(*pix_a, *pix_b,
+					       &fuzz, &diffstat))
 				*pix_d = tint(*pix_d, 0x00008000); /* green */
 			else
 				*pix_d = tint(*pix_d, 0x00c00000); /* red */
@@ -1297,6 +1486,8 @@ visualize_image_difference(pixman_image_t *img_a, pixman_image_t *img_b,
 			pix_d++;
 		}
 	}
+
+	testlog_pixel_diff_stat(&diffstat);
 
 	return diffimg;
 }
@@ -1443,17 +1634,18 @@ capture_screenshot_of_output(struct client *client)
 {
 	struct buffer *buffer;
 
+	assert(client->screenshooter);
+
 	buffer = create_shm_buffer_a8r8g8b8(client,
 					    client->output->width,
 					    client->output->height);
 
-	client->test->buffer_copy_done = 0;
-	weston_test_capture_screenshot(client->test->weston_test,
+	client->buffer_copy_done = false;
+	weston_screenshooter_take_shot(client->screenshooter,
 				       client->output->wl_output,
 				       buffer->proxy);
-	while (client->test->buffer_copy_done == 0)
-		if (wl_display_dispatch(client->wl_display) < 0)
-			break;
+	while (client->buffer_copy_done == false)
+		assert(wl_display_dispatch(client->wl_display) >= 0);
 
 	/* FIXME: Document somewhere the orientation the screenshot is taken
 	 * and how the clip coords are interpreted, in case of scaling/transform.
@@ -1462,4 +1654,295 @@ capture_screenshot_of_output(struct client *client)
 	 */
 
 	return buffer;
+}
+
+static void
+write_visual_diff(pixman_image_t *ref_image,
+		  struct buffer *shot,
+		  const struct rectangle *clip,
+		  const char *test_name,
+		  int seq_no,
+		  const struct range *fuzz)
+{
+	char *fname;
+	char *ext_test_name;
+	pixman_image_t *diff;
+	int ret;
+
+	ret = asprintf(&ext_test_name, "%s-diff", test_name);
+	assert(ret >= 0);
+
+	fname = screenshot_output_filename(ext_test_name, seq_no);
+	diff = visualize_image_difference(ref_image, shot->image, clip, fuzz);
+	write_image_as_png(diff, fname);
+
+	pixman_image_unref(diff);
+	free(fname);
+	free(ext_test_name);
+}
+
+/**
+ * Verify image contents
+ *
+ * Compares the contents of the given shot to the given reference
+ * image over the given clip rectangle, reports whether they match to the
+ * test log, and if they do not match writes a visual diff into a PNG file
+ * and the screenshot into another PNG file named with get_test_name() and
+ * seq_no.
+ *
+ * The shot image size and the reference image size must both contain
+ * the clip rectangle.
+ *
+ * This function uses the pixel value allowed fuzz appropriate for GL-renderer
+ * with 8 bits per channel data.
+ *
+ * \param shot The image to be verified, usually a screenshot.
+ * \param ref_image The reference image file basename, without sequence number
+ * and .png suffix.
+ * \param ref_seq_no The reference image sequence number.
+ * \param clip The region of interest, or NULL for comparing the whole
+ * images.
+ * \param seq_no Test sequence number, for writing output files.
+ * \return True if the shot matches the reference image, false otherwise.
+ *
+ * For bootstrapping, ref_image can be NULL or the file can be missing.
+ * In that case the screenshot file is written but no comparison is performed,
+ * and false is returned.
+ *
+ * \sa verify_screen_content
+ */
+bool
+verify_image(struct buffer *shot,
+	     const char *ref_image,
+	     int ref_seq_no,
+	     const struct rectangle *clip,
+	     int seq_no)
+{
+	const char *test_name = get_test_name();
+	const struct range gl_fuzz = { -3, 4 };
+	pixman_image_t *ref = NULL;
+	char *ref_fname = NULL;
+	char *shot_fname;
+	bool match = false;
+
+	shot_fname = screenshot_output_filename(test_name, seq_no);
+
+	if (ref_image) {
+		ref_fname = screenshot_reference_filename(ref_image, ref_seq_no);
+		ref = load_image_from_png(ref_fname);
+	}
+
+	if (ref) {
+		match = check_images_match(ref, shot->image, clip, &gl_fuzz);
+		testlog("Verify reference image %s vs. shot %s: %s\n",
+			ref_fname, shot_fname, match ? "PASS" : "FAIL");
+
+		if (!match) {
+			write_visual_diff(ref, shot, clip,
+					  test_name, seq_no, &gl_fuzz);
+		}
+
+		pixman_image_unref(ref);
+	} else {
+		testlog("No reference image, shot %s: FAIL\n", shot_fname);
+	}
+
+	if (!match)
+		write_image_as_png(shot->image, shot_fname);
+
+	free(ref_fname);
+	free(shot_fname);
+
+	return match;
+}
+
+/**
+ * Take a screenshot and verify its contents
+ *
+ * Takes a screenshot and calls verify_image() with it.
+ *
+ * \param client The client, for connecting to the compositor.
+ * \param ref_image See verify_image().
+ * \param ref_seq_no See verify_image().
+ * \param clip See verify_image().
+ * \param seq_no See verify_image().
+ * \return True if the screen contents matches the reference image,
+ * false otherwise.
+ */
+bool
+verify_screen_content(struct client *client,
+		      const char *ref_image,
+		      int ref_seq_no,
+		      const struct rectangle *clip,
+		      int seq_no)
+{
+	struct buffer *shot;
+	bool match;
+
+	shot = capture_screenshot_of_output(client);
+	assert(shot);
+	match = verify_image(shot, ref_image, ref_seq_no, clip, seq_no);
+	buffer_destroy(shot);
+
+	return match;
+}
+
+/**
+ * Create a wl_buffer from a PNG file
+ *
+ * Loads the named PNG file from the directory of reference images,
+ * creates a wl_buffer with scale times the image dimensions in pixels,
+ * and copies the image content into the buffer using nearest-neighbor filter.
+ *
+ * \param client The client, for the Wayland connection.
+ * \param basename The PNG file name without .png suffix.
+ * \param scale Upscaling factor >= 1.
+ */
+struct buffer *
+client_buffer_from_image_file(struct client *client,
+			      const char *basename,
+			      int scale)
+{
+	struct buffer *buf;
+	char *fname;
+	pixman_image_t *img;
+	int buf_w, buf_h;
+	pixman_transform_t scaling;
+
+	assert(scale >= 1);
+
+	fname = image_filename(basename);
+	img = load_image_from_png(fname);
+	free(fname);
+	assert(img);
+
+	buf_w = scale * pixman_image_get_width(img);
+	buf_h = scale * pixman_image_get_height(img);
+	buf = create_shm_buffer_a8r8g8b8(client, buf_w, buf_h);
+
+	pixman_transform_init_scale(&scaling,
+				    pixman_fixed_1 / scale,
+				    pixman_fixed_1 / scale);
+	pixman_image_set_transform(img, &scaling);
+	pixman_image_set_filter(img, PIXMAN_FILTER_NEAREST, NULL, 0);
+
+	pixman_image_composite32(PIXMAN_OP_SRC,
+				 img, /* src */
+				 NULL, /* mask */
+				 buf->image, /* dst */
+				 0, 0, /* src x,y */
+				 0, 0, /* mask x,y */
+				 0, 0, /* dst x,y */
+				 buf_w, buf_h);
+	pixman_image_unref(img);
+
+	return buf;
+}
+
+/**
+ * Bind to a singleton global in wl_registry
+ *
+ * \param client Client whose registry and globals to use.
+ * \param iface The Wayland interface to look for.
+ * \param version The version to bind the interface with.
+ * \return A struct wl_proxy, which you need to cast to the proper type.
+ *
+ * Asserts that the global being searched for is a singleton and is found.
+ *
+ * Binds with the exact version given, does not take compositor interface
+ * version into account.
+ */
+void *
+bind_to_singleton_global(struct client *client,
+			 const struct wl_interface *iface,
+			 int version)
+{
+	struct global *tmp;
+	struct global *g = NULL;
+	struct wl_proxy *proxy;
+
+	wl_list_for_each(tmp, &client->global_list, link) {
+		if (strcmp(tmp->interface, iface->name))
+			continue;
+
+		assert(!g && "multiple singleton objects");
+		g = tmp;
+	}
+
+	assert(g && "singleton not found");
+
+	proxy = wl_registry_bind(client->wl_registry, g->name, iface, version);
+	assert(proxy);
+
+	return proxy;
+}
+
+/**
+ * Create a wp_viewport for the client surface
+ *
+ * \param client The client->surface to use.
+ * \return A fresh viewport object.
+ */
+struct wp_viewport *
+client_create_viewport(struct client *client)
+{
+	struct wp_viewporter *viewporter;
+	struct wp_viewport *viewport;
+
+	viewporter = bind_to_singleton_global(client,
+					      &wp_viewporter_interface, 1);
+	viewport = wp_viewporter_get_viewport(viewporter,
+					      client->surface->wl_surface);
+	assert(viewport);
+	wp_viewporter_destroy(viewporter);
+
+	return viewport;
+}
+
+/**
+ * Fill the image with the given color
+ *
+ * \param image The image to write to.
+ * \param color The color to use.
+ */
+void
+fill_image_with_color(pixman_image_t *image, const pixman_color_t *color)
+{
+	pixman_image_t *solid;
+	int width;
+	int height;
+
+	width = pixman_image_get_width(image);
+	height = pixman_image_get_height(image);
+
+	solid = pixman_image_create_solid_fill(color);
+	pixman_image_composite32(PIXMAN_OP_SRC,
+				 solid, /* src */
+				 NULL, /* mask */
+				 image, /* dst */
+				 0, 0, /* src x,y */
+				 0, 0, /* mask x,y */
+				 0, 0, /* dst x,y */
+				 width, height);
+	pixman_image_unref(solid);
+}
+
+/**
+ * Convert 8-bit RGB to opaque Pixman color
+ *
+ * \param tmp Pixman color struct to fill in.
+ * \param r Red value, 0 - 255.
+ * \param g Green value, 0 - 255.
+ * \param b Blue value, 0 - 255.
+ * \return tmp
+ */
+pixman_color_t *
+color_rgb888(pixman_color_t *tmp, uint8_t r, uint8_t g, uint8_t b)
+{
+	tmp->alpha = 65535;
+	tmp->red = (r << 8) + r;
+	tmp->green = (g << 8) + g;
+	tmp->blue = (b << 8) + b;
+
+	return tmp;
 }

@@ -1,7 +1,7 @@
 /*
  * Copyright © 2010-2011 Intel Corporation
  * Copyright © 2008-2011 Kristian Høgsberg
- * Copyright © 2012-2018 Collabora, Ltd.
+ * Copyright © 2012-2018, 2021 Collabora, Ltd.
  * Copyright © 2017, 2018 General Electric Company
  *
  * Permission is hereby granted, free of charge, to any person obtaining
@@ -24,6 +24,11 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -69,12 +74,14 @@
 #include "shared/os-compatibility.h"
 #include "shared/string-helpers.h"
 #include "shared/timespec-util.h"
+#include "shared/signal.h"
 #include "git-version.h"
 #include <libweston/version.h>
 #include <libweston/plugin-registry.h>
 #include "pixel-formats.h"
 #include "backend.h"
 #include "libweston-internal.h"
+#include "color.h"
 
 #include "weston-log-internal.h"
 
@@ -94,10 +101,67 @@ weston_output_transform_scale_init(struct weston_output *output,
 				   uint32_t transform, uint32_t scale);
 
 static void
-weston_compositor_build_view_list(struct weston_compositor *compositor);
+weston_compositor_build_view_list(struct weston_compositor *compositor,
+				  struct weston_output *output);
 
 static char *
 weston_output_create_heads_string(struct weston_output *output);
+
+static struct weston_paint_node *
+weston_paint_node_create(struct weston_surface *surface,
+			 struct weston_view *view,
+			 struct weston_output *output)
+{
+	struct weston_paint_node *pnode;
+	struct weston_paint_node *existing_node;
+
+	assert(view->surface == surface);
+
+	pnode = zalloc(sizeof *pnode);
+	if (!pnode)
+		return NULL;
+
+	/*
+	 * Invariant: all paint nodes with the same surface+output have the
+	 * same surf_xform state.
+	 */
+	wl_list_for_each(existing_node, &surface->paint_node_list, surface_link) {
+		assert(existing_node->surface == surface);
+		if (existing_node->output != output)
+			continue;
+
+		weston_surface_color_transform_copy(&pnode->surf_xform,
+						    &existing_node->surf_xform);
+		pnode->surf_xform_valid = existing_node->surf_xform_valid;
+		break;
+	}
+
+	pnode->surface = surface;
+	wl_list_insert(&surface->paint_node_list, &pnode->surface_link);
+
+	pnode->view = view;
+	wl_list_insert(&view->paint_node_list, &pnode->view_link);
+
+	pnode->output = output;
+	wl_list_insert(&output->paint_node_list, &pnode->output_link);
+
+	wl_list_init(&pnode->z_order_link);
+
+	return pnode;
+}
+
+static void
+weston_paint_node_destroy(struct weston_paint_node *pnode)
+{
+	assert(pnode->view->surface == pnode->surface);
+	wl_list_remove(&pnode->surface_link);
+	wl_list_remove(&pnode->view_link);
+	wl_list_remove(&pnode->output_link);
+	wl_list_remove(&pnode->z_order_link);
+	assert(pnode->surf_xform_valid || !pnode->surf_xform.transform);
+	weston_surface_color_transform_fini(&pnode->surf_xform);
+	free(pnode);
+}
 
 /** Send wl_output events for mode and scale changes
  *
@@ -337,6 +401,7 @@ weston_view_create(struct weston_surface *surface)
 	wl_signal_init(&view->destroy_signal);
 	wl_list_init(&view->link);
 	wl_list_init(&view->layer_link.link);
+	wl_list_init(&view->paint_node_list);
 
 	pixman_region32_init(&view->clip);
 
@@ -354,11 +419,6 @@ weston_view_create(struct weston_surface *surface)
 
 	return view;
 }
-
-struct weston_frame_callback {
-	struct wl_resource *resource;
-	struct wl_list link;
-};
 
 struct weston_presentation_feedback {
 	struct wl_resource *resource;
@@ -491,11 +551,10 @@ weston_surface_state_init(struct weston_surface_state *state)
 static void
 weston_surface_state_fini(struct weston_surface_state *state)
 {
-	struct weston_frame_callback *cb, *next;
+	struct wl_resource *cb, *next;
 
-	wl_list_for_each_safe(cb, next,
-			      &state->frame_callback_list, link)
-		wl_resource_destroy(cb->resource);
+	wl_resource_for_each_safe(cb, next, &state->frame_callback_list)
+		wl_resource_destroy(cb);
 
 	weston_presentation_feedback_discard_list(&state->feedback_list);
 
@@ -554,6 +613,7 @@ weston_surface_create(struct weston_compositor *compositor)
 	region_init_infinite(&surface->input);
 
 	wl_list_init(&surface->views);
+	wl_list_init(&surface->paint_node_list);
 
 	wl_list_init(&surface->frame_callback_list);
 	wl_list_init(&surface->feedback_list);
@@ -609,6 +669,24 @@ weston_view_to_global_float(struct weston_view *view,
 	}
 }
 
+/** Transform a point to buffer coordinates
+ *
+ * \param width Surface width.
+ * \param height Surface height.
+ * \param transform Buffer transform.
+ * \param scale Buffer scale.
+ * \param sx Surface x coordinate of a point.
+ * \param sy Surface y coordinate of a point.
+ * \param[out] bx Buffer x coordinate of the point.
+ * \param[out] by Buffer Y coordinate of the point.
+ *
+ * Converts the given surface-local coordinates to buffer coordinates
+ * according to the given buffer transform and scale.
+ * This ignores wp_viewport.
+ *
+ * The given width and height must be the result of inverse scaled and
+ * inverse transformed buffer size.
+ */
 WL_EXPORT void
 weston_transformed_coord(int width, int height,
 			 enum wl_output_transform transform,
@@ -626,12 +704,12 @@ weston_transformed_coord(int width, int height,
 		*by = sy;
 		break;
 	case WL_OUTPUT_TRANSFORM_90:
-		*bx = height - sy;
-		*by = sx;
+		*bx = sy;
+		*by = width - sx;
 		break;
 	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
-		*bx = height - sy;
-		*by = width - sx;
+		*bx = sy;
+		*by = sx;
 		break;
 	case WL_OUTPUT_TRANSFORM_180:
 		*bx = width - sx;
@@ -642,12 +720,12 @@ weston_transformed_coord(int width, int height,
 		*by = height - sy;
 		break;
 	case WL_OUTPUT_TRANSFORM_270:
-		*bx = sy;
-		*by = width - sx;
+		*bx = height - sy;
+		*by = sx;
 		break;
 	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-		*bx = sy;
-		*by = sx;
+		*bx = height - sy;
+		*by = width - sx;
 		break;
 	}
 
@@ -655,6 +733,23 @@ weston_transformed_coord(int width, int height,
 	*by *= scale;
 }
 
+/** Transform a rectangle to buffer coordinates
+ *
+ * \param width Surface width.
+ * \param height Surface height.
+ * \param transform Buffer transform.
+ * \param scale Buffer scale.
+ * \param rect Rectangle in surface coordinates.
+ * \return Rectangle in buffer coordinates.
+ *
+ * Converts the given surface-local rectangle to buffer coordinates
+ * according to the given buffer transform and scale. The resulting
+ * rectangle is guaranteed to be well-formed.
+ * This ignores wp_viewport.
+ *
+ * The given width and height must be the result of inverse scaled and
+ * inverse transformed buffer size.
+ */
 WL_EXPORT pixman_box32_t
 weston_transformed_rect(int width, int height,
 			enum wl_output_transform transform,
@@ -745,6 +840,24 @@ weston_matrix_transform_region(pixman_region32_t *dest,
 	free(dest_rects);
 }
 
+/** Transform a region to buffer coordinates
+ *
+ * \param width Surface width.
+ * \param height Surface height.
+ * \param transform Buffer transform.
+ * \param scale Buffer scale.
+ * \param[in] src Region in surface coordinates.
+ * \param[out] dest Resulting region in buffer coordinates.
+ *
+ * Converts the given surface-local region to buffer coordinates
+ * according to the given buffer transform and scale.
+ * This ignores wp_viewport.
+ *
+ * The given width and height must be the result of inverse scaled and
+ * inverse transformed buffer size.
+ *
+ * src and dest are allowed to point to the same memory for in-place conversion.
+ */
 WL_EXPORT void
 weston_transformed_region(int width, int height,
 			  enum wl_output_transform transform,
@@ -778,10 +891,10 @@ weston_transformed_region(int width, int height,
 				dest_rects[i].y2 = src_rects[i].y2;
 				break;
 			case WL_OUTPUT_TRANSFORM_90:
-				dest_rects[i].x1 = height - src_rects[i].y2;
-				dest_rects[i].y1 = src_rects[i].x1;
-				dest_rects[i].x2 = height - src_rects[i].y1;
-				dest_rects[i].y2 = src_rects[i].x2;
+				dest_rects[i].x1 = src_rects[i].y1;
+				dest_rects[i].y1 = width - src_rects[i].x2;
+				dest_rects[i].x2 = src_rects[i].y2;
+				dest_rects[i].y2 = width - src_rects[i].x1;
 				break;
 			case WL_OUTPUT_TRANSFORM_180:
 				dest_rects[i].x1 = width - src_rects[i].x2;
@@ -790,10 +903,10 @@ weston_transformed_region(int width, int height,
 				dest_rects[i].y2 = height - src_rects[i].y1;
 				break;
 			case WL_OUTPUT_TRANSFORM_270:
-				dest_rects[i].x1 = src_rects[i].y1;
-				dest_rects[i].y1 = width - src_rects[i].x2;
-				dest_rects[i].x2 = src_rects[i].y2;
-				dest_rects[i].y2 = width - src_rects[i].x1;
+				dest_rects[i].x1 = height - src_rects[i].y2;
+				dest_rects[i].y1 = src_rects[i].x1;
+				dest_rects[i].x2 = height - src_rects[i].y1;
+				dest_rects[i].y2 = src_rects[i].x2;
 				break;
 			case WL_OUTPUT_TRANSFORM_FLIPPED:
 				dest_rects[i].x1 = width - src_rects[i].x2;
@@ -802,10 +915,10 @@ weston_transformed_region(int width, int height,
 				dest_rects[i].y2 = src_rects[i].y2;
 				break;
 			case WL_OUTPUT_TRANSFORM_FLIPPED_90:
-				dest_rects[i].x1 = height - src_rects[i].y2;
-				dest_rects[i].y1 = width - src_rects[i].x2;
-				dest_rects[i].x2 = height - src_rects[i].y1;
-				dest_rects[i].y2 = width - src_rects[i].x1;
+				dest_rects[i].x1 = src_rects[i].y1;
+				dest_rects[i].y1 = src_rects[i].x1;
+				dest_rects[i].x2 = src_rects[i].y2;
+				dest_rects[i].y2 = src_rects[i].x2;
 				break;
 			case WL_OUTPUT_TRANSFORM_FLIPPED_180:
 				dest_rects[i].x1 = src_rects[i].x1;
@@ -814,10 +927,10 @@ weston_transformed_region(int width, int height,
 				dest_rects[i].y2 = height - src_rects[i].y1;
 				break;
 			case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-				dest_rects[i].x1 = src_rects[i].y1;
-				dest_rects[i].y1 = src_rects[i].x1;
-				dest_rects[i].x2 = src_rects[i].y2;
-				dest_rects[i].y2 = src_rects[i].x2;
+				dest_rects[i].x1 = height - src_rects[i].y2;
+				dest_rects[i].y1 = width - src_rects[i].x2;
+				dest_rects[i].x2 = height - src_rects[i].y1;
+				dest_rects[i].y2 = width - src_rects[i].x1;
 				break;
 			}
 		}
@@ -1364,6 +1477,25 @@ view_compute_bbox(struct weston_view *view, const pixman_box32_t *inbox,
 }
 
 static void
+weston_view_update_transform_scissor(struct weston_view *view,
+				     pixman_region32_t *region)
+{
+	struct weston_view *parent = view->geometry.parent;
+
+	if (parent) {
+		if (parent->geometry.scissor_enabled) {
+			view->geometry.scissor_enabled = true;
+			weston_view_transfer_scissor(parent, view);
+		} else {
+			view->geometry.scissor_enabled = false;
+		}
+	}
+
+	if (view->geometry.scissor_enabled)
+		pixman_region32_intersect(region, region,
+					  &view->geometry.scissor);
+}
+static void
 weston_view_update_transform_disable(struct weston_view *view)
 {
 	view->transform.enabled = 0;
@@ -1387,10 +1519,8 @@ weston_view_update_transform_disable(struct weston_view *view)
 				  0, 0,
 				  view->surface->width,
 				  view->surface->height);
-	if (view->geometry.scissor_enabled)
-		pixman_region32_intersect(&view->transform.boundingbox,
-					  &view->transform.boundingbox,
-					  &view->geometry.scissor);
+
+	weston_view_update_transform_scissor(view, &view->transform.boundingbox);
 
 	pixman_region32_translate(&view->transform.boundingbox,
 				  view->geometry.x, view->geometry.y);
@@ -1398,6 +1528,10 @@ weston_view_update_transform_disable(struct weston_view *view)
 	if (view->alpha == 1.0) {
 		pixman_region32_copy(&view->transform.opaque,
 				     &view->surface->opaque);
+		if (view->geometry.scissor_enabled)
+			pixman_region32_intersect(&view->transform.opaque,
+						  &view->transform.opaque,
+						  &view->geometry.scissor);
 		pixman_region32_translate(&view->transform.opaque,
 					  view->geometry.x,
 					  view->geometry.y);
@@ -1435,24 +1569,28 @@ weston_view_update_transform_enable(struct weston_view *view)
 		return -1;
 	}
 
-	if (view->alpha == 1.0 &&
-	    matrix->type == WESTON_MATRIX_TRANSFORM_TRANSLATE) {
-		pixman_region32_copy(&view->transform.opaque,
-				     &view->surface->opaque);
-		pixman_region32_translate(&view->transform.opaque,
-					  matrix->d[12],
-					  matrix->d[13]);
-	}
-
 	pixman_region32_init_rect(&surfregion, 0, 0,
 				  view->surface->width, view->surface->height);
-	if (view->geometry.scissor_enabled)
-		pixman_region32_intersect(&surfregion, &surfregion,
-					  &view->geometry.scissor);
+
+	weston_view_update_transform_scissor(view, &surfregion);
+
 	surfbox = pixman_region32_extents(&surfregion);
 
 	view_compute_bbox(view, surfbox, &view->transform.boundingbox);
 	pixman_region32_fini(&surfregion);
+
+	if (view->alpha == 1.0 &&
+	    matrix->type == WESTON_MATRIX_TRANSFORM_TRANSLATE) {
+		pixman_region32_copy(&view->transform.opaque,
+				     &view->surface->opaque);
+		if (view->geometry.scissor_enabled)
+			pixman_region32_intersect(&view->transform.opaque,
+						  &view->transform.opaque,
+						  &view->geometry.scissor);
+		pixman_region32_translate(&view->transform.opaque,
+					  matrix->d[12],
+					  matrix->d[13]);
+	}
 
 	return 0;
 }
@@ -1506,15 +1644,6 @@ weston_view_update_transform(struct weston_view *view)
 		pixman_region32_intersect(&view->transform.opaque,
 					  &view->transform.opaque, &mask);
 		pixman_region32_fini(&mask);
-	}
-
-	if (parent) {
-		if (parent->geometry.scissor_enabled) {
-			view->geometry.scissor_enabled = true;
-			weston_view_transfer_scissor(parent, view);
-		} else {
-			view->geometry.scissor_enabled = false;
-		}
 	}
 
 	weston_view_damage_below(view);
@@ -1836,10 +1965,8 @@ weston_view_is_opaque(struct weston_view *ev, pixman_region32_t *region)
 	if (ev->surface->is_opaque)
 		return true;
 
-	if (ev->transform.dirty) {
-		weston_log("%s: transform dirty", __func__);
+	if (ev->transform.dirty)
 		return false;
-	}
 
 	pixman_region32_init(&r);
 	pixman_region32_subtract(&r, region, &ev->transform.opaque);
@@ -1885,6 +2012,23 @@ weston_view_matches_output_entirely(struct weston_view *ev,
 		return false;
 
 	return true;
+}
+
+/** Find paint node for the given view and output
+ */
+WL_EXPORT struct weston_paint_node *
+weston_view_find_paint_node(struct weston_view *view,
+			    struct weston_output *output)
+{
+	struct weston_paint_node *pnode;
+
+	wl_list_for_each(pnode, &view->paint_node_list, view_link) {
+		assert(pnode->surface == view->surface);
+		if (pnode->output == output)
+			return pnode;
+	}
+
+	return NULL;
 }
 
 /* Check if a surface has a view assigned to it
@@ -2028,6 +2172,7 @@ weston_compositor_pick_view(struct weston_compositor *compositor,
 	int ix = wl_fixed_to_int(x);
 	int iy = wl_fixed_to_int(y);
 
+	/* Can't use paint node list: occlusion by input regions, not opaque. */
 	wl_list_for_each(view, &compositor->view_list, link) {
 		if (!pixman_region32_contains_point(
 				&view->transform.boundingbox, ix, iy, NULL))
@@ -2128,14 +2273,20 @@ weston_surface_reset_pending_buffer(struct weston_surface *surface)
 WL_EXPORT void
 weston_view_destroy(struct weston_view *view)
 {
-	wl_signal_emit(&view->destroy_signal, view);
+	struct weston_paint_node *pnode, *pntmp;
+
+	weston_signal_emit_mutable(&view->destroy_signal, view);
 
 	assert(wl_list_empty(&view->geometry.child_list));
 
 	if (weston_view_is_mapped(view)) {
 		weston_view_unmap(view);
-		weston_compositor_build_view_list(view->surface->compositor);
+		weston_compositor_build_view_list(view->surface->compositor,
+						  NULL);
 	}
+
+	wl_list_for_each_safe(pnode, pntmp, &view->paint_node_list, view_link)
+		weston_paint_node_destroy(pnode);
 
 	wl_list_remove(&view->link);
 	weston_layer_entry_remove(&view->layer_link);
@@ -2156,22 +2307,35 @@ weston_view_destroy(struct weston_view *view)
 WL_EXPORT void
 weston_surface_destroy(struct weston_surface *surface)
 {
-	struct weston_frame_callback *cb, *next;
+	struct wl_resource *cb, *next;
 	struct weston_view *ev, *nv;
 	struct weston_pointer_constraint *constraint, *next_constraint;
+	struct weston_paint_node *pnode, *pntmp;
 
+	if (!surface)
+		return;
+
+	assert(surface->ref_count > 0);
 	if (--surface->ref_count > 0)
 		return;
 
 	assert(surface->resource == NULL);
 
-	wl_signal_emit(&surface->destroy_signal, surface);
+	weston_signal_emit_mutable(&surface->destroy_signal, surface);
 
 	assert(wl_list_empty(&surface->subsurface_list_pending));
 	assert(wl_list_empty(&surface->subsurface_list));
 
+	if (surface->dmabuf_feedback)
+		weston_dmabuf_feedback_destroy(surface->dmabuf_feedback);
+
 	wl_list_for_each_safe(ev, nv, &surface->views, surface_link)
 		weston_view_destroy(ev);
+
+	wl_list_for_each_safe(pnode, pntmp,
+			      &surface->paint_node_list, surface_link) {
+		weston_paint_node_destroy(pnode);
+	}
 
 	weston_surface_state_fini(&surface->pending);
 
@@ -2182,8 +2346,8 @@ weston_surface_destroy(struct weston_surface *surface)
 	pixman_region32_fini(&surface->opaque);
 	pixman_region32_fini(&surface->input);
 
-	wl_list_for_each_safe(cb, next, &surface->frame_callback_list, link)
-		wl_resource_destroy(cb->resource);
+	wl_resource_for_each_safe(cb, next, &surface->frame_callback_list)
+		wl_resource_destroy(cb);
 
 	weston_presentation_feedback_discard_list(&surface->feedback_list);
 
@@ -2226,7 +2390,7 @@ weston_buffer_destroy_handler(struct wl_listener *listener, void *data)
 	struct weston_buffer *buffer =
 		container_of(listener, struct weston_buffer, destroy_listener);
 
-	wl_signal_emit(&buffer->destroy_signal, buffer);
+	weston_signal_emit_mutable(&buffer->destroy_signal, buffer);
 	free(buffer);
 }
 
@@ -2439,10 +2603,11 @@ view_accumulate_damage(struct weston_view *view,
 }
 
 static void
-compositor_accumulate_damage(struct weston_compositor *ec)
+output_accumulate_damage(struct weston_output *output)
 {
+	struct weston_compositor *ec = output->compositor;
 	struct weston_plane *plane;
-	struct weston_view *ev;
+	struct weston_paint_node *pnode;
 	pixman_region32_t opaque, clip;
 
 	pixman_region32_init(&clip);
@@ -2452,11 +2617,12 @@ compositor_accumulate_damage(struct weston_compositor *ec)
 
 		pixman_region32_init(&opaque);
 
-		wl_list_for_each(ev, &ec->view_list, link) {
-			if (ev->plane != plane)
+		wl_list_for_each(pnode, &output->paint_node_z_order_list,
+				 z_order_link) {
+			if (pnode->view->plane != plane)
 				continue;
 
-			view_accumulate_damage(ev, &opaque);
+			view_accumulate_damage(pnode->view, &opaque);
 		}
 
 		pixman_region32_union(&clip, &clip, &opaque);
@@ -2465,15 +2631,22 @@ compositor_accumulate_damage(struct weston_compositor *ec)
 
 	pixman_region32_fini(&clip);
 
-	wl_list_for_each(ev, &ec->view_list, link)
-		ev->surface->touched = false;
+	wl_list_for_each(pnode, &output->paint_node_z_order_list,
+			 z_order_link) {
+		pnode->surface->touched = false;
+	}
 
-	wl_list_for_each(ev, &ec->view_list, link) {
-		if (ev->surface->touched)
+	wl_list_for_each(pnode, &output->paint_node_z_order_list,
+			 z_order_link) {
+		/* Ignore views not visible on the current output */
+		/* TODO: turn this into assert once z_order_list is pruned. */
+		if (!(pnode->view->output_mask & (1u << output->id)))
 			continue;
-		ev->surface->touched = true;
+		if (pnode->surface->touched)
+			continue;
+		pnode->surface->touched = true;
 
-		surface_flush_damage(ev->surface);
+		surface_flush_damage(pnode->surface);
 
 		/* Both the renderer and the backend have seen the buffer
 		 * by now. If renderer needs the buffer, it has its own
@@ -2483,10 +2656,10 @@ compositor_accumulate_damage(struct weston_compositor *ec)
 		 * reference now, and allow early buffer release. This enables
 		 * clients to use single-buffering.
 		 */
-		if (!ev->surface->keep_buffer) {
-			weston_buffer_reference(&ev->surface->buffer_ref, NULL);
+		if (!pnode->surface->keep_buffer) {
+			weston_buffer_reference(&pnode->surface->buffer_ref, NULL);
 			weston_buffer_release_reference(
-				&ev->surface->buffer_release_ref, NULL);
+				&pnode->surface->buffer_release_ref, NULL);
 		}
 	}
 }
@@ -2526,13 +2699,48 @@ surface_free_unused_subsurface_views(struct weston_surface *surface)
 	}
 }
 
+static struct weston_paint_node *
+view_ensure_paint_node(struct weston_view *view, struct weston_output *output)
+{
+	struct weston_paint_node *pnode;
+
+	if (!output)
+		return NULL;
+
+	pnode = weston_view_find_paint_node(view, output);
+	if (pnode)
+		return pnode;
+
+	return weston_paint_node_create(view->surface, view, output);
+}
+
+static void
+add_to_z_order_list(struct weston_output *output,
+		    struct weston_paint_node *pnode)
+{
+	if (!pnode)
+		return;
+
+	wl_list_remove(&pnode->z_order_link);
+	wl_list_insert(output->paint_node_z_order_list.prev,
+		       &pnode->z_order_link);
+
+	/*
+	 * Building weston_output::paint_node_z_order_list ensures all
+	 * necessary color transform objects are installed.
+	 */
+	weston_paint_node_ensure_color_transform(pnode);
+}
+
 static void
 view_list_add_subsurface_view(struct weston_compositor *compositor,
 			      struct weston_subsurface *sub,
-			      struct weston_view *parent)
+			      struct weston_view *parent,
+			      struct weston_output *output)
 {
 	struct weston_subsurface *child;
 	struct weston_view *view = NULL, *iv;
+	struct weston_paint_node *pnode;
 
 	if (!weston_surface_is_mapped(sub->surface))
 		return;
@@ -2559,17 +2767,21 @@ view_list_add_subsurface_view(struct weston_compositor *compositor,
 	view->parent_view = parent;
 	weston_view_update_transform(view);
 	view->is_mapped = true;
+	pnode = view_ensure_paint_node(view, output);
 
 	if (wl_list_empty(&sub->surface->subsurface_list)) {
 		wl_list_insert(compositor->view_list.prev, &view->link);
+		add_to_z_order_list(output, pnode);
 		return;
 	}
 
 	wl_list_for_each(child, &sub->surface->subsurface_list, parent_link) {
-		if (child->surface == sub->surface)
+		if (child->surface == sub->surface) {
 			wl_list_insert(compositor->view_list.prev, &view->link);
-		else
-			view_list_add_subsurface_view(compositor, child, view);
+			add_to_z_order_list(output, pnode);
+		} else {
+			view_list_add_subsurface_view(compositor, child, view, output);
+		}
 	}
 }
 
@@ -2581,30 +2793,42 @@ view_list_add_subsurface_view(struct weston_compositor *compositor,
  */
 static void
 view_list_add(struct weston_compositor *compositor,
-	      struct weston_view *view)
+	      struct weston_view *view,
+	      struct weston_output *output)
 {
+	struct weston_paint_node *pnode;
 	struct weston_subsurface *sub;
 
 	weston_view_update_transform(view);
+	pnode = view_ensure_paint_node(view, output);
 
 	if (wl_list_empty(&view->surface->subsurface_list)) {
 		wl_list_insert(compositor->view_list.prev, &view->link);
+		add_to_z_order_list(output, pnode);
 		return;
 	}
 
 	wl_list_for_each(sub, &view->surface->subsurface_list, parent_link) {
-		if (sub->surface == view->surface)
+		if (sub->surface == view->surface) {
 			wl_list_insert(compositor->view_list.prev, &view->link);
-		else
-			view_list_add_subsurface_view(compositor, sub, view);
+			add_to_z_order_list(output, pnode);
+		} else {
+			view_list_add_subsurface_view(compositor, sub, view, output);
+		}
 	}
 }
 
 static void
-weston_compositor_build_view_list(struct weston_compositor *compositor)
+weston_compositor_build_view_list(struct weston_compositor *compositor,
+				  struct weston_output *output)
 {
 	struct weston_view *view, *tmp;
 	struct weston_layer *layer;
+
+	if (output) {
+		wl_list_remove(&output->paint_node_z_order_list);
+		wl_list_init(&output->paint_node_z_order_list);
+	}
 
 	wl_list_for_each(layer, &compositor->layer_list, link)
 		wl_list_for_each(view, &layer->view_list.link, layer_link.link)
@@ -2616,7 +2840,7 @@ weston_compositor_build_view_list(struct weston_compositor *compositor)
 
 	wl_list_for_each(layer, &compositor->layer_list, link) {
 		wl_list_for_each(view, &layer->view_list.link, layer_link.link) {
-			view_list_add(compositor, view);
+			view_list_add(compositor, view, output);
 		}
 	}
 
@@ -2654,9 +2878,9 @@ static int
 weston_output_repaint(struct weston_output *output, void *repaint_data)
 {
 	struct weston_compositor *ec = output->compositor;
-	struct weston_view *ev;
+	struct weston_paint_node *pnode;
 	struct weston_animation *animation, *next;
-	struct weston_frame_callback *cb, *cnext;
+	struct wl_resource *cb, *cnext;
 	struct wl_list frame_callback_list;
 	pixman_region32_t output_damage;
 	int r;
@@ -2669,21 +2893,23 @@ weston_output_repaint(struct weston_output *output, void *repaint_data)
 	TL_POINT(ec, "core_repaint_begin", TLP_OUTPUT(output), TLP_END);
 
 	/* Rebuild the surface list and update surface transforms up front. */
-	weston_compositor_build_view_list(ec);
+	weston_compositor_build_view_list(ec, output);
 
 	/* Find the highest protection desired for an output */
-	wl_list_for_each(ev, &ec->view_list, link) {
-		if (ev->surface->output_mask & (1u << output->id)) {
-			/*
-			 * The desired_protection of the output should be the
-			 * maximum of the desired_protection of the surfaces,
-			 * that are displayed on that output, to avoid
-			 * reducing the protection for existing surfaces.
-			 */
-			if (ev->surface->desired_protection > highest_requested)
-				highest_requested =
-						ev->surface->desired_protection;
-		}
+	wl_list_for_each(pnode, &output->paint_node_z_order_list,
+			 z_order_link) {
+		/* TODO: turn this into assert once z_order_list is pruned. */
+		if ((pnode->surface->output_mask & (1u << output->id)) == 0)
+			continue;
+
+		/*
+		 * The desired_protection of the output should be the
+		 * maximum of the desired_protection of the surfaces,
+		 * that are displayed on that output, to avoid
+		 * reducing the protection for existing surfaces.
+		 */
+		if (pnode->surface->desired_protection > highest_requested)
+			highest_requested = pnode->surface->desired_protection;
 	}
 
 	output->desired_protection = highest_requested;
@@ -2691,27 +2917,29 @@ weston_output_repaint(struct weston_output *output, void *repaint_data)
 	if (output->assign_planes && !output->disable_planes) {
 		output->assign_planes(output, repaint_data);
 	} else {
-		wl_list_for_each(ev, &ec->view_list, link) {
-			weston_view_move_to_plane(ev, &ec->primary_plane);
-			ev->psf_flags = 0;
+		wl_list_for_each(pnode, &output->paint_node_z_order_list,
+				 z_order_link) {
+			weston_view_move_to_plane(pnode->view, &ec->primary_plane);
+			pnode->view->psf_flags = 0;
 		}
 	}
 
 	wl_list_init(&frame_callback_list);
-	wl_list_for_each(ev, &ec->view_list, link) {
+	wl_list_for_each(pnode, &output->paint_node_z_order_list,
+			 z_order_link) {
 		/* Note: This operation is safe to do multiple times on the
 		 * same surface.
 		 */
-		if (ev->surface->output == output) {
+		if (pnode->surface->output == output) {
 			wl_list_insert_list(&frame_callback_list,
-					    &ev->surface->frame_callback_list);
-			wl_list_init(&ev->surface->frame_callback_list);
+					    &pnode->surface->frame_callback_list);
+			wl_list_init(&pnode->surface->frame_callback_list);
 
-			weston_output_take_feedback_list(output, ev->surface);
+			weston_output_take_feedback_list(output, pnode->surface);
 		}
 	}
 
-	compositor_accumulate_damage(ec);
+	output_accumulate_damage(output);
 
 	pixman_region32_init(&output_damage);
 	pixman_region32_intersect(&output_damage,
@@ -2734,9 +2962,9 @@ weston_output_repaint(struct weston_output *output, void *repaint_data)
 
 	frame_time_msec = timespec_to_msec(&output->frame_time);
 
-	wl_list_for_each_safe(cb, cnext, &frame_callback_list, link) {
-		wl_callback_send_done(cb->resource, frame_time_msec);
-		wl_resource_destroy(cb->resource);
+	wl_resource_for_each_safe(cb, cnext, &frame_callback_list) {
+		wl_callback_send_done(cb, frame_time_msec);
+		wl_resource_destroy(cb);
 	}
 
 	wl_list_for_each_safe(animation, next, &output->animation_list, link) {
@@ -2851,6 +3079,7 @@ output_repaint_timer_handler(void *data)
 	int ret = 0;
 
 	weston_compositor_read_presentation_clock(compositor, &now);
+	compositor->last_repaint_start = now;
 
 	if (compositor->backend->repaint_begin)
 		repaint_data = compositor->backend->repaint_begin(compositor);
@@ -2886,6 +3115,39 @@ output_repaint_timer_handler(void *data)
 	return 0;
 }
 
+/** Convert a presentation timestamp to another clock domain
+ *
+ * \param compositor The compositor defines the presentation clock domain.
+ * \param presentation_stamp The timestamp in presentation clock domain.
+ * \param presentation_now Current time in presentation clock domain.
+ * \param target_clock Defines the target clock domain.
+ *
+ * This approximation relies on presentation_stamp to be close to current time.
+ * The further it is from current time and the bigger the speed difference
+ * between the two clock domains, the bigger the conversion error.
+ *
+ * Conversion error due to system load is biased and unbounded.
+ */
+static struct timespec
+convert_presentation_time_now(struct weston_compositor *compositor,
+			      const struct timespec *presentation_stamp,
+			      const struct timespec *presentation_now,
+			      clockid_t target_clock)
+{
+	struct timespec target_now = {};
+	struct timespec target_stamp;
+	int64_t delta_ns;
+
+	if (compositor->presentation_clock == target_clock)
+		return *presentation_stamp;
+
+	clock_gettime(target_clock, &target_now);
+	delta_ns = timespec_sub_to_nsec(presentation_stamp, presentation_now);
+	timespec_add_nsec(&target_stamp, &target_now, delta_ns);
+
+	return target_stamp;
+}
+
 /**
  * \ingroup output
  */
@@ -2897,12 +3159,19 @@ weston_output_finish_frame(struct weston_output *output,
 	struct weston_compositor *compositor = output->compositor;
 	int32_t refresh_nsec;
 	struct timespec now;
+	struct timespec vblank_monotonic;
 	int64_t msec_rel;
 
-#ifndef MULTI_DISPLAY
 	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
-	assert(stamp || (presented_flags & WP_PRESENTATION_FEEDBACK_INVALID));
-#endif
+
+	/*
+	 * If timestamp of latest vblank is given, it must always go forwards.
+	 * If not given, INVALID flag must be set.
+	 */
+	if (stamp)
+		assert(timespec_sub_to_nsec(stamp, &output->frame_time) >= 0);
+	else
+		assert(presented_flags & WP_PRESENTATION_FEEDBACK_INVALID);
 
 	weston_compositor_read_presentation_clock(compositor, &now);
 
@@ -2914,8 +3183,11 @@ weston_output_finish_frame(struct weston_output *output,
 		goto out;
 	}
 
+	vblank_monotonic = convert_presentation_time_now(compositor,
+							 stamp, &now,
+							 CLOCK_MONOTONIC);
 	TL_POINT(compositor, "core_repaint_finished", TLP_OUTPUT(output),
-		 TLP_VBLANK(stamp), TLP_END);
+		 TLP_VBLANK(&vblank_monotonic), TLP_END);
 
 	refresh_nsec = millihz_to_nsec(output->current_mode->refresh);
 	weston_presentation_feedback_present_list(&output->feedback_list,
@@ -2957,6 +3229,15 @@ weston_output_finish_frame(struct weston_output *output,
 out:
 	output->repaint_status = REPAINT_SCHEDULED;
 	output_repaint_timer_arm(compositor);
+}
+
+
+WL_EXPORT void
+weston_output_repaint_failed(struct weston_output *output)
+{
+	weston_log("Clearing repaint status.\n");
+	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
+	output->repaint_status = REPAINT_NOT_SCHEDULED;
 }
 
 static void
@@ -3004,6 +3285,21 @@ weston_layer_init(struct weston_layer *layer,
 	wl_list_init(&layer->view_list.link);
 	layer->view_list.layer = layer;
 	weston_layer_set_mask_infinite(layer);
+}
+
+/** Finalize the weston_layer struct.
+ *
+ * \param layer The layer to finalize.
+ */
+WL_EXPORT void
+weston_layer_fini(struct weston_layer *layer)
+{
+	wl_list_remove(&layer->link);
+
+	if (!wl_list_empty(&layer->view_list.link))
+		weston_log("BUG: finalizing a layer with views still on it.\n");
+
+	wl_list_remove(&layer->view_list.link);
 }
 
 /** Sets the position of the layer in the layer list. The layer will be placed
@@ -3196,37 +3492,27 @@ surface_damage_buffer(struct wl_client *client,
 static void
 destroy_frame_callback(struct wl_resource *resource)
 {
-	struct weston_frame_callback *cb = wl_resource_get_user_data(resource);
-
-	wl_list_remove(&cb->link);
-	free(cb);
+	wl_list_remove(wl_resource_get_link(resource));
 }
 
 static void
 surface_frame(struct wl_client *client,
 	      struct wl_resource *resource, uint32_t callback)
 {
-	struct weston_frame_callback *cb;
+	struct wl_resource *cb;
 	struct weston_surface *surface = wl_resource_get_user_data(resource);
 
-	cb = malloc(sizeof *cb);
+	cb = wl_resource_create(client, &wl_callback_interface, 1, callback);
 	if (cb == NULL) {
 		wl_resource_post_no_memory(resource);
 		return;
 	}
 
-	cb->resource = wl_resource_create(client, &wl_callback_interface, 1,
-					  callback);
-	if (cb->resource == NULL) {
-		free(cb);
-		wl_resource_post_no_memory(resource);
-		return;
-	}
-
-	wl_resource_set_implementation(cb->resource, NULL, cb,
+	wl_resource_set_implementation(cb, NULL, NULL,
 				       destroy_frame_callback);
 
-	wl_list_insert(surface->pending.frame_callback_list.prev, &cb->link);
+	wl_list_insert(surface->pending.frame_callback_list.prev,
+		       wl_resource_get_link(cb));
 }
 
 static void
@@ -3351,9 +3637,9 @@ weston_surface_build_buffer_matrix(const struct weston_surface *surface,
 		break;
 	case WL_OUTPUT_TRANSFORM_90:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
-		weston_matrix_rotate_xy(matrix, 0, 1);
+		weston_matrix_rotate_xy(matrix, 0, -1);
 		weston_matrix_translate(matrix,
-					surface->height_from_buffer, 0, 0);
+					0, surface->width_from_buffer, 0);
 		break;
 	case WL_OUTPUT_TRANSFORM_180:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_180:
@@ -3364,9 +3650,9 @@ weston_surface_build_buffer_matrix(const struct weston_surface *surface,
 		break;
 	case WL_OUTPUT_TRANSFORM_270:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-		weston_matrix_rotate_xy(matrix, 0, -1);
+		weston_matrix_rotate_xy(matrix, 0, 1);
 		weston_matrix_translate(matrix,
-					0, surface->width_from_buffer, 0);
+					surface->height_from_buffer, 0, 0);
 		break;
 	}
 
@@ -3776,23 +4062,25 @@ compositor_create_surface(struct wl_client *client,
 	struct weston_surface *surface;
 
 	surface = weston_surface_create(ec);
-	if (surface == NULL) {
-		wl_resource_post_no_memory(resource);
-		return;
-	}
+	if (surface == NULL)
+		goto err;
 
 	surface->resource =
 		wl_resource_create(client, &wl_surface_interface,
 				   wl_resource_get_version(resource), id);
-	if (surface->resource == NULL) {
-		weston_surface_destroy(surface);
-		wl_resource_post_no_memory(resource);
-		return;
-	}
+	if (surface->resource == NULL)
+		goto err_res;
 	wl_resource_set_implementation(surface->resource, &surface_interface,
 				       surface, destroy_surface);
 
 	wl_signal_emit(&ec->create_surface_signal, surface);
+
+	return;
+
+err_res:
+	weston_surface_destroy(surface);
+err:
+	wl_resource_post_no_memory(resource);
 }
 
 static void
@@ -3901,6 +4189,11 @@ weston_subsurface_commit_to_cache(struct weston_subsurface *sub)
 			      &surface->pending.damage_surface);
 	pixman_region32_clear(&surface->pending.damage_surface);
 
+	pixman_region32_union(&sub->cached.damage_buffer,
+			      &sub->cached.damage_buffer,
+			      &surface->pending.damage_buffer);
+	pixman_region32_clear(&surface->pending.damage_buffer);
+
 	if (surface->pending.newly_attached) {
 		sub->cached.newly_attached = 1;
 		weston_surface_state_set_buffer(&sub->cached,
@@ -3922,8 +4215,6 @@ weston_subsurface_commit_to_cache(struct weston_subsurface *sub)
 	assert(surface->pending.buffer_release_ref.buffer_release == NULL);
 	sub->cached.sx += surface->pending.sx;
 	sub->cached.sy += surface->pending.sy;
-
-	apply_damage_buffer(&sub->cached.damage_surface, surface, &surface->pending);
 
 	sub->cached.buffer_viewport.changed |=
 		surface->pending.buffer_viewport.changed;
@@ -4051,7 +4342,7 @@ subsurface_committed(struct weston_surface *surface, int32_t dx, int32_t dy)
 	 */
 
 	if (!weston_surface_is_mapped(surface)) {
-		surface->is_mapped = true;
+		surface->is_mapped = surface->buffer_ref.buffer != NULL;
 
 		/* Cannot call weston_view_update_transform(),
 		 * because that would call it also for the parent surface,
@@ -4666,9 +4957,9 @@ static void
 weston_compositor_dpms(struct weston_compositor *compositor,
 		       enum dpms_enum state)
 {
-        struct weston_output *output;
+	struct weston_output *output;
 
-        wl_list_for_each(output, &compositor->output_list, link)
+	wl_list_for_each(output, &compositor->output_list, link)
 		if (output->set_dpms)
 			output->set_dpms(output, state);
 }
@@ -4805,6 +5096,10 @@ weston_plane_release(struct weston_plane *plane)
 	pixman_region32_fini(&plane->damage);
 	pixman_region32_fini(&plane->clip);
 
+	/*
+	 * Can't use paint node list here, weston_plane is not specific to an
+	 * output.
+	 */
 	wl_list_for_each(view, &plane->compositor->view_list, link) {
 		if (view->plane == plane)
 			view->plane = NULL;
@@ -5143,7 +5438,7 @@ weston_compositor_iterate_heads(struct weston_compositor *compositor,
  *  If you cause \c iter to be removed from the list, you cannot use it to
  * continue iterating. Removing any other item is safe.
  *
- * \ingroup ouput
+ * \ingroup output
  */
 WL_EXPORT struct weston_head *
 weston_output_iterate_heads(struct weston_output *output,
@@ -5281,7 +5576,7 @@ weston_head_detach(struct weston_head *head)
 WL_EXPORT void
 weston_head_release(struct weston_head *head)
 {
-	wl_signal_emit(&head->destroy_signal, head);
+	weston_signal_emit_mutable(&head->destroy_signal, head);
 
 	weston_head_detach(head);
 
@@ -5370,6 +5665,28 @@ weston_head_set_non_desktop(struct weston_head *head, bool non_desktop)
 
 	weston_head_set_device_changed(head);
 }
+
+/** Store display transformation
+ *
+ * \param head The head to modify.
+ * \param transform The transformation to apply for this head
+ *
+ * This may set the device_changed flag.
+ *
+ * \ingroup head
+ * \internal
+ */
+WL_EXPORT void
+weston_head_set_transform(struct weston_head *head, uint32_t transform)
+{
+	if (head->transform == transform)
+		return;
+
+	head->transform = transform;
+
+	weston_head_set_device_changed(head);
+}
+
 
 /** Store physical image size
  *
@@ -5632,6 +5949,24 @@ weston_head_get_output(struct weston_head *head)
 	return head->output;
 }
 
+/** Get the head's native transformation
+ *
+ * \param head The head to query.
+ * \return The head's native transform, as a WL_OUTPUT_TRANSFORM_* value
+ *
+ * A weston_head may have a 'native' transform provided by the backend.
+ * Examples include panels which are physically rotated, where the rotation
+ * is recorded and described as part of the system configuration. This call
+ * will return any known native transform for the head.
+ *
+ * \ingroup head
+ */
+WL_EXPORT uint32_t
+weston_head_get_transform(struct weston_head *head)
+{
+	return head->transform;
+}
+
 /** Add destroy callback for a head
  *
  * \param head The head to watch for.
@@ -5701,6 +6036,36 @@ weston_compositor_reflow_outputs(struct weston_compositor *compositor,
 	}
 }
 
+/** Transform a region in-place from global to output coordinates
+ *
+ * \param output The output that defines the transformation.
+ * \param region The region to be transformed in-place.
+ *
+ * This takes a region in the global coordinate system, and takes into account
+ * output position, transform and scale, and the zoom, and converts the region
+ * into output pixel coordinates in the framebuffer.
+ *
+ * Uses floating-point operations if zoom is active, which may round to expand
+ * the region.
+ *
+ * \internal
+ * \ingroup output
+ */
+WL_EXPORT void
+weston_output_region_from_global(struct weston_output *output,
+				 pixman_region32_t *region)
+{
+	if (output->zoom.active) {
+		weston_matrix_transform_region(region, &output->matrix, region);
+	} else {
+		pixman_region32_translate(region, -output->x, -output->y);
+		weston_transformed_region(output->width, output->height,
+					  output->transform,
+					  output->current_scale,
+					  region, region);
+	}
+}
+
 static void
 weston_output_update_matrix(struct weston_output *output)
 {
@@ -5735,8 +6100,8 @@ weston_output_update_matrix(struct weston_output *output)
 		break;
 	case WL_OUTPUT_TRANSFORM_90:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
-		weston_matrix_translate(&output->matrix, 0, -output->height, 0);
-		weston_matrix_rotate_xy(&output->matrix, 0, 1);
+		weston_matrix_translate(&output->matrix, -output->width, 0, 0);
+		weston_matrix_rotate_xy(&output->matrix, 0, -1);
 		break;
 	case WL_OUTPUT_TRANSFORM_180:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_180:
@@ -5746,8 +6111,8 @@ weston_output_update_matrix(struct weston_output *output)
 		break;
 	case WL_OUTPUT_TRANSFORM_270:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-		weston_matrix_translate(&output->matrix, -output->width, 0, 0);
-		weston_matrix_rotate_xy(&output->matrix, 0, -1);
+		weston_matrix_translate(&output->matrix, 0, -output->height, 0);
+		weston_matrix_rotate_xy(&output->matrix, 0, 1);
 		break;
 	}
 
@@ -5878,6 +6243,10 @@ weston_compositor_add_output(struct weston_compositor *compositor,
 
 	wl_signal_emit(&compositor->output_created_signal, output);
 
+	/*
+	 * Use view_list, as paint nodes have not been created for this
+	 * output yet. Any existing view might touch this new output.
+	 */
 	wl_list_for_each_safe(view, next, &compositor->view_list, link)
 		weston_view_geometry_dirty(view);
 }
@@ -5914,14 +6283,65 @@ weston_output_transform_coordinate(struct weston_output *output,
 	*y = p.f[1] / p.f[3];
 }
 
+static void
+weston_output_reset_color_transforms(struct weston_output *output)
+{
+	weston_color_transform_unref(output->from_sRGB_to_output);
+	output->from_sRGB_to_output = NULL;
+	weston_color_transform_unref(output->from_sRGB_to_blend);
+	output->from_sRGB_to_blend = NULL;
+	weston_color_transform_unref(output->from_blend_to_output);
+	output->from_blend_to_output = NULL;
+}
+
+static bool
+weston_output_set_color_transforms(struct weston_output *output)
+{
+	struct weston_color_manager *cm = output->compositor->color_manager;
+	struct weston_color_transform *blend_to_output = NULL;
+	struct weston_color_transform *sRGB_to_output = NULL;
+	struct weston_color_transform *sRGB_to_blend = NULL;
+	bool ok;
+
+	ok = cm->get_output_color_transform(cm, output, &blend_to_output);
+	ok = ok && cm->get_sRGB_to_output_color_transform(cm, output,
+							  &sRGB_to_output);
+	ok = ok && cm->get_sRGB_to_blend_color_transform(cm, output,
+							 &sRGB_to_blend);
+	if (!ok) {
+		weston_log("Creating color transformation for output \"%s\" failed.\n",
+			   output->name);
+		weston_color_transform_unref(blend_to_output);
+		weston_color_transform_unref(sRGB_to_output);
+		weston_color_transform_unref(sRGB_to_blend);
+
+		return false;
+	}
+
+	weston_output_reset_color_transforms(output);
+	output->from_blend_to_output = blend_to_output;
+	output->from_blend_to_output_by_backend = false;
+	output->from_sRGB_to_output = sRGB_to_output;
+	output->from_sRGB_to_blend = sRGB_to_blend;
+
+	weston_log("Output '%s' using color profile: %s\n", output->name,
+		   weston_color_profile_get_description(output->color_profile));
+
+	return true;
+}
+
 /** Removes output from compositor's list of enabled outputs
  *
  * \param output The weston_output object that is being removed.
  *
  * The following happens:
  *
+ * - Destroys all paint nodes related to the output.
+ *
  * - The output assignments of all views in the current scenegraph are
  *   recomputed.
+ *
+ * - Destroys output's color transforms.
  *
  * - Presentation feedback is discarded.
  *
@@ -5945,16 +6365,29 @@ static void
 weston_compositor_remove_output(struct weston_output *output)
 {
 	struct weston_compositor *compositor = output->compositor;
+	struct weston_paint_node *pnode, *pntmp;
 	struct weston_view *view;
 	struct weston_head *head;
 
 	assert(output->destroying);
 	assert(output->enabled);
 
+	wl_list_for_each_safe(pnode, pntmp,
+			      &output->paint_node_list, output_link) {
+		weston_paint_node_destroy(pnode);
+	}
+	assert(wl_list_empty(&output->paint_node_z_order_list));
+
+	/*
+	 * Use view_list in case the output did not go through repaint
+	 * after a view came on it, lacking a paint node. Just to be sure.
+	 */
 	wl_list_for_each(view, &compositor->view_list, link) {
 		if (view->output_mask & (1u << output->id))
 			weston_view_assign_output(view);
 	}
+
+	weston_output_reset_color_transforms(output);
 
 	weston_presentation_feedback_discard_list(&output->feedback_list);
 
@@ -5964,8 +6397,8 @@ weston_compositor_remove_output(struct weston_output *output)
 	wl_list_insert(compositor->pending_output_list.prev, &output->link);
 	output->enabled = false;
 
-	wl_signal_emit(&compositor->output_destroyed_signal, output);
-	wl_signal_emit(&output->destroy_signal, output);
+	weston_signal_emit_mutable(&compositor->output_destroyed_signal, output);
+	weston_signal_emit_mutable(&output->destroy_signal, output);
 
 	wl_list_for_each(head, &output->head_list, output_link)
 		weston_head_remove_global(head);
@@ -5982,7 +6415,7 @@ weston_compositor_remove_output(struct weston_output *output)
  * It only supports setting scale for an output that
  * is not enabled and it can only be ran once.
  *
- * \ingroup ouput
+ * \ingroup output
  */
 WL_EXPORT void
 weston_output_set_scale(struct weston_output *output,
@@ -6079,6 +6512,52 @@ weston_output_set_transform(struct weston_output *output,
 							      NULL))
 			weston_pointer_move(pointer, &ev);
 	}
+}
+
+/** Set output's color profile
+ *
+ * \param output The output to change.
+ * \param cprof The color profile to set. Can be NULL for default sRGB profile.
+ * \return True on success, or false on failure.
+ *
+ * Calling this function changes the color profile of the output. This causes
+ * all existing weston_color_transform objects related to this output via
+ * paint nodes to be unreferenced and later re-created on demand.
+ *
+ * This function may not be called from within weston_output_repaint().
+ *
+ * On failure, nothing is changed.
+ *
+ * \ingroup output
+ */
+WL_EXPORT bool
+weston_output_set_color_profile(struct weston_output *output,
+				struct weston_color_profile *cprof)
+{
+	struct weston_color_profile *old;
+	struct weston_paint_node *pnode;
+
+	old = output->color_profile;
+	output->color_profile = weston_color_profile_ref(cprof);
+
+	if (output->enabled) {
+		if (!weston_output_set_color_transforms(output)) {
+			/* Failed, roll back */
+			weston_color_profile_unref(output->color_profile);
+			output->color_profile = old;
+			return false;
+		}
+
+		/* Remove outdated cached color transformations */
+		wl_list_for_each(pnode, &output->paint_node_list, output_link) {
+			weston_surface_color_transform_fini(&pnode->surf_xform);
+			pnode->surf_xform_valid = false;
+		}
+	}
+
+	weston_color_profile_unref(old);
+
+	return true;
 }
 
 /** Initializes a weston_output object with enough data so
@@ -6268,6 +6747,11 @@ weston_output_enable(struct weston_output *output)
 
 	wl_list_init(&output->animation_list);
 	wl_list_init(&output->feedback_list);
+	wl_list_init(&output->paint_node_list);
+	wl_list_init(&output->paint_node_z_order_list);
+
+	if (!weston_output_set_color_transforms(output))
+		return -1;
 
 	/* Enable the output (set up the crtc or create a
 	 * window representing the output, set up the
@@ -6275,6 +6759,7 @@ weston_output_enable(struct weston_output *output)
 	 */
 	if (output->enable(output) < 0) {
 		weston_log("Enabling output \"%s\" failed.\n", output->name);
+		weston_output_reset_color_transforms(output);
 		return -1;
 	}
 
@@ -6333,8 +6818,11 @@ weston_output_disable(struct weston_output *output)
 	if (output->disable(output) < 0)
 		return;
 
-	if (output->enabled)
+	if (output->enabled) {
 		weston_compositor_remove_output(output);
+
+		assert(wl_list_empty(&output->paint_node_list));
+	}
 
 	output->destroying = 0;
 }
@@ -6374,7 +6862,7 @@ weston_compositor_flush_heads_changed(struct weston_compositor *compositor)
  * @note This is for the final destruction of an output, not when it gets
  * disabled. If you want to keep track of enabled outputs, this is not it.
  *
- * \ingroup ouput
+ * \ingroup output
  */
 WL_EXPORT void
 weston_output_add_destroy_listener(struct weston_output *output,
@@ -6412,7 +6900,7 @@ weston_output_get_destroy_listener(struct weston_output *output,
  * All fields of weston_output become uninitialized, i.e. should not be used
  * anymore. The caller can free the memory after this.
  *
- * \ingroup ouput
+ * \ingroup output
  * \internal
  */
 WL_EXPORT void
@@ -6422,13 +6910,15 @@ weston_output_release(struct weston_output *output)
 
 	output->destroying = 1;
 
-	wl_signal_emit(&output->user_destroy_signal, output);
+	weston_signal_emit_mutable(&output->user_destroy_signal, output);
 
 	if (output->idle_repaint_source)
 		wl_event_source_remove(output->idle_repaint_source);
 
 	if (output->enabled)
 		weston_compositor_remove_output(output);
+
+	weston_color_profile_unref(output->color_profile);
 
 	pixman_region32_fini(&output->region);
 	wl_list_remove(&output->link);
@@ -6531,10 +7021,10 @@ weston_compositor_create_output_with_head(struct weston_compositor *compositor,
  * The heads attached to the given output are detached and become unused again.
  *
  * It is not necessary to explicitly destroy all outputs at compositor exit.
- * weston_compositor_tear_down() will automatically destroy any remaining
+ * weston_compositor_destroy() will automatically destroy any remaining
  * outputs.
  *
- * \ingroup ouput
+ * \ingroup output
  */
 WL_EXPORT void
 weston_output_destroy(struct weston_output *output)
@@ -6550,7 +7040,7 @@ weston_output_destroy(struct weston_output *output)
  * \param output The weston_output whose head to get.
  * \return The first head in the output's list.
  *
- * \ingroup ouput
+ * \ingroup output
  */
 WL_EXPORT struct weston_head *
 weston_output_get_first_head(struct weston_output *output)
@@ -6931,26 +7421,6 @@ compositor_bind(struct wl_client *client,
 				       compositor, NULL);
 }
 
-WL_EXPORT int
-weston_environment_get_fd(const char *env)
-{
-	char *e;
-	int fd, flags;
-
-	e = getenv(env);
-	if (!e || !safe_strtoint(e, &fd))
-		return -1;
-
-	flags = fcntl(fd, F_GETFD);
-	if (flags == -1)
-		return -1;
-
-	fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
-	unsetenv(env);
-
-	return fd;
-}
-
 static const char *
 output_repaint_status_text(struct weston_output *output)
 {
@@ -6995,13 +7465,17 @@ debug_scene_view_print_buffer(FILE *fp, struct weston_view *view)
 
 	dmabuf = linux_dmabuf_buffer_get(buffer->resource);
 	if (dmabuf) {
+		uint64_t modifier = dmabuf->attributes.modifier[0];
+		char *modifier_name = pixel_format_get_modifier(modifier);
 		pixel_info = pixel_format_get_info(dmabuf->attributes.format);
 		fprintf(fp, "\t\tdmabuf buffer\n");
 		fprintf(fp, "\t\t\tformat: 0x%lx %s\n",
 			(unsigned long) dmabuf->attributes.format,
 			pixel_info ? pixel_info->drm_format_name : "UNKNOWN");
-		fprintf(fp, "\t\t\tmodifier: 0x%llx\n",
-			(unsigned long long) dmabuf->attributes.modifier[0]);
+
+		fprintf(fp, "\t\t\tmodifier: %s\n", modifier_name ? modifier_name :
+				"Failed to convert to a modifier name");
+		free(modifier_name);
 		return;
 	}
 
@@ -7038,8 +7512,7 @@ debug_scene_view_print(FILE *fp, struct weston_view *view, int view_idx)
 		box->x1, box->y1, box->x2, box->y2);
 	box = pixman_region32_extents(&view->transform.opaque);
 
-	if (pixman_region32_equal(&view->transform.opaque,
-				  &view->transform.boundingbox)) {
+	if (weston_view_is_opaque(view, &view->transform.boundingbox)) {
 		fprintf(fp, "\t\t[fully opaque]\n");
 	} else if (!pixman_region32_not_empty(&view->transform.opaque)) {
 		fprintf(fp, "\t\t[not opaque]\n");
@@ -7091,8 +7564,8 @@ debug_scene_view_print_tree(struct weston_view *view,
 
 	wl_list_for_each(sub, &view->surface->subsurface_list, parent_link) {
 		wl_list_for_each(ev, &sub->surface->views, surface_link) {
-			/* do not print again the parent view */
-			if (view == ev)
+			/* only print the child views of the current view */
+			if (ev->parent_view != view)
 				continue;
 
 			(*view_idx)++;
@@ -7205,6 +7678,25 @@ debug_scene_graph_cb(struct weston_log_subscription *sub, void *data)
 	weston_log_subscription_complete(sub);
 }
 
+/** Retrieve testsuite data from compositor
+ *
+ * The testsuite data can be defined by the test suite of projects that uses
+ * libweston and given to the compositor at the moment of its creation. This
+ * function should be used when we need to retrieve the testsuite private data
+ * from the compositor.
+ *
+ * \param ec The weston compositor.
+ * \return The testsuite data.
+ *
+ * \ingroup compositor
+ * \sa weston_compositor_test_data_init
+ */
+WL_EXPORT void *
+weston_compositor_get_test_data(struct weston_compositor *ec)
+{
+	return ec->test_data.test_private_data;
+}
+
 /** Create the compositor.
  *
  * This functions creates and initializes a compositor instance.
@@ -7212,6 +7704,7 @@ debug_scene_graph_cb(struct weston_log_subscription *sub, void *data)
  * \param display The Wayland display to be used.
  * \param user_data A pointer to an object that can later be retrieved
  * \param log_ctx A pointer to weston_debug_compositor
+ * \param test_data Optional testsuite data, or NULL.
  * using the \ref weston_compositor_get_user_data function.
  * \return The compositor instance on success or NULL on failure.
  *
@@ -7219,16 +7712,23 @@ debug_scene_graph_cb(struct weston_log_subscription *sub, void *data)
  */
 WL_EXPORT struct weston_compositor *
 weston_compositor_create(struct wl_display *display,
-			 struct weston_log_context *log_ctx,
-			 void *user_data)
+			 struct weston_log_context *log_ctx, void *user_data,
+			 const struct weston_testsuite_data *test_data)
 {
 	struct weston_compositor *ec;
 	struct wl_event_loop *loop;
+
+	if (!log_ctx)
+		return NULL;
 
 	ec = zalloc(sizeof *ec);
 	if (!ec)
 		return NULL;
 
+	if (test_data)
+		ec->test_data = *test_data;
+
+	ec->weston_log_ctx = log_ctx;
 	ec->wl_display = display;
 	ec->user_data = user_data;
 	wl_signal_init(&ec->destroy_signal);
@@ -7280,9 +7780,6 @@ weston_compositor_create(struct wl_display *display,
 			      ec, bind_presentation))
 		goto fail;
 
-	if (weston_log_ctx_compositor_setup(ec, log_ctx) < 0)
-		goto fail;
-
 	if (weston_input_init(ec) != 0)
 		goto fail;
 
@@ -7323,13 +7820,13 @@ weston_compositor_create(struct wl_display *display,
 				  WESTON_LAYER_POSITION_CURSOR);
 
 	ec->debug_scene =
-		weston_compositor_add_log_scope(ec->weston_log_ctx, "scene-graph",
+		weston_compositor_add_log_scope(ec, "scene-graph",
 						"Scene graph details\n",
 						debug_scene_graph_cb, NULL,
 						ec);
 
 	ec->timeline =
-		weston_compositor_add_log_scope(ec->weston_log_ctx, "timeline",
+		weston_compositor_add_log_scope(ec, "timeline",
 						"Timeline event points\n",
 						weston_timeline_create_subscription,
 						weston_timeline_destroy_subscription,
@@ -7350,6 +7847,7 @@ weston_compositor_shutdown(struct weston_compositor *ec)
 	struct weston_output *output, *next;
 
 	wl_event_source_remove(ec->idle_source);
+	wl_event_source_remove(ec->repaint_timer);
 
 	/* Destroy all outputs associated with this compositor */
 	wl_list_for_each_safe(output, next, &ec->output_list, link)
@@ -7358,6 +7856,12 @@ weston_compositor_shutdown(struct weston_compositor *ec)
 	/* Destroy all pending outputs associated with this compositor */
 	wl_list_for_each_safe(output, next, &ec->pending_output_list, link)
 		output->destroy(output);
+
+	/* Color manager objects may have renderer hooks */
+	if (ec->color_manager) {
+		ec->color_manager->destroy(ec->color_manager);
+		ec->color_manager = NULL;
+	}
 
 	if (ec->renderer)
 		ec->renderer->destroy(ec);
@@ -7370,6 +7874,12 @@ weston_compositor_shutdown(struct weston_compositor *ec)
 	weston_binding_list_destroy_all(&ec->debug_binding_list);
 
 	weston_plane_release(&ec->primary_plane);
+
+	weston_layer_fini(&ec->fade_layer);
+	weston_layer_fini(&ec->cursor_layer);
+
+	if (!wl_list_empty(&ec->layer_list))
+		weston_log("BUG: layer_list is not empty after shutdown. Calls to weston_layer_fini() are missing somwhere.\n");
 }
 
 /** weston_compositor_exit_with_code
@@ -7434,8 +7944,6 @@ weston_compositor_set_presentation_clock_software(
 		CLOCK_MONOTONIC_RAW,	/* no jumps, no crawling */
 		CLOCK_MONOTONIC_COARSE,	/* no jumps, may crawl, fast & coarse */
 		CLOCK_MONOTONIC,	/* no jumps, may crawl */
-		CLOCK_REALTIME_COARSE,	/* may jump and crawl, fast & coarse */
-		CLOCK_REALTIME		/* may jump and crawl */
 	};
 	unsigned i;
 
@@ -7527,7 +8035,6 @@ weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
 	return backend->can_scanout_dmabuf(compositor, buffer);
 }
 
-
 /** Import gbmbuf buffer into current renderer
  *
  * \param compositor
@@ -7544,13 +8051,13 @@ weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
  * */
 WL_EXPORT bool
 weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
-                struct gbm_buffer *buffer)
+				struct gbm_buffer *buffer)
 {
-        struct weston_renderer *renderer;
-        renderer = compositor->renderer;
-        if (renderer->import_gbm_buffer == NULL)
-                return false;
-        return renderer->import_gbm_buffer(compositor, buffer);
+	struct weston_renderer *renderer;
+	renderer = compositor->renderer;
+	if (renderer->import_gbm_buffer == NULL)
+		return false;
+	return renderer->import_gbm_buffer(compositor, buffer);
 }
 
 WL_EXPORT void
@@ -7680,7 +8187,7 @@ weston_load_module(const char *name, const char *entrypoint)
  * the plugin destruction order is not guaranteed: plugins that depend on other
  * plugins must be able to be torn down in arbitrary order.
  *
- * \sa weston_compositor_tear_down, weston_compositor_destroy
+ * \sa weston_compositor_destroy
  */
 WL_EXPORT bool
 weston_compositor_add_destroy_listener_once(struct weston_compositor *compositor,
@@ -7695,24 +8202,21 @@ weston_compositor_add_destroy_listener_once(struct weston_compositor *compositor
 	return true;
 }
 
-/** Tear down the compositor.
+/** Destroys the compositor.
  *
- * This function cleans up the compositor state. While the compositor state has
- * been cleaned do note that **only** weston_compositor_destroy() can be called
- * afterwards, in order to destroy the compositor instance.
+ * This function cleans up the compositor state and then destroys it.
  *
- * @param compositor The compositor to be tear-down/cleaned.
+ * @param compositor The compositor to be destroyed.
  *
  * @ingroup compositor
- * @sa weston_compositor_destroy
  */
 WL_EXPORT void
-weston_compositor_tear_down(struct weston_compositor *compositor)
+weston_compositor_destroy(struct weston_compositor *compositor)
 {
 	/* prevent further rendering while shutting down */
 	compositor->state = WESTON_COMPOSITOR_OFFSCREEN;
 
-	wl_signal_emit(&compositor->destroy_signal, compositor);
+	weston_signal_emit_mutable(&compositor->destroy_signal, compositor);
 
 	weston_compositor_xkb_destroy(compositor);
 
@@ -7727,25 +8231,17 @@ weston_compositor_tear_down(struct weston_compositor *compositor)
 	if (compositor->heads_changed_source)
 		wl_event_source_remove(compositor->heads_changed_source);
 
-	weston_compositor_log_scope_destroy(compositor->debug_scene);
+	weston_log_scope_destroy(compositor->debug_scene);
 	compositor->debug_scene = NULL;
 
-	weston_compositor_log_scope_destroy(compositor->timeline);
+	weston_log_scope_destroy(compositor->timeline);
 	compositor->timeline = NULL;
-}
 
-/** Destroys the compositor.
- *
- * This function destroys the compositor. **Do not** call this before
- * calling weston_compositor_tear_down()
- *
- * @param compositor The compositor to be destroyed.
- * @ingroup compositor
- * @sa weston_compositor_tear_down()
- */
-WL_EXPORT void
-weston_compositor_destroy(struct weston_compositor *compositor)
-{
+	if (compositor->default_dmabuf_feedback) {
+		weston_dmabuf_feedback_destroy(compositor->default_dmabuf_feedback);
+		weston_dmabuf_feedback_format_table_destroy(compositor->dmabuf_feedback_format_table);
+	}
+
 	free(compositor);
 }
 
@@ -7827,6 +8323,19 @@ weston_compositor_load_backend(struct weston_compositor *compositor,
 		return -1;
 	}
 
+	if (!compositor->color_manager) {
+		compositor->color_manager =
+			weston_color_manager_noop_create(compositor);
+	}
+
+	if (!compositor->color_manager)
+		return -1;
+
+	if (!compositor->color_manager->init(compositor->color_manager))
+		return -1;
+
+	weston_log("Color manager: %s\n", compositor->color_manager->name);
+
 	return 0;
 }
 
@@ -7843,6 +8352,41 @@ weston_compositor_load_xwayland(struct weston_compositor *compositor)
 		return -1;
 	if (module_init(compositor) < 0)
 		return -1;
+	return 0;
+}
+
+/** Load Little CMS color manager plugin
+ *
+ * Calling this function before loading any backend sets Little CMS
+ * as the active color matching module (CMM) instead of the default no-op
+ * color manager.
+ *
+ * \ingroup compositor
+ */
+WL_EXPORT int
+weston_compositor_load_color_manager(struct weston_compositor *compositor)
+{
+	struct weston_color_manager *
+	(*cm_create)(struct weston_compositor *compositor);
+
+	if (compositor->color_manager) {
+		weston_log("Error: Color manager '%s' is loaded, cannot load another.\n",
+			   compositor->color_manager->name);
+		return -1;
+	}
+
+	cm_create = weston_load_module("color-lcms.so", "weston_color_manager_create");
+	if (!cm_create) {
+		weston_log("Error: Could not load color-lcms.so.\n");
+		return -1;
+	}
+
+	compositor->color_manager = cm_create(compositor);
+	if (!compositor->color_manager) {
+		weston_log("Error: loading color-lcms.so failed.\n");
+		return -1;
+	}
+
 	return 0;
 }
 

@@ -35,6 +35,7 @@
 #include <wayland-util.h>
 
 #include <libweston/libweston.h>
+#include "weston-log-internal.h"
 
 /**
  * \defgroup wlog weston-logging
@@ -70,8 +71,8 @@ static log_func_t log_continue_handler = default_log_handler;
 static int
 default_log_handler(const char *fmt, va_list ap)
 {
-        fprintf(stderr, "weston_log_set_handler() must be called before using of weston_log().\n");
-        abort();
+	fprintf(stderr, "weston_log_set_handler() must be called before using of weston_log().\n");
+	abort();
 }
 
 /** Install the log handler

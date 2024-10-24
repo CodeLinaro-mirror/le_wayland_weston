@@ -4,26 +4,20 @@ endif
 
 config_h.set('BUILD_RDP_COMPOSITOR', '1')
 
-dep_frdp = dependency('freerdp2', version: '>= 2.0.0', required: false)
+dep_frdp = dependency('freerdp2', version: '>= 2.2.0', required: false)
 if not dep_frdp.found()
-	error('RDP-backend requires freerdp2 which was not found. Or, you can use \'-Dbackend-rdp=false\'.')
+	error('RDP-backend requires freerdp >= 2.2.0 which was not found. Or, you can use \'-Dbackend-rdp=false\'.')
 endif
 
-if cc.has_header('freerdp/version.h', dependencies: dep_frdp)
-	config_h.set('HAVE_FREERDP_VERSION_H', '1')
-endif
-
-if cc.has_member(
-	'SURFACE_BITS_COMMAND', 'bmp',
-	dependencies : dep_frdp,
-	prefix : '#include <freerdp/update.h>'
-)
-	config_h.set('HAVE_SURFACE_BITS_BMP', '1')
+dep_wpr = dependency('winpr2', version: '>= 2.2.0', required: false)
+if not dep_wpr.found()
+	error('RDP-backend requires winpr >= 2.2.0 which was not found. Or, you can use \'-Dbackend-rdp=false\'.')
 endif
 
 deps_rdp = [
 	dep_libweston_private,
 	dep_frdp,
+	dep_wpr,
 ]
 plugin_rdp = shared_library(
 	'rdp-backend',
@@ -31,7 +25,6 @@ plugin_rdp = shared_library(
 	include_directories: common_inc,
 	dependencies: deps_rdp,
 	name_prefix: '',
-	override_options: [ 'b_lundef=false' ],
 	install: true,
 	install_dir: dir_module_libweston
 )

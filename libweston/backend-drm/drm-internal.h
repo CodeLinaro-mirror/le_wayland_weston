@@ -45,7 +45,6 @@
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
-#include <drm_fourcc.h>
 
 #ifdef BUILD_DRM_GBM
 #include <gbm.h>
@@ -56,13 +55,10 @@
 #include <libweston/backend-drm.h>
 #include <libweston/weston-log.h>
 #include "shared/helpers.h"
+#include "shared/weston-drm-fourcc.h"
 #include "libinput-seat.h"
 #include "backend.h"
 #include "libweston-internal.h"
-
-#ifndef DRM_CLIENT_CAP_ASPECT_RATIO
-#define DRM_CLIENT_CAP_ASPECT_RATIO	4
-#endif
 
 #ifndef GBM_BO_USE_CURSOR
 #define GBM_BO_USE_CURSOR GBM_BO_USE_CURSOR_64X64
@@ -113,17 +109,6 @@
 	weston_log_scope_printf((b)->debug, __VA_ARGS__)
 
 #define MAX_CLONED_CONNECTORS 4
-
-#ifndef DRM_MODE_PICTURE_ASPECT_64_27
-#define DRM_MODE_PICTURE_ASPECT_64_27		3
-#define  DRM_MODE_FLAG_PIC_AR_64_27 \
-			(DRM_MODE_PICTURE_ASPECT_64_27<<19)
-#endif
-#ifndef DRM_MODE_PICTURE_ASPECT_256_135
-#define DRM_MODE_PICTURE_ASPECT_256_135		4
-#define  DRM_MODE_FLAG_PIC_AR_256_135 \
-			(DRM_MODE_PICTURE_ASPECT_256_135<<19)
-#endif
 
 
 /**
@@ -200,6 +185,7 @@ enum wdrm_connector_property {
 	WDRM_CONNECTOR_NON_DESKTOP,
 	WDRM_CONNECTOR_CONTENT_PROTECTION,
 	WDRM_CONNECTOR_HDCP_CONTENT_TYPE,
+	WDRM_CONNECTOR_PANEL_ORIENTATION,
 	WDRM_CONNECTOR__COUNT
 };
 
@@ -224,6 +210,14 @@ enum wdrm_dpms_state {
 	WDRM_DPMS_STATE__COUNT
 };
 
+enum wdrm_panel_orientation {
+	WDRM_PANEL_ORIENTATION_NORMAL = 0,
+	WDRM_PANEL_ORIENTATION_UPSIDE_DOWN,
+	WDRM_PANEL_ORIENTATION_LEFT_SIDE_UP,
+	WDRM_PANEL_ORIENTATION_RIGHT_SIDE_UP,
+	WDRM_PANEL_ORIENTATION__COUNT
+};
+
 /**
  * List of properties attached to DRM CRTCs
  */
@@ -231,6 +225,28 @@ enum wdrm_crtc_property {
 	WDRM_CRTC_MODE_ID = 0,
 	WDRM_CRTC_ACTIVE,
 	WDRM_CRTC__COUNT
+};
+
+/**
+ * Reasons why placing a view on a plane failed. Needed by the dma-buf feedback.
+ */
+enum try_view_on_plane_failure_reasons {
+	FAILURE_REASONS_NONE = 0,
+	FAILURE_REASONS_FORCE_RENDERER = (1 << 0),
+	FAILURE_REASONS_FB_FORMAT_INCOMPATIBLE = (1 << 1),
+	FAILURE_REASONS_DMABUF_MODIFIER_INVALID = (1 << 2),
+	FAILURE_REASONS_ADD_FB_FAILED = (1 << 3),
+	FAILURE_REASONS_GBM_BO_IMPORT_FAILED = (1 << 4)
+};
+
+/**
+ * We use this to keep track of actions we need to do with the dma-buf feedback
+ * in order to keep it up-to-date with the info we get from the DRM-backend.
+ */
+enum actions_needed_dmabuf_feedback {
+	ACTION_NEEDED_NONE = 0,
+	ACTION_NEEDED_ADD_SCANOUT_TRANCHE = (1 << 0),
+	ACTION_NEEDED_REMOVE_SCANOUT_TRANCHE = (1 << 1),
 };
 
 struct drm_backend {
@@ -261,18 +277,21 @@ struct drm_backend {
 	int min_height, max_height;
 
 	struct wl_list plane_list;
+	uint32_t next_plane_idx;
 
 	void *repaint_data;
 
 	bool state_invalid;
 
-	/* CRTC IDs not used by any enabled output. */
-	struct wl_array unused_crtcs;
+	/* drm_crtc::link */
+	struct wl_list crtc_list;
+
+	/* drm_writeback::link */
+	struct wl_list writeback_connector_list;
 
 	bool sprites_are_broken;
 	bool cursors_are_broken;
 
-	bool universal_planes;
 	bool atomic_modeset;
 
 	bool use_pixman;
@@ -323,8 +342,8 @@ struct drm_fb {
 	uint64_t modifier;
 	int width, height;
 	int fd;
-	struct weston_buffer_reference buffer_ref;
-	struct weston_buffer_release_reference buffer_release_ref;
+
+	uint32_t plane_mask;
 
 	/* Used by gbm fbs */
 	struct gbm_bo *bo;
@@ -332,6 +351,12 @@ struct drm_fb {
 
 	/* Used by dumb fbs */
 	void *map;
+};
+
+struct drm_buffer_fb {
+	struct drm_fb *fb;
+	enum try_view_on_plane_failure_reasons failure_reasons;
+	struct wl_listener buffer_destroy_listener;
 };
 
 struct drm_edid {
@@ -373,7 +398,7 @@ struct drm_output_state {
 
 /**
  * An instance of this class is created each time we believe we have a plane
- * suitable to be used by a view as a direct scan-out. The list is initalized
+ * suitable to be used by a view as a direct scan-out. The list is initialized
  * and populated locally.
  */
 struct drm_plane_zpos {
@@ -394,6 +419,10 @@ struct drm_plane_state {
 	struct drm_output_state *output_state;
 
 	struct drm_fb *fb;
+	struct {
+		struct weston_buffer_reference buffer;
+		struct weston_buffer_release_reference release;
+	} fb_ref;
 
 	struct weston_view *ev; /**< maintained for drm_assign_planes only */
 
@@ -409,7 +438,7 @@ struct drm_plane_state {
 	/* We don't own the fd, so we shouldn't close it */
 	int in_fence_fd;
 
-	pixman_region32_t damage; /* damage to kernel */
+	uint32_t damage_blob_id; /* damage to kernel */
 
 	struct wl_list link; /* drm_output_state::plane_list */
 };
@@ -438,7 +467,7 @@ struct drm_plane {
 
 	uint32_t possible_crtcs;
 	uint32_t plane_id;
-	uint32_t count_formats;
+	uint32_t plane_idx;
 
 	struct drm_property_info props[WDRM_PLANE__COUNT];
 
@@ -450,23 +479,35 @@ struct drm_plane {
 
 	struct wl_list link;
 
-	struct {
-		uint32_t format;
-		uint32_t count_modifiers;
-		uint64_t *modifiers;
-	} formats[];
+	struct weston_drm_format_array formats;
+};
+
+struct drm_connector {
+	struct drm_backend *backend;
+
+	drmModeConnector *conn;
+	uint32_t connector_id;
+
+	drmModeObjectProperties *props_drm;
+
+	/* Holds the properties for the connector */
+	struct drm_property_info props[WDRM_CONNECTOR__COUNT];
+};
+
+struct drm_writeback {
+	/* drm_backend::writeback_connector_list */
+	struct wl_list link;
+
+	struct drm_backend *backend;
+	struct drm_connector connector;
 };
 
 struct drm_head {
 	struct weston_head base;
 	struct drm_backend *backend;
+	struct drm_connector connector;
 
-	drmModeConnector *connector;
-	uint32_t connector_id;
 	struct drm_edid edid;
-
-	/* Holds the properties for the connector */
-	struct drm_property_info props_conn[WDRM_CONNECTOR__COUNT];
 
 	struct backlight *backlight;
 
@@ -474,15 +515,25 @@ struct drm_head {
 	uint32_t inherited_crtc_id;	/**< Original CRTC assignment */
 };
 
-struct drm_output {
-	struct weston_output base;
+struct drm_crtc {
+	/* drm_backend::crtc_list */
+	struct wl_list link;
 	struct drm_backend *backend;
+
+	/* The output driven by the CRTC */
+	struct drm_output *output;
 
 	uint32_t crtc_id; /* object ID to pass to DRM functions */
 	int pipe; /* index of CRTC in resource array / bitmasks */
 
 	/* Holds the properties for the CRTC */
 	struct drm_property_info props_crtc[WDRM_CRTC__COUNT];
+};
+
+struct drm_output {
+	struct weston_output base;
+	struct drm_backend *backend;
+	struct drm_crtc *crtc;
 
 	bool page_flip_pending;
 	bool atomic_complete_pending;
@@ -494,6 +545,7 @@ struct drm_output {
 	struct drm_fb *gbm_cursor_fb[2];
 	struct drm_plane *cursor_plane;
 	struct weston_view *cursor_view;
+	struct wl_listener cursor_view_destroy_listener;
 	int current_cursor;
 
 	struct gbm_surface *gbm_surface;
@@ -564,8 +616,8 @@ drm_output_get_plane_type_name(struct drm_plane *p)
 	}
 }
 
-struct drm_output *
-drm_output_find_by_crtc(struct drm_backend *b, uint32_t crtc_id);
+struct drm_crtc *
+drm_crtc_find(struct drm_backend *b, uint32_t crtc_id);
 
 struct drm_head *
 drm_head_find_by_connector(struct drm_backend *backend, uint32_t connector_id);
@@ -596,8 +648,7 @@ struct drm_mode *
 drm_output_choose_mode(struct drm_output *output,
 		       struct weston_mode *target_mode);
 void
-update_head_from_connector(struct drm_head *head,
-			   drmModeObjectProperties *props);
+update_head_from_connector(struct drm_head *head);
 
 void
 drm_mode_list_destroy(struct drm_backend *backend, struct wl_list *mode_list);
@@ -625,7 +676,8 @@ drm_property_get_range_values(struct drm_property_info *info,
 			      const drmModeObjectProperties *props);
 int
 drm_plane_populate_formats(struct drm_plane *plane, const drmModePlane *kplane,
-			   const drmModeObjectProperties *props);
+			   const drmModeObjectProperties *props,
+			   const bool use_modifiers);
 void
 drm_property_info_free(struct drm_property_info *info, int num_props);
 
@@ -659,16 +711,6 @@ drm_output_update_complete(struct drm_output *output, uint32_t flags,
 int
 on_drm_input(int fd, uint32_t mask, void *data);
 
-struct drm_plane_state *
-drm_output_state_get_existing_plane(struct drm_output_state *state_output,
-				    struct drm_plane *plane);
-void
-drm_plane_state_free(struct drm_plane_state *state, bool force);
-void
-drm_output_state_free(struct drm_output_state *state);
-void
-drm_pending_state_free(struct drm_pending_state *pending_state);
-
 struct drm_fb *
 drm_fb_ref(struct drm_fb *fb);
 void
@@ -681,15 +723,20 @@ struct drm_fb *
 drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 		   bool is_opaque, enum drm_fb_type type);
 
+void
+drm_output_set_cursor_view(struct drm_output *output, struct weston_view *ev);
+
 #ifdef BUILD_DRM_GBM
 extern struct drm_fb *
-drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev);
+drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev,
+		     uint32_t *try_view_on_plane_failure_reasons);
 extern bool
 drm_can_scanout_dmabuf(struct weston_compositor *ec,
 		       struct linux_dmabuf_buffer *dmabuf);
 #else
 static inline struct drm_fb *
-drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev)
+drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev,
+		     uint32_t *try_view_on_plane_failure_reasons)
 {
 	return NULL;
 }
@@ -749,6 +796,8 @@ drm_plane_state_put_back(struct drm_plane_state *state);
 bool
 drm_plane_state_coords_for_view(struct drm_plane_state *state,
 				struct weston_view *ev, uint64_t zpos);
+void
+drm_plane_reset_state(struct drm_plane *plane);
 
 void
 drm_assign_planes(struct weston_output *output_base, void *repaint_data);

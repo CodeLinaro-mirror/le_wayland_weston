@@ -27,6 +27,20 @@
 
 #include <string.h>
 #include "weston-test-client-helper.h"
+#include "weston-test-fixture-compositor.h"
+
+static enum test_result_code
+fixture_setup(struct weston_test_harness *harness)
+{
+	struct compositor_setup setup;
+
+	compositor_setup_defaults(&setup);
+
+	setup.shell = SHELL_TEST_DESKTOP;
+
+	return weston_test_harness_execute_as_client(harness, &setup);
+}
+DECLARE_FIXTURE_SETUP(fixture_setup);
 
 /**
  * Test (un)plugging devices
@@ -39,8 +53,6 @@
 #define WL_SEAT_CAPABILITY_ALL (WL_SEAT_CAPABILITY_KEYBOARD |\
 				WL_SEAT_CAPABILITY_POINTER  |\
 				WL_SEAT_CAPABILITY_TOUCH)
-
-char *server_parameters = "--shell=weston-test-desktop-shell.so";
 
 /* simply test if weston sends the right capabilities when
  * some devices are removed */
@@ -96,6 +108,8 @@ TEST(seat_capabilities_test)
 	assert(cl->input->pointer);
 	assert(cl->input->keyboard);
 	assert(cl->input->touch);
+
+	client_destroy(cl);
 }
 
 #define COUNT 15
@@ -134,6 +148,8 @@ TEST(multiple_device_add_and_remove)
 	assert(cl->input->pointer);
 	assert(cl->input->keyboard);
 	assert(cl->input->touch);
+
+	client_destroy(cl);
 }
 
 TEST(device_release_before_destroy)
@@ -171,6 +187,8 @@ TEST(device_release_before_destroy)
 	client_roundtrip(cl);
 
 	assert(cl->input->caps == WL_SEAT_CAPABILITY_ALL);
+
+	client_destroy(cl);
 }
 
 TEST(device_release_before_destroy_multiple)
@@ -180,12 +198,6 @@ TEST(device_release_before_destroy_multiple)
 	/* if weston crashed during this test, then there is
 	 * some inconsistency */
 	for (i = 0; i < 30; ++i) {
-		/* Fifty times run the previous test. This will create
-		 * fifty clients, because we don't have any
-		 * way how to destroy them (worth of adding!). Only one
-		 * client will run at a time though and so should have no
-		 * effect on the result of the test (after the client
-		 * finishes its body, it just 'is' and does nothing). */
 		device_release_before_destroy();
 	}
 }
@@ -227,6 +239,8 @@ TEST(device_release_after_destroy)
 	client_roundtrip(cl);
 
 	assert(cl->input->caps == WL_SEAT_CAPABILITY_ALL);
+
+	client_destroy(cl);
 }
 
 TEST(device_release_after_destroy_multiple)
@@ -300,6 +314,8 @@ TEST(get_device_after_destroy)
 	client_roundtrip(cl);
 
 	assert(cl->input->caps == WL_SEAT_CAPABILITY_ALL);
+
+	client_destroy(cl);
 }
 
 TEST(get_device_after_destroy_multiple)
@@ -321,6 +337,8 @@ TEST(seats_have_names)
 	wl_list_for_each(input, &cl->inputs, link) {
 		assert(input->seat_name);
 	}
+
+	client_destroy(cl);
 }
 
 TEST(seat_destroy_and_recreate)
@@ -343,4 +361,6 @@ TEST(seat_destroy_and_recreate)
 	assert(cl->input->pointer);
 	assert(cl->input->keyboard);
 	assert(cl->input->touch);
+
+	client_destroy(cl);
 }

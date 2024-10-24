@@ -30,15 +30,20 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <string.h>
-#include <drm_fourcc.h>
+#include <stdlib.h>
 #include <wayland-client-protocol.h>
 
+#include <xf86drm.h>
+
 #include "shared/helpers.h"
+#include "shared/string-helpers.h"
+#include "shared/weston-drm-fourcc.h"
 #include "wayland-util.h"
 #include "pixel-formats.h"
 
-#if ENABLE_EGL
+#ifdef ENABLE_EGL
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
@@ -59,6 +64,8 @@
 	.bits.b = b_, \
 	.bits.a = a_, \
 	.component_type = PIXEL_COMPONENT_TYPE_FIXED
+
+#define PIXMAN_FMT(fmt) .pixman_format = (PIXMAN_ ## fmt)
 
 #include "shared/weston-egl-ext.h"
 
@@ -166,6 +173,7 @@ static const struct pixel_format_info pixel_format_table[] = {
 # if __BYTE_ORDER == __LITTLE_ENDIAN
 		GL_FORMAT(GL_RGB),
 		GL_TYPE(GL_UNSIGNED_SHORT_5_6_5),
+		PIXMAN_FMT(r5g6b5),
 #endif
 	},
 	{
@@ -189,6 +197,11 @@ static const struct pixel_format_info pixel_format_table[] = {
 		.bpp = 32,
 		GL_FORMAT(GL_BGRA_EXT),
 		GL_TYPE(GL_UNSIGNED_BYTE),
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		PIXMAN_FMT(x8r8g8b8),
+#else
+		PIXMAN_FMT(b8g8r8x8),
+#endif
 	},
 	{
 		DRM_FORMAT(ARGB8888),
@@ -198,12 +211,22 @@ static const struct pixel_format_info pixel_format_table[] = {
 		.bpp = 32,
 		GL_FORMAT(GL_BGRA_EXT),
 		GL_TYPE(GL_UNSIGNED_BYTE),
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		PIXMAN_FMT(a8r8g8b8),
+#else
+		PIXMAN_FMT(b8g8r8a8),
+#endif
 	},
 	{
 		DRM_FORMAT(XBGR8888),
 		BITS_RGBA_FIXED(8, 8, 8, 0),
 		GL_FORMAT(GL_RGBA),
 		GL_TYPE(GL_UNSIGNED_BYTE),
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		PIXMAN_FMT(x8b8g8r8),
+#else
+		PIXMAN_FMT(r8g8b8x8),
+#endif
 	},
 	{
 		DRM_FORMAT(ABGR8888),
@@ -211,35 +234,66 @@ static const struct pixel_format_info pixel_format_table[] = {
 		.opaque_substitute = DRM_FORMAT_XBGR8888,
 		GL_FORMAT(GL_RGBA),
 		GL_TYPE(GL_UNSIGNED_BYTE),
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		PIXMAN_FMT(a8b8g8r8),
+#else
+		PIXMAN_FMT(r8g8b8a8),
+#endif
 	},
 	{
 		DRM_FORMAT(RGBX8888),
 		BITS_RGBA_FIXED(8, 8, 8, 0),
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		PIXMAN_FMT(r8g8b8x8),
+#else
+		PIXMAN_FMT(x8b8g8r8),
+#endif
 	},
 	{
 		DRM_FORMAT(RGBA8888),
 		BITS_RGBA_FIXED(8, 8, 8, 8),
 		.opaque_substitute = DRM_FORMAT_RGBX8888,
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		PIXMAN_FMT(r8g8b8a8),
+#else
+		PIXMAN_FMT(a8b8g8r8),
+#endif
 	},
 	{
 		DRM_FORMAT(BGRX8888),
 		BITS_RGBA_FIXED(8, 8, 8, 0),
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		PIXMAN_FMT(b8g8r8x8),
+#else
+		PIXMAN_FMT(x8r8g8b8),
+#endif
 	},
 	{
 		DRM_FORMAT(BGRA8888),
 		BITS_RGBA_FIXED(8, 8, 8, 8),
 		.opaque_substitute = DRM_FORMAT_BGRX8888,
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		PIXMAN_FMT(b8g8r8a8),
+#else
+		PIXMAN_FMT(a8r8g8b8),
+#endif
 	},
 	{
 		DRM_FORMAT(XRGB2101010),
 		BITS_RGBA_FIXED(10, 10, 10, 0),
 		.depth = 30,
 		.bpp = 32,
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		PIXMAN_FMT(x2r10g10b10),
+#endif
 	},
 	{
 		DRM_FORMAT(ARGB2101010),
 		BITS_RGBA_FIXED(10, 10, 10, 2),
 		.opaque_substitute = DRM_FORMAT_XRGB2101010,
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		PIXMAN_FMT(a2r10g10b10),
+#endif
 	},
 	{
 		DRM_FORMAT(XBGR2101010),
@@ -247,6 +301,7 @@ static const struct pixel_format_info pixel_format_table[] = {
 # if __BYTE_ORDER == __LITTLE_ENDIAN
 		GL_FORMAT(GL_RGBA),
 		GL_TYPE(GL_UNSIGNED_INT_2_10_10_10_REV_EXT),
+		PIXMAN_FMT(x2b10g10r10),
 #endif
 	},
 	{
@@ -256,6 +311,7 @@ static const struct pixel_format_info pixel_format_table[] = {
 # if __BYTE_ORDER == __LITTLE_ENDIAN
 		GL_FORMAT(GL_RGBA),
 		GL_TYPE(GL_UNSIGNED_INT_2_10_10_10_REV_EXT),
+		PIXMAN_FMT(a2b10g10r10),
 #endif
 	},
 	{
@@ -443,6 +499,22 @@ pixel_format_get_info(uint32_t format)
 }
 
 WL_EXPORT const struct pixel_format_info *
+pixel_format_get_info_by_index(unsigned int index)
+{
+	if (index >= ARRAY_LENGTH(pixel_format_table))
+		return NULL;
+
+	return &pixel_format_table[index];
+}
+
+WL_EXPORT unsigned int
+pixel_format_get_info_count(void)
+{
+	return ARRAY_LENGTH(pixel_format_table);
+}
+
+
+WL_EXPORT const struct pixel_format_info *
 pixel_format_get_info_by_drm_name(const char *drm_format_name)
 {
 	const struct pixel_format_info *info;
@@ -514,3 +586,53 @@ pixel_format_height_for_plane(const struct pixel_format_info *info,
 
 	return height / info->vsub;
 }
+
+#ifdef HAVE_HUMAN_FORMAT_MODIFIER
+WL_EXPORT char *
+pixel_format_get_modifier(uint64_t modifier)
+{
+	char *modifier_name;
+	char *vendor_name;
+	char *mod_str;
+
+	modifier_name = drmGetFormatModifierName(modifier);
+	vendor_name = drmGetFormatModifierVendor(modifier);
+
+	if (!modifier_name) {
+		if (vendor_name)
+			str_printf(&mod_str, "%s_%s (0x%llx)",
+				   vendor_name, "UNKNOWN_MODIFIER",
+				   (unsigned long long) modifier);
+		else
+			str_printf(&mod_str, "0x%llx",
+				 (unsigned long long) modifier);
+
+		free(vendor_name);
+		return mod_str;
+	}
+
+	if (modifier == DRM_FORMAT_MOD_LINEAR) {
+		str_printf(&mod_str, "%s (0x%llx)", modifier_name,
+			   (unsigned long long) modifier);
+		free(modifier_name);
+		free(vendor_name);
+		return mod_str;
+	}
+
+	str_printf(&mod_str, "%s_%s (0x%llx)", vendor_name, modifier_name,
+		   (unsigned long long) modifier);
+
+	free(modifier_name);
+	free(vendor_name);
+
+	return mod_str;
+}
+#else
+WL_EXPORT char *
+pixel_format_get_modifier(uint64_t modifier)
+{
+	char *mod_str;
+	str_printf(&mod_str, "0x%llx", (unsigned long long) modifier);
+	return mod_str;
+}
+#endif

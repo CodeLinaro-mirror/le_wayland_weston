@@ -49,6 +49,11 @@
 *    AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
 *    ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 *    THIS SOFTWARE.
+*
+*    Changes from Qualcomm Innovation Center are provided under the following license:
+*    Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+*    SPDX-License-Identifier: BSD-3-Clause-Clear
+*
 */
 
 #include <assert.h>
@@ -93,11 +98,23 @@ gbm_buffer_destroy(struct gbm_buffer *buffer)
 {
   // Destroy gbm bo if it is still valid
   if (buffer->bo) {
+    GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_destroy close buffer fd[%d] metadata_fd[%d]\n",
+                                                        buffer->fd, buffer->metadata_fd);
+    /*
+     * 1. data fd is from client through RPC which is new fd for weston process
+     * So these fd should be closed in weston server
+     * 2. If fd is external fd for gbm(not created by gbm) gbm would not close it
+     * So we need to close it here, not only do bo_destroy.
+     */
+    if (buffer->fd > 0)
+      close(buffer->fd);
+
     gbm_bo_destroy(buffer->bo);
     buffer->bo = NULL;
   }
 
   free(buffer);
+  buffer = NULL;
 }
 
 
@@ -231,10 +248,21 @@ destroy_gbm_buffer(struct wl_resource *resource)
 
     GBM_PROTOCOL_LOG(LOG_DBG,"destroy_gbm_buffer::Invoked\n");
 
-
     buffer = wl_resource_get_user_data(resource);
-    assert(buffer->buffer_resource == resource);
-    assert(!buffer->params_resource);
+    if (buffer == NULL) {
+        weston_log("[%s] null buffer detected when destroy \n", __FUNCTION__);
+        return;
+    }
+
+    if (buffer->buffer_resource != resource) {
+        weston_log("[%s] resource not detected when destroy \n", __FUNCTION__);
+        return;
+    }
+
+    if (buffer->params_resource) {
+        weston_log("[%s] params resource not released when destroy \n", __FUNCTION__);
+        return;
+    }
 
     if (buffer->user_data_destroy_func)
         buffer->user_data_destroy_func(buffer);
@@ -297,9 +325,6 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
                 buffer, destroy_gbm_buffer);
 
     ret = weston_compositor_import_gbm_buffer(buffer->compositor, buffer);
-    if (ret == false) {
-      weston_log("gbm_buffer_backend_create_buffer:: import_gbm_buffer failed\n");
-    }
     // gbm bo is imported to buffer from above function to use in below perform call
     unsigned int secure_status = 0;
     gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, buffer->bo, &secure_status);
@@ -311,7 +336,10 @@ gbm_buffer_backend_create_buffer(struct wl_client *client,
     }
 
     if (ret == false) {
-      goto err_failed;
+        weston_log("gbm_buffer_backend_create_buffer:: import_gbm_buffer failed.\n");
+        weston_log("Fail with fd(%d) meta_fd(%d) wxh(%dx%d) fmt(0x%x) flag(0x%x) secure(%d)\n",
+            fd, metadata_fd, width, height, format, flags, secure_status);
+        goto err_failed;
     }
 
     GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_backend_create_buffer::Exited- gracefully\n");

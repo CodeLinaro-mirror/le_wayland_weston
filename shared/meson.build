@@ -1,25 +1,26 @@
 install_headers(
-	'cairo-util.h',
-	'fd-util.h',
-	'file-util.h',
-	'helpers.h',
-	'image-loader.h',
-	'os-compatibility.h',
-	'platform.h',
-	'string-helpers.h',
-	'timespec-util.h',
-	'weston-egl-ext.h',
-	'xalloc.h'
-)
+       'cairo-util.h',
+       'fd-util.h',
+       'file-util.h',
+       'helpers.h',
+       'image-loader.h',
+       'os-compatibility.h',
+       'platform.h',
+       'string-helpers.h',
+       'timespec-util.h',
+       'weston-egl-ext.h',
+       'xalloc.h'
+  )
 
 srcs_libshared = [
 	'config-parser.c',
 	'option-parser.c',
+	'signal.c',
 	'file-util.c',
 	'os-compatibility.c',
 	'xalloc.c',
 ]
-deps_libshared = dep_wayland_client
+deps_libshared = [dep_wayland_client, dep_wayland_server]
 
 lib_libshared = static_library(
 	'shared',

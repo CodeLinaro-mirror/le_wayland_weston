@@ -61,6 +61,21 @@ evdev_led_update(struct evdev_device *device, enum weston_led weston_leds)
 }
 
 static void
+ensure_pointer_capability(struct libinput_device *libinput_device)
+{
+	struct evdev_device *device = libinput_device_get_user_data(libinput_device);
+	struct weston_seat *seat = device->seat;
+
+	if (!libinput_device_has_capability(libinput_device, LIBINPUT_DEVICE_CAP_POINTER))
+		return;
+
+	if (!(device->seat_caps & EVDEV_SEAT_POINTER)) {
+		weston_seat_init_pointer(seat);
+		device->seat_caps |= EVDEV_SEAT_POINTER;
+	}
+}
+
+static void
 handle_keyboard_key(struct libinput_device *libinput_device,
 		    struct libinput_event_keyboard *keyboard_event)
 {
@@ -97,6 +112,8 @@ handle_pointer_motion(struct libinput_device *libinput_device,
 	struct timespec time;
 	double dx_unaccel, dy_unaccel;
 
+	ensure_pointer_capability(libinput_device);
+
 	timespec_from_usec(&time,
 			   libinput_event_pointer_get_time_usec(pointer_event));
 	dx_unaccel = libinput_event_pointer_get_dx_unaccelerated(pointer_event);
@@ -129,6 +146,8 @@ handle_pointer_motion_absolute(
 	double x, y;
 	uint32_t width, height;
 
+	ensure_pointer_capability(libinput_device);
+
 	if (!output)
 		return false;
 
@@ -160,6 +179,8 @@ handle_pointer_button(struct libinput_device *libinput_device,
 		libinput_event_pointer_get_seat_button_count(pointer_event);
 	struct timespec time;
 
+	ensure_pointer_capability(libinput_device);
+
 	/* Ignore button events that are not seat wide state changes. */
 	if ((button_state == LIBINPUT_BUTTON_STATE_PRESSED &&
 	     seat_button_count != 1) ||
@@ -171,8 +192,8 @@ handle_pointer_button(struct libinput_device *libinput_device,
 			   libinput_event_pointer_get_time_usec(pointer_event));
 
 	notify_button(device->seat, &time,
-		      libinput_event_pointer_get_button(pointer_event),
-                      button_state);
+	              libinput_event_pointer_get_button(pointer_event),
+	              button_state);
 
 	return true;
 }
@@ -238,6 +259,8 @@ handle_pointer_axis(struct libinput_device *libinput_device,
 	uint32_t wl_axis_source;
 	bool has_vert, has_horiz;
 	struct timespec time;
+
+	ensure_pointer_capability(libinput_device);
 
 	has_vert = libinput_event_pointer_has_axis(pointer_event,
 				   LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL);
@@ -500,6 +523,9 @@ evdev_device_process_event(struct libinput_event *event)
 	int handled = 1;
 	bool need_frame = false;
 
+	if (!device)
+		return 0;
+
 	switch (libinput_event_get_type(event)) {
 	case LIBINPUT_EVENT_KEYBOARD_KEY:
 		handle_keyboard_key(libinput_device,
@@ -705,17 +731,27 @@ evdev_device_create(struct libinput_device *libinput_device,
 
 	if (libinput_device_has_capability(libinput_device,
 					   LIBINPUT_DEVICE_CAP_KEYBOARD)) {
-		weston_seat_init_keyboard(seat, NULL);
+		if (weston_seat_init_keyboard(seat, NULL) < 0) {
+			free(device);
+			return NULL;
+		}
+
 		device->seat_caps |= EVDEV_SEAT_KEYBOARD;
 	}
-	if (libinput_device_has_capability(libinput_device,
-					   LIBINPUT_DEVICE_CAP_POINTER)) {
-		weston_seat_init_pointer(seat);
-		device->seat_caps |= EVDEV_SEAT_POINTER;
-	}
+
 	if (libinput_device_has_capability(libinput_device,
 					   LIBINPUT_DEVICE_CAP_TOUCH)) {
-		weston_seat_init_touch(seat);
+		if (weston_seat_init_touch(seat) < 0) {
+			/* maybe we're a keyboard + touch device thus we need
+			 * to release the keyboard in case we couldn't make use
+			 * of the touch */
+			if (device->seat_caps & EVDEV_SEAT_KEYBOARD)
+				weston_seat_release_keyboard(seat);
+
+			free(device);
+			return NULL;
+		}
+
 		device->seat_caps |= EVDEV_SEAT_TOUCH;
 		device->touch_device = create_touch_device(device);
 	}

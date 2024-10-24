@@ -35,7 +35,7 @@
 extern "C" {
 #endif
 
-#define WESTON_DRM_BACKEND_CONFIG_VERSION 3
+#define WESTON_DRM_BACKEND_CONFIG_VERSION 4
 
 struct libinput_device;
 

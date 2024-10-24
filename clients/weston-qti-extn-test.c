@@ -25,6 +25,11 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #include <stdio.h>
@@ -65,8 +70,13 @@ static const struct wl_registry_listener registry_listener = {
 long int get_integer_input() {
   long int integerinput = -1;
   char *buffer = malloc(sizeof(char) * MAX_DIGITS);
+  if (!buffer) {
+    printf("Failed to allocate memory\n");
+    return -1;
+  }
+
   memset(buffer, 0, MAX_DIGITS);
-  char *bufferptr = fgets(buffer, 10, stdin);
+  char *bufferptr = fgets(buffer, MAX_DIGITS, stdin);
   if (bufferptr == NULL) {
     return integerinput;
   }
