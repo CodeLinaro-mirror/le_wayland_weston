@@ -1,6 +1,6 @@
 /*
  * Copyright © 2008-2011 Kristian Høgsberg
- * Copyright © 2012, 2017, 2018 Collabora, Ltd.
+ * Copyright © 2012, 2017, 2018, 2021 Collabora, Ltd.
  * Copyright © 2017, 2018 General Electric Company
  *
  * Permission is hereby granted, free of charge, to any person obtaining
@@ -23,6 +23,11 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #ifndef _WAYLAND_SYSTEM_COMPOSITOR_H_
@@ -79,6 +84,9 @@ struct linux_dmabuf_buffer;
 struct weston_recorder;
 struct weston_pointer_constraint;
 struct ro_anonymous_file;
+struct weston_color_profile;
+struct weston_color_transform;
+struct gbm_buffer;
 
 enum weston_keyboard_modifier {
 	MODIFIER_CTRL = (1 << 0),
@@ -185,10 +193,45 @@ enum weston_hdcp_protection {
 	WESTON_HDCP_ENABLE_TYPE_1
 };
 
-/** Represents a monitor
+/** Weston test suite quirks
  *
- * This object represents a monitor (hardware backends like DRM) or a window
- * (windowed nested backends).
+ * There are some things that need a specific behavior when we run Weston in the
+ * test suite. Tests can use this struct to select for certain behaviors.
+ *
+ * \sa compositor_setup
+ * \ingroup testharness
+ */
+struct weston_testsuite_quirks {
+	/** Force GL-renderer to do a full upload of wl_shm buffers. */
+	bool gl_force_full_upload;
+	/** Ensure GL shadow fb is used, and always repaint it fully. */
+	bool gl_force_full_redraw_of_shadow_fb;
+	/** Required enum weston_capability bit mask, otherwise skip run. */
+	uint32_t required_capabilities;
+};
+
+/** Weston test suite data that is given to compositor
+ *
+ * It contains two members:
+ *
+ * 1. The struct weston_testsuite_quirks, which can be used by the tests to
+ *    change certain behavior of Weston when running these tests.
+ * 2. The void *test_private_data member which can be used by the testsuite of
+ *    projects that uses libweston in order to give arbitrary test data to the
+ *    compositor. Its type should be defined by the testsuite of the project.
+ *
+ * \sa compositor_setup
+ * \ingroup testharness
+ */
+struct weston_testsuite_data {
+	struct weston_testsuite_quirks test_quirks;
+	void *test_private_data;
+};
+
+/** Represents a head, usually a display connector
+ *
+ * \rst
+ See :ref:`libweston-head`. \endrst
  *
  * \ingroup head
  */
@@ -207,6 +250,10 @@ struct weston_head {
 
 	int32_t mm_width;		/**< physical image width in mm */
 	int32_t mm_height;		/**< physical image height in mm */
+
+	/** WL_OUTPUT_TRANSFORM enum to apply to match native orientation */
+	uint32_t transform;
+
 	char *make;			/**< monitor manufacturer (PNP ID) */
 	char *model;			/**< monitor model */
 	char *serial_number;		/**< monitor serial */
@@ -222,7 +269,10 @@ struct weston_head {
 	enum weston_hdcp_protection current_protection;
 };
 
-/** Represents an output
+/** Content producer for heads
+ *
+ * \rst
+ See :ref:`libweston-output`. \endrst
  *
  * \ingroup output
  */
@@ -238,6 +288,9 @@ struct weston_output {
 	struct wl_list link;
 	struct weston_compositor *compositor;
 
+	/* struct weston_paint_node::output_link */
+	struct wl_list paint_node_list;
+
 	/** From global to output buffer coordinates. */
 	struct weston_matrix matrix;
 	/** From output buffer to global coordinates. */
@@ -245,6 +298,12 @@ struct weston_output {
 
 	struct wl_list animation_list;
 	int32_t x, y, width, height;
+
+	/** List of paint nodes in z-order, from top to bottom, maybe pruned
+	 *
+	 *  struct weston_paint_node::z_order_link
+	 */
+	struct wl_list paint_node_z_order_list;
 
 	/** Output area in global coordinates, simple rect */
 	pixman_region32_t region;
@@ -320,6 +379,12 @@ struct weston_output {
 
 	bool enabled; /**< is in the output_list, not pending list */
 	int scale;
+
+	struct weston_color_profile *color_profile;
+	struct weston_color_transform *from_sRGB_to_output;
+	struct weston_color_transform *from_sRGB_to_blend;
+	struct weston_color_transform *from_blend_to_output;
+	bool from_blend_to_output_by_backend;
 
 	int (*enable)(struct weston_output *output);
 	int (*disable)(struct weston_output *output);
@@ -777,6 +842,7 @@ struct weston_seat {
 	enum weston_keyboard_modifier modifier_state;
 	struct weston_surface *saved_kbd_focus;
 	struct wl_listener saved_kbd_focus_listener;
+	bool use_saved_kbd_focus;
 	struct wl_list drag_resource_list;
 
 	uint32_t selection_serial;
@@ -791,11 +857,11 @@ struct weston_seat {
 };
 
 enum {
-	WESTON_COMPOSITOR_ACTIVE,	/* normal rendering and events */
-	WESTON_COMPOSITOR_IDLE,		/* shell->unlock called on activity */
-	WESTON_COMPOSITOR_OFFSCREEN,	/* no rendering, no frame events */
-	WESTON_COMPOSITOR_SLEEPING	/* same as offscreen, but also set dpms
-                                         * to off */
+	WESTON_COMPOSITOR_ACTIVE,    /* normal rendering and events */
+	WESTON_COMPOSITOR_IDLE,      /* shell->unlock called on activity */
+	WESTON_COMPOSITOR_OFFSCREEN, /* no rendering, no frame events */
+	WESTON_COMPOSITOR_SLEEPING   /* same as offscreen, but also set dpms
+	                              * to off */
 };
 
 struct weston_layer_entry {
@@ -875,6 +941,8 @@ struct weston_plane {
 	struct wl_list link;
 };
 
+struct weston_drm_format_array;
+
 struct weston_renderer {
 	int (*read_pixels)(struct weston_output *output,
 			       pixman_format_code_t format, void *pixels,
@@ -900,22 +968,16 @@ struct weston_renderer {
 				    int src_x, int src_y,
 				    int width, int height);
 
+	/** See weston_compositor_import_gbm_buffer() */
+	bool (*import_gbm_buffer)(struct weston_compositor *ec,
+			        struct gbm_buffer *buffer);
+
 	/** See weston_compositor_import_dmabuf() */
 	bool (*import_dmabuf)(struct weston_compositor *ec,
 			      struct linux_dmabuf_buffer *buffer);
 
-	/** See weston_compositor_import_gbmbuf() */
-	bool (*import_gbm_buffer)(struct weston_compositor *ec,
-			      struct gbm_buffer *buffer);
-
-	/** On error sets num_formats to zero */
-	void (*query_dmabuf_formats)(struct weston_compositor *ec,
-				int **formats, int *num_formats);
-
-	/** On error sets num_modifiers to zero */
-	void (*query_dmabuf_modifiers)(struct weston_compositor *ec,
-				int format, uint64_t **modifiers,
-				int *num_modifiers);
+	const struct weston_drm_format_array *
+			(*get_supported_formats)(struct weston_compositor *ec);
 };
 
 enum weston_capability {
@@ -936,6 +998,9 @@ enum weston_capability {
 
 	/* renderer supports explicit synchronization */
 	WESTON_CAP_EXPLICIT_SYNC		= 0x0020,
+
+	/* renderer supports color management operations */
+	WESTON_CAP_COLOR_OPS			= 0x0040,
 };
 
 /* Configuration struct for a backend.
@@ -960,22 +1025,22 @@ enum weston_capability {
  * \endrststar
  */
 struct weston_backend_config {
-   /** Major version for the backend-specific config struct
-    *
-    * This version must match exactly what the backend expects, otherwise
-    * the struct is incompatible.
-    */
-   uint32_t struct_version;
+	/** Major version for the backend-specific config struct
+	 *
+	 * This version must match exactly what the backend expects, otherwise
+	 * the struct is incompatible.
+	 */
+	uint32_t struct_version;
 
-   /** Minor version of the backend-specific config struct
-    *
-    * This must be set to sizeof(struct backend-specific config).
-    * If the value here is smaller than what the backend expects, the
-    * extra config members will assume their default values.
-    *
-    * A value greater than what the backend expects is incompatible.
-    */
-   size_t struct_size;
+	/** Minor version of the backend-specific config struct
+	 *
+	 * This must be set to sizeof(struct backend-specific config).
+	 * If the value here is smaller than what the backend expects, the
+	 * extra config members will assume their default values.
+	 *
+	 * A value greater than what the backend expects is incompatible.
+	 */
+	size_t struct_size;
 };
 
 struct weston_backend;
@@ -998,6 +1063,9 @@ struct weston_touch_calibrator;
 struct weston_desktop_xwayland;
 struct weston_desktop_xwayland_interface;
 struct weston_debug_compositor;
+struct weston_color_manager;
+struct weston_dmabuf_feedback;
+struct weston_dmabuf_feedback_format_table;
 
 /** Main object, container-like structure which aggregates all other objects.
  *
@@ -1066,13 +1134,15 @@ struct weston_compositor {
 	struct weston_plane primary_plane;
 	uint32_t capabilities; /* combination of enum weston_capability */
 
+	struct weston_color_manager *color_manager;
 	struct weston_renderer *renderer;
-
 	pixman_format_code_t read_format;
 
 	struct weston_backend *backend;
-
 	struct weston_launcher *launcher;
+
+	struct weston_dmabuf_feedback *default_dmabuf_feedback;
+	struct weston_dmabuf_feedback_format_table *dmabuf_feedback_format_table;
 
 	struct wl_list plugin_api_list; /* struct weston_plugin_api::link */
 
@@ -1089,6 +1159,7 @@ struct weston_compositor {
 
 	clockid_t presentation_clock;
 	int32_t repaint_msec;
+	struct timespec last_repaint_start;
 
 	unsigned int activate_serial;
 
@@ -1101,6 +1172,9 @@ struct weston_compositor {
 
 	/* Whether to let the compositor run without any input device. */
 	bool require_input;
+
+	/* Test suite data */
+	struct weston_testsuite_data test_data;
 
 	/* Signal for a backend to inform a frontend about possible changes
 	 * in head status.
@@ -1134,6 +1208,7 @@ struct weston_buffer {
 	int32_t width, height;
 	uint32_t busy_count;
 	int y_inverted;
+	void *backend_private;
 };
 
 struct weston_buffer_reference {
@@ -1225,6 +1300,9 @@ struct weston_view {
 	struct wl_list surface_link;
 	struct wl_signal destroy_signal;
 
+	/* struct weston_paint_node::view_link */
+	struct wl_list paint_node_list;
+
 	struct wl_list link;             /* weston_compositor::view_list */
 	struct weston_layer_entry layer_link; /* part of geometry */
 	struct weston_plane *plane;
@@ -1237,8 +1315,6 @@ struct weston_view {
 	pixman_region32_t clip;          /* See weston_view_damage_below() */
 	float alpha;                     /* part of geometry, see below */
 
-	void *renderer_state;
-
 	/* Surface geometry state, mutable.
 	 * If you change anything, call weston_surface_geometry_dirty().
 	 * That includes the transformations referenced from the list.
@@ -1249,7 +1325,7 @@ struct weston_view {
 		/* struct weston_transform */
 		struct wl_list transformation_list;
 
-		/* managed by weston_surface_set_transform_parent() */
+		/* managed by weston_view_set_transform_parent() */
 		struct weston_view *parent;
 		struct wl_listener parent_destroy_listener;
 		struct wl_list child_list; /* geometry.parent_link */
@@ -1386,6 +1462,9 @@ struct weston_surface {
 	struct weston_compositor *compositor;
 	struct wl_signal commit_signal;
 
+	/* struct weston_paint_node::surface_link */
+	struct wl_list paint_node_list;
+
 	/** Damage in local coordinates from the client, for tex upload. */
 	pixman_region32_t damage;
 
@@ -1432,7 +1511,7 @@ struct weston_surface {
 	/* All the pending state, that wl_surface.commit will apply. */
 	struct weston_surface_state pending;
 
-	/* Matrices representating of the full transformation between
+	/* Matrices representing of the full transformation between
 	 * buffer and surface coordinates.  These matrices are updated
 	 * using the weston_surface_build_buffer_matrix function. */
 	struct weston_matrix buffer_to_surface_matrix;
@@ -1474,6 +1553,8 @@ struct weston_surface {
 	struct wl_resource *synchronization_resource;
 	int acquire_fence_fd;
 	struct weston_buffer_release_reference buffer_release_ref;
+
+	struct weston_dmabuf_feedback *dmabuf_feedback;
 
 	enum weston_hdcp_protection desired_protection;
 	enum weston_hdcp_protection current_protection;
@@ -1565,9 +1646,9 @@ weston_view_from_global_fixed(struct weston_view *view,
 			      wl_fixed_t *vx, wl_fixed_t *vy);
 
 void
-weston_view_activate(struct weston_view *view,
-		     struct weston_seat *seat,
-		     uint32_t flags);
+weston_view_activate_input(struct weston_view *view,
+		           struct weston_seat *seat,
+		           uint32_t flags);
 
 void
 notify_modifiers(struct weston_seat *seat, uint32_t serial);
@@ -1580,6 +1661,8 @@ weston_layer_entry_remove(struct weston_layer_entry *entry);
 void
 weston_layer_init(struct weston_layer *layer,
 		  struct weston_compositor *compositor);
+void
+weston_layer_fini(struct weston_layer *layer);
 void
 weston_layer_set_position(struct weston_layer *layer,
 			  enum weston_layer_position position);
@@ -1767,13 +1850,15 @@ void
 weston_compositor_get_time(struct timespec *time);
 
 void
-weston_compositor_tear_down(struct weston_compositor *ec);
-void
 weston_compositor_destroy(struct weston_compositor *ec);
 
 struct weston_compositor *
 weston_compositor_create(struct wl_display *display,
-			 struct weston_log_context *log_ctx, void *user_data);
+			 struct weston_log_context *log_ctx, void *user_data,
+			 const struct weston_testsuite_data *test_data);
+
+void *
+weston_compositor_get_test_data(struct weston_compositor *ec);
 
 bool
 weston_compositor_add_destroy_listener_once(struct weston_compositor *compositor,
@@ -1937,6 +2022,9 @@ weston_keyboard_send_keymap(struct weston_keyboard *kbd,
 int
 weston_compositor_load_xwayland(struct weston_compositor *compositor);
 
+int
+weston_compositor_load_color_manager(struct weston_compositor *compositor);
+
 bool
 weston_head_is_connected(struct weston_head *head);
 
@@ -1957,6 +2045,9 @@ weston_head_get_name(struct weston_head *head);
 
 struct weston_output *
 weston_head_get_output(struct weston_head *head);
+
+uint32_t
+weston_head_get_transform(struct weston_head *head);
 
 void
 weston_head_detach(struct weston_head *head);
@@ -2012,6 +2103,10 @@ void
 weston_output_set_transform(struct weston_output *output,
 			    uint32_t transform);
 
+bool
+weston_output_set_color_profile(struct weston_output *output,
+				struct weston_color_profile *cprof);
+
 void
 weston_output_init(struct weston_output *output,
 		   struct weston_compositor *compositor,
@@ -2044,10 +2139,10 @@ weston_compositor_enable_touch_calibrator(struct weston_compositor *compositor,
 				weston_touch_calibration_save_func save);
 
 struct weston_log_context *
-weston_log_ctx_compositor_create(void);
+weston_log_ctx_create(void);
 
 void
-weston_log_ctx_compositor_destroy(struct weston_compositor *compositor);
+weston_log_ctx_destroy(struct weston_log_context *log_ctx);
 
 int
 weston_compositor_enable_content_protection(struct weston_compositor *compositor);
@@ -2055,6 +2150,19 @@ weston_compositor_enable_content_protection(struct weston_compositor *compositor
 void
 weston_timeline_refresh_subscription_objects(struct weston_compositor *wc,
 					     void *object);
+
+struct weston_color_profile *
+weston_color_profile_ref(struct weston_color_profile *cprof);
+
+void
+weston_color_profile_unref(struct weston_color_profile *cprof);
+
+const char *
+weston_color_profile_get_description(struct weston_color_profile *cprof);
+
+struct weston_color_profile *
+weston_compositor_load_icc_file(struct weston_compositor *compositor,
+				const char *path);
 
 #ifdef  __cplusplus
 }

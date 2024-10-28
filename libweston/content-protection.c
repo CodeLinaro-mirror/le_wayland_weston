@@ -32,6 +32,7 @@
 #include <string.h>
 #include <libweston/libweston.h>
 #include <libweston/weston-log.h>
+#include "libweston-internal.h"
 #include "weston-content-protection-server-protocol.h"
 #include "shared/helpers.h"
 #include "shared/timespec-util.h"
@@ -92,7 +93,7 @@ set_type(struct wl_client *client, struct wl_resource *resource,
 				       "wl_surface@%"PRIu32" Invalid content-type %d for request:set_type\n",
 				       wl_resource_get_id(surface_resource), content_type);
 
-		content_protection_log(cp, "wl_surface@%"PRIu32" Invalid content-type %d for resquest:set_type\n",
+		content_protection_log(cp, "wl_surface@%"PRIu32" Invalid content-type %d for request:set_type\n",
 				       wl_resource_get_id(surface_resource), content_type);
 		return;
 	}
@@ -186,9 +187,12 @@ cp_destroy_listener(struct wl_listener *listener, void *data)
 			  destroy_listener);
 	wl_list_remove(&cp->destroy_listener.link);
 	wl_list_remove(&cp->protected_list);
-	weston_compositor_log_scope_destroy(cp->debug);
+	weston_log_scope_destroy(cp->debug);
 	cp->debug = NULL;
+	if (cp->surface_protection_update)
+		wl_event_source_remove(cp->surface_protection_update);
 	cp->surface_protection_update = NULL;
+	cp->compositor->content_protection = NULL;
 	free(cp);
 }
 
@@ -339,8 +343,7 @@ weston_compositor_enable_content_protection(struct weston_compositor *compositor
 
 	cp->destroy_listener.notify = cp_destroy_listener;
 	wl_signal_add(&compositor->destroy_signal, &cp->destroy_listener);
-	cp->debug = weston_compositor_add_log_scope(compositor->weston_log_ctx,
-						    "content-protection-debug",
+	cp->debug = weston_compositor_add_log_scope(compositor, "content-protection-debug",
 						    "debug-logs for content-protection",
 						    NULL, NULL, NULL);
 	return 0;

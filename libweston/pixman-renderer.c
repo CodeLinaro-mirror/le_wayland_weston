@@ -33,9 +33,12 @@
 #include <assert.h>
 
 #include "pixman-renderer.h"
+#include "color.h"
+#include "pixel-formats.h"
 #include "shared/helpers.h"
 
 #include <linux/input.h>
+#include "gbm-buffer-backend.h"
 
 struct pixman_output_state {
 	void *shadow_buffer;
@@ -64,6 +67,7 @@ struct pixman_renderer {
 	struct weston_binding *debug_binding;
 
 	struct wl_signal destroy_signal;
+	struct gbm_device* gbm_device;
 };
 
 static inline struct pixman_output_state *
@@ -123,20 +127,6 @@ pixman_renderer_read_pixels(struct weston_output *output,
 	pixman_image_unref(out_buf);
 
 	return 0;
-}
-
-static void
-region_global_to_output(struct weston_output *output, pixman_region32_t *region)
-{
-	if (output->zoom.active) {
-		weston_matrix_transform_region(region, &output->matrix, region);
-	} else {
-		pixman_region32_translate(region, -output->x, -output->y);
-		weston_transformed_region(output->width, output->height,
-					  output->transform,
-					  output->current_scale,
-					  region, region);
-	}
 }
 
 #define D2F(v) pixman_double_to_fixed((double)v)
@@ -229,6 +219,12 @@ composite_whole(pixman_op_t op,
 	pixman_image_set_transform(src, transform);
 	pixman_image_set_filter(src, filter, NULL, 0);
 
+	/* bilinear filtering needs the equivalent of OpenGL CLAMP_TO_EDGE */
+	if (filter == PIXMAN_FILTER_NEAREST)
+		pixman_image_set_repeat(src, PIXMAN_REPEAT_NONE);
+	else
+		pixman_image_set_repeat(src, PIXMAN_REPEAT_PAD);
+
 	pixman_image_composite32(op, src, mask, dest,
 				 0, 0, /* src_x, src_y */
 				 0, 0, /* mask_x, mask_y */
@@ -254,9 +250,17 @@ composite_clipped(pixman_image_t *src,
 	void *src_data;
 	int i;
 
-	/* Hardcoded to use PIXMAN_OP_OVER, because sampling outside of
+	/*
+	 * Hardcoded to use PIXMAN_OP_OVER, because sampling outside of
 	 * a Pixman image produces (0,0,0,0) instead of discarding the
 	 * fragment.
+	 *
+	 * Also repeat mode must be PIXMAN_REPEAT_NONE (the default) to
+	 * actually sample (0,0,0,0). This may cause issues for clients that
+	 * expect OpenGL CLAMP_TO_EDGE sampling behavior on their buffer.
+	 * Using temporary 'boximg' it is not possible to apply CLAMP_TO_EDGE
+	 * correctly with bilinear filter. Maybe trapezoid rendering could be
+	 * the answer instead of source clip?
 	 */
 
 	dest_width = pixman_image_get_width(dest);
@@ -412,7 +416,8 @@ draw_view_translated(struct weston_view *view, struct weston_output *output,
 							  repaint_global,
 							  &surface->opaque,
 							  view);
-			region_global_to_output(output, &repaint_output);
+			weston_output_region_from_global(output,
+							 &repaint_output);
 
 			repaint_region(view, output, &repaint_output, NULL,
 				       PIXMAN_OP_SRC);
@@ -423,7 +428,7 @@ draw_view_translated(struct weston_view *view, struct weston_output *output,
 		region_intersect_only_translation(&repaint_output,
 						  repaint_global,
 						  &surface_blend, view);
-		region_global_to_output(output, &repaint_output);
+		weston_output_region_from_global(output, &repaint_output);
 
 		repaint_region(view, output, &repaint_output, NULL,
 			       PIXMAN_OP_OVER);
@@ -459,7 +464,7 @@ draw_view_source_clipped(struct weston_view *view,
 
 	pixman_region32_init(&repaint_output);
 	pixman_region32_copy(&repaint_output, repaint_global);
-	region_global_to_output(output, &repaint_output);
+	weston_output_region_from_global(output, &repaint_output);
 
 	repaint_region(view, output, &repaint_output, &buffer_region,
 		       PIXMAN_OP_OVER);
@@ -470,12 +475,17 @@ draw_view_source_clipped(struct weston_view *view,
 }
 
 static void
-draw_view(struct weston_view *ev, struct weston_output *output,
-	  pixman_region32_t *damage) /* in global coordinates */
+draw_paint_node(struct weston_paint_node *pnode,
+		pixman_region32_t *damage /* in global coordinates */)
 {
-	struct pixman_surface_state *ps = get_surface_state(ev->surface);
+	struct pixman_surface_state *ps = get_surface_state(pnode->surface);
 	/* repaint bounding region in global coordinates: */
 	pixman_region32_t repaint;
+
+	if (!pnode->surf_xform_valid)
+		return;
+
+	assert(pnode->surf_xform.transform == NULL);
 
 	/* No buffer attached */
 	if (!ps->image)
@@ -483,13 +493,13 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 
 	pixman_region32_init(&repaint);
 	pixman_region32_intersect(&repaint,
-				  &ev->transform.boundingbox, damage);
-	pixman_region32_subtract(&repaint, &repaint, &ev->clip);
+				  &pnode->view->transform.boundingbox, damage);
+	pixman_region32_subtract(&repaint, &repaint, &pnode->view->clip);
 
 	if (!pixman_region32_not_empty(&repaint))
 		goto out;
 
-	if (view_transformation_is_translation(ev)) {
+	if (view_transformation_is_translation(pnode->view)) {
 		/* The simple case: The surface regions opaque, non-opaque,
 		 * etc. are convertible to global coordinate space.
 		 * There is no need to use a source clip region.
@@ -497,7 +507,7 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 		 * Also the boundingbox is accurate rather than an
 		 * approximation.
 		 */
-		draw_view_translated(ev, output, &repaint);
+		draw_view_translated(pnode->view, pnode->output, &repaint);
 	} else {
 		/* The complex case: the view transformation does not allow
 		 * converting opaque etc. regions into global coordinate space.
@@ -506,7 +516,7 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 		 * to be used whole. Source clipping does not work with
 		 * PIXMAN_OP_SRC.
 		 */
-		draw_view_source_clipped(ev, output, &repaint);
+		draw_view_source_clipped(pnode->view, pnode->output, &repaint);
 	}
 
 out:
@@ -516,11 +526,13 @@ static void
 repaint_surfaces(struct weston_output *output, pixman_region32_t *damage)
 {
 	struct weston_compositor *compositor = output->compositor;
-	struct weston_view *view;
+	struct weston_paint_node *pnode;
 
-	wl_list_for_each_reverse(view, &compositor->view_list, link)
-		if (view->plane == &compositor->primary_plane)
-			draw_view(view, output, damage);
+	wl_list_for_each_reverse(pnode, &output->paint_node_z_order_list,
+				 z_order_link) {
+		if (pnode->view->plane == &compositor->primary_plane)
+			draw_paint_node(pnode, damage);
+	}
 }
 
 static void
@@ -532,7 +544,7 @@ copy_to_hw_buffer(struct weston_output *output, pixman_region32_t *region)
 	pixman_region32_init(&output_region);
 	pixman_region32_copy(&output_region, region);
 
-	region_global_to_output(output, &output_region);
+	weston_output_region_from_global(output, &output_region);
 
 	pixman_image_set_clip_region32 (po->hw_buffer, &output_region);
 	pixman_region32_fini(&output_region);
@@ -556,6 +568,9 @@ pixman_renderer_repaint_output(struct weston_output *output,
 {
 	struct pixman_output_state *po = get_output_state(output);
 	pixman_region32_t hw_damage;
+
+	assert(output->from_blend_to_output_by_backend ||
+	       output->from_blend_to_output == NULL);
 
 	if (!po->hw_buffer) {
 		po->hw_extra_damage = NULL;
@@ -607,11 +622,20 @@ buffer_state_handle_buffer_destroy(struct wl_listener *listener, void *data)
 }
 
 static void
+pixman_renderer_attach_gbm_buffer(struct weston_surface *surface,
+                                   struct weston_buffer *buffer,
+                                   struct gbm_buffer *gbmbuf)
+{
+	buffer->width = gbmbuf->width;
+	buffer->height = gbmbuf->height;
+}
+
+static void
 pixman_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 {
 	struct pixman_surface_state *ps = get_surface_state(es);
 	struct wl_shm_buffer *shm_buffer;
-	pixman_format_code_t pixman_format;
+	const struct pixel_format_info *pixel_info;
 
 	weston_buffer_reference(&ps->buffer_ref, buffer);
 	weston_buffer_release_reference(&ps->buffer_release_ref,
@@ -633,41 +657,36 @@ pixman_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	shm_buffer = wl_shm_buffer_get(buffer->resource);
 
 	if (! shm_buffer) {
-		weston_log("Pixman renderer supports only SHM buffers\n");
-		weston_buffer_reference(&ps->buffer_ref, NULL);
-		weston_buffer_release_reference(&ps->buffer_release_ref, NULL);
-		return;
+		struct gbm_buffer *gbmbuf;
+		if (gbmbuf = gbm_buffer_get(buffer->resource)) {
+			pixman_renderer_attach_gbm_buffer(es, buffer, gbmbuf);
+			return;
+		} else {
+			weston_log("Pixman renderer supports only SHM and gbm buffers\n");
+			weston_buffer_reference(&ps->buffer_ref, NULL);
+			weston_buffer_release_reference(&ps->buffer_release_ref, NULL);
+			return;
+		}
 	}
 
-	switch (wl_shm_buffer_get_format(shm_buffer)) {
-	case WL_SHM_FORMAT_XRGB8888:
-		pixman_format = PIXMAN_x8r8g8b8;
-		es->is_opaque = true;
-		break;
-	case WL_SHM_FORMAT_ARGB8888:
-		pixman_format = PIXMAN_a8r8g8b8;
-		es->is_opaque = false;
-		break;
-	case WL_SHM_FORMAT_RGB565:
-		pixman_format = PIXMAN_r5g6b5;
-		es->is_opaque = true;
-		break;
-	default:
+	pixel_info = pixel_format_get_info_shm(wl_shm_buffer_get_format(shm_buffer));
+	if (!pixel_info || !pixman_format_supported_source(pixel_info->pixman_format)) {
 		weston_log("Unsupported SHM buffer format 0x%x\n",
 			wl_shm_buffer_get_format(shm_buffer));
 		weston_buffer_reference(&ps->buffer_ref, NULL);
 		weston_buffer_release_reference(&ps->buffer_release_ref, NULL);
-                weston_buffer_send_server_error(buffer,
+		weston_buffer_send_server_error(buffer,
 			"disconnecting due to unhandled buffer type");
 		return;
-	break;
 	}
+
+	es->is_opaque = pixel_format_is_opaque(pixel_info);
 
 	buffer->shm_buffer = shm_buffer;
 	buffer->width = wl_shm_buffer_get_width(shm_buffer);
 	buffer->height = wl_shm_buffer_get_height(shm_buffer);
 
-	ps->image = pixman_image_create_bits(pixman_format,
+	ps->image = pixman_image_create_bits(pixel_info->pixman_format,
 		buffer->width, buffer->height,
 		wl_shm_buffer_get_data(shm_buffer),
 		wl_shm_buffer_get_stride(shm_buffer));
@@ -848,10 +867,72 @@ debug_binding(struct weston_keyboard *keyboard, const struct timespec *time,
 	}
 }
 
+
+static bool
+pixman_renderer_import_gbm_buffer(
+		struct weston_compositor *compositor, struct gbm_buffer *gbm_buf)
+{
+	struct gbm_buf_info  buf_info;
+	generic_buf_layout_t buf_lyt;
+	struct gbm_bo *bo;
+	uint32_t j;
+	struct pixman_renderer *pr = get_renderer(compositor);
+	struct gbm_device *gbm = pr->gbm_device;
+
+	if (gbm == NULL) {
+		weston_log("pixman_renderer_import_gbm_buffer::gbm_device is null!\n");
+		return false;
+	}
+
+	if (gbm_buf == NULL) {
+		return false;
+	}
+
+	buf_info.fd          = gbm_buf->fd;
+	buf_info.metadata_fd = gbm_buf->metadata_fd;
+	buf_info.height      = gbm_buf->height;
+	buf_info.width       = gbm_buf->width;
+	buf_info.format      = gbm_buf->format;
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"pixman_renderer_import_gbm_buffer:Invoked");
+
+	//We will import BO to create an entry into the hash map for this buf_info
+	bo = gbm_bo_import(gbm, GBM_BO_IMPORT_GBM_BUF_TYPE, &buf_info, GBM_BO_USE_RENDERING);
+
+	//save gbm buffer object
+	gbm_buf->bo = bo;
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"pixman_renderer_import_gbm_buffer:bo created= %p",bo);
+
+	int ret = gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_lyt);
+	if (ret == GBM_ERROR_NONE) {
+		gbm_buf->num_planes = buf_lyt.num_planes;
+		for(j = 0;j < buf_lyt.num_planes; j++) {
+			gbm_buf->offset[j] = buf_lyt.planes[j].offset;
+			gbm_buf->stride[j] = buf_lyt.planes[j].v_increment;
+		}
+	}
+	else {
+		GBM_PROTOCOL_LOG(LOG_DBG,"GET PLANE Info failed\n");
+		return false;
+	}
+
+	//Fill up the remaining fields with default values
+	for (;j < MAX_NUM_PLANES; j++) {
+		gbm_buf->offset[j] = 0;
+		gbm_buf->stride[j] = 0;
+	}
+
+	GBM_PROTOCOL_LOG(LOG_DBG,"pixman_renderer_import_gbm_buffer:Exited");
+	return true;
+}
+
 WL_EXPORT int
 pixman_renderer_init(struct weston_compositor *ec)
 {
 	struct pixman_renderer *renderer;
+	const struct pixel_format_info *pixel_info, *info_argb8888, *info_xrgb8888;
+	unsigned int i, num_formats;
 
 	renderer = zalloc(sizeof *renderer);
 	if (renderer == NULL)
@@ -869,6 +950,8 @@ pixman_renderer_init(struct weston_compositor *ec)
 		pixman_renderer_surface_get_content_size;
 	renderer->base.surface_copy_content =
 		pixman_renderer_surface_copy_content;
+	renderer->base.import_gbm_buffer =
+		pixman_renderer_import_gbm_buffer;
 	ec->renderer = &renderer->base;
 	ec->capabilities |= WESTON_CAP_ROTATION_ANY;
 	ec->capabilities |= WESTON_CAP_VIEW_CLIP_MASK;
@@ -877,7 +960,21 @@ pixman_renderer_init(struct weston_compositor *ec)
 		weston_compositor_add_debug_binding(ec, KEY_R,
 						    debug_binding, ec);
 
-	wl_display_add_shm_format(ec->wl_display, WL_SHM_FORMAT_RGB565);
+	info_argb8888 = pixel_format_get_info_shm(WL_SHM_FORMAT_ARGB8888);
+	info_xrgb8888 = pixel_format_get_info_shm(WL_SHM_FORMAT_XRGB8888);
+
+	num_formats = pixel_format_get_info_count();
+	for (i = 0; i < num_formats; i++) {
+		pixel_info = pixel_format_get_info_by_index(i);
+		if (!pixman_format_supported_source(pixel_info->pixman_format))
+			continue;
+
+		/* skip formats which libwayland registers by default */
+		if (pixel_info == info_argb8888 || pixel_info == info_xrgb8888)
+			continue;
+
+		wl_display_add_shm_format(ec->wl_display, pixel_info->format);
+	}
 
 	wl_signal_init(&renderer->destroy_signal);
 
@@ -910,7 +1007,8 @@ pixman_renderer_output_set_hw_extra_damage(struct weston_output *output,
 }
 
 WL_EXPORT int
-pixman_renderer_output_create(struct weston_output *output, uint32_t flags)
+pixman_renderer_output_create(struct weston_output *output,
+			      const struct pixman_renderer_output_options *options)
 {
 	struct pixman_output_state *po;
 	int w, h;
@@ -919,7 +1017,12 @@ pixman_renderer_output_create(struct weston_output *output, uint32_t flags)
 	if (po == NULL)
 		return -1;
 
-	if (flags & PIXMAN_RENDERER_OUTPUT_USE_SHADOW) {
+	if (options->gbm_handle) {
+		struct pixman_renderer *pr = get_renderer(output->compositor);
+		pr->gbm_device = options->gbm_handle;
+	}
+
+	if (options->use_shadow) {
 		/* set shadow image transformation */
 		w = output->current_mode->width;
 		h = output->current_mode->height;

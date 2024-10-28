@@ -1,22 +1,24 @@
 deps_libweston = [
-	dep_gbm,
 	dep_wayland_server,
 	dep_pixman,
 	dep_libm,
 	dep_libdl,
-	dep_libdrm_headers,
+	dep_libdrm,
 	dep_xkbcommon,
-	dep_matrix_c,
-        dep_gbm
+	dep_gbm,
+	dep_matrix_c
 ]
 srcs_libweston = [
 	git_version_h,
 	'animation.c',
 	'bindings.c',
 	'clipboard.c',
+	'color.c',
+	'color-noop.c',
 	'compositor.c',
 	'content-protection.c',
 	'data-device.c',
+	'drm-formats.c',
 	'input.c',
 	'linux-dmabuf.c',
 	'linux-explicit-synchronization.c',
@@ -153,15 +155,15 @@ srcs_session_helper = [
 	'launcher-util.c',
 	'launcher-weston-launch.c',
 ]
-deps_session_helper = [ dep_libweston_private_h ]
+deps_session_helper = [
+	dep_libweston_private_h,
+	dep_libweston_private,
+]
 
 if get_option('backend-drm')
 	deps_session_helper += dep_libdrm
 endif
 
-if get_option('backend-sdm')
-	deps_session_helper += [dep_libdrm, dep_libsdmcore, dep_libsdmutils]
-endif
 
 systemd_dep = dependency('', required: false)
 if get_option('launcher-logind')
@@ -192,11 +194,21 @@ if get_option('launcher-logind')
 		systemd_dep,
 	]
 endif
+if get_option('launcher-libseat')
+	libseat_dep = dependency('libseat', version: '>= 0.4')
+	config_h.set('HAVE_LIBSEAT', '1')
+	srcs_session_helper += [
+		'launcher-libseat.c',
+	]
+	deps_session_helper += [
+		libseat_dep,
+	]
+endif
 
 lib_session_helper = static_library(
 	'session-helper',
 	srcs_session_helper,
-	include_directories: [common_inc, ('backend-sdm')],
+	include_directories: common_inc,
 	dependencies: deps_session_helper,
 	install: false
 )
@@ -226,7 +238,8 @@ dep_vertex_clipping = declare_dependency(
 	include_directories: include_directories('.')
 )
 
-if get_option('weston-launch')
+if get_option('deprecated-weston-launch')
+	warning('weston-launch is deprecated and will be removed in a future release. Please migrate to libseat and seatd-launch.')
 	dep_pam = cc.find_library('pam')
 
 	if not cc.has_function('pam_open_session', dependencies: dep_pam)
@@ -244,9 +257,20 @@ if get_option('weston-launch')
 	meson.add_install_script('echo', 'REMINDER: You are installing weston-launch, please make it setuid-root.')
 endif
 
+install_headers(
+	'backend.h',
+	'libinput-seat.h',
+	'libweston-internal.h',
+	'linux-dmabuf.h',
+	'color.h',
+	'launcher-util.h',
+	'pixman-renderer.h',
+	subdir: dir_include_libweston_private_install
+)
+
+subdir('color-lcms')
 subdir('renderer-gl')
 subdir('backend-drm')
-subdir('backend-sdm')
 subdir('backend-fbdev')
 subdir('backend-headless')
 subdir('backend-rdp')

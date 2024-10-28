@@ -37,6 +37,7 @@
 
 #include <libweston-desktop/libweston-desktop.h>
 #include "internal.h"
+#include "shared/helpers.h"
 
 /************************************************************************************
  * WARNING: This file implements the stable xdg shell protocol.
@@ -44,7 +45,7 @@
  * implements the older unstable xdg shell v6 protocol.
  ************************************************************************************/
 
-#define WD_XDG_SHELL_PROTOCOL_VERSION 1
+#define WD_XDG_SHELL_PROTOCOL_VERSION 3
 
 static const char *weston_desktop_xdg_toplevel_role = "xdg_toplevel";
 static const char *weston_desktop_xdg_popup_role = "xdg_popup";
@@ -129,10 +130,15 @@ struct weston_desktop_xdg_popup {
 	struct weston_desktop_xdg_surface *parent;
 	struct weston_desktop_seat *seat;
 	struct weston_geometry geometry;
+
+	bool pending_reposition;
+	uint32_t pending_reposition_token;
 };
 
-#define weston_desktop_surface_role_biggest_size (sizeof(struct weston_desktop_xdg_toplevel))
-#define weston_desktop_surface_configure_biggest_size (sizeof(struct weston_desktop_xdg_toplevel))
+#define weston_desktop_surface_role_biggest_size \
+	MAX(sizeof(struct weston_desktop_xdg_toplevel), \
+	    sizeof(struct weston_desktop_xdg_popup))
+#define weston_desktop_surface_configure_biggest_size weston_desktop_surface_role_biggest_size
 
 
 static struct weston_geometry
@@ -302,6 +308,27 @@ weston_desktop_xdg_positioner_protocol_set_offset(struct wl_client *wl_client,
 }
 
 static void
+weston_desktop_xdg_positioner_protocol_set_reactive(struct wl_client *wl_client,
+						    struct wl_resource *resource)
+{
+}
+
+static void
+weston_desktop_xdg_positioner_protocol_set_parent_size(struct wl_client *wl_client,
+						       struct wl_resource *resource,
+						       int32_t width,
+						       int32_t height)
+{
+}
+
+static void
+weston_desktop_xdg_positioner_protocol_set_parent_configure(struct wl_client *wl_client,
+							    struct wl_resource *resource,
+							    uint32_t serial)
+{
+}
+
+static void
 weston_desktop_xdg_positioner_destroy(struct wl_resource *resource)
 {
 	struct weston_desktop_xdg_positioner *positioner =
@@ -318,6 +345,9 @@ static const struct xdg_positioner_interface weston_desktop_xdg_positioner_imple
 	.set_gravity               = weston_desktop_xdg_positioner_protocol_set_gravity,
 	.set_constraint_adjustment = weston_desktop_xdg_positioner_protocol_set_constraint_adjustment,
 	.set_offset                = weston_desktop_xdg_positioner_protocol_set_offset,
+	.set_reactive              = weston_desktop_xdg_positioner_protocol_set_reactive,
+	.set_parent_size           = weston_desktop_xdg_positioner_protocol_set_parent_size,
+	.set_parent_configure      = weston_desktop_xdg_positioner_protocol_set_parent_configure,
 };
 
 static void
@@ -431,25 +461,25 @@ weston_desktop_xdg_toplevel_protocol_move(struct wl_client *wl_client,
 
 static void
 weston_desktop_xdg_toplevel_protocol_set_position(struct wl_client *wl_client,
-                                         struct wl_resource *resource,
-                                         uint32_t x,
-                                         uint32_t y)
+						struct wl_resource *resource,
+						uint32_t x,
+						uint32_t y)
 {
-       struct weston_desktop_surface *dsurface =
-               wl_resource_get_user_data(resource);
-       struct weston_desktop_xdg_toplevel *toplevel =
-               weston_desktop_surface_get_implementation_data(dsurface);
+	struct weston_desktop_surface *dsurface =
+	wl_resource_get_user_data(resource);
+	struct weston_desktop_xdg_toplevel *toplevel =
+	weston_desktop_surface_get_implementation_data(dsurface);
 
-       if (!toplevel->base.configured) {
-               wl_resource_post_error(toplevel->resource,
-                                      XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
-                                      "Surface has not been configured yet");
-               return;
-       }
+	if (!toplevel->base.configured) {
+		wl_resource_post_error(toplevel->resource,
+				XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
+				"Surface has not been configured yet");
+		return;
+	}
 
-       if (toplevel->next.state.maximized || toplevel->next.state.fullscreen)
-               return;
-       weston_desktop_surface_set_position(toplevel->base.desktop, dsurface, x, y);
+	if (toplevel->next.state.maximized || toplevel->next.state.fullscreen)
+		return;
+	weston_desktop_surface_set_position(toplevel->base.desktop, dsurface, x, y);
 }
 
 static void
@@ -696,7 +726,7 @@ weston_desktop_xdg_toplevel_committed(struct weston_desktop_xdg_toplevel *toplev
 	struct weston_geometry geometry =
 		weston_desktop_surface_get_geometry(toplevel->base.desktop_surface);
 
-	if ((toplevel->next.state.maximized || toplevel->next.state.fullscreen) &&
+	if (toplevel->next.state.maximized &&
 	    (toplevel->next.size.width != geometry.width ||
 	     toplevel->next.size.height != geometry.height)) {
 		struct weston_desktop_client *client =
@@ -706,7 +736,29 @@ weston_desktop_xdg_toplevel_committed(struct weston_desktop_xdg_toplevel *toplev
 
 		wl_resource_post_error(client_resource,
 				       XDG_WM_BASE_ERROR_INVALID_SURFACE_STATE,
-				       "xdg_surface buffer does not match the configured state");
+				       "xdg_surface geometry (%" PRIi32 " x %" PRIi32 ") "
+				       "does not match the configured maximized state (%" PRIi32 " x %" PRIi32 ")",
+				       geometry.width, geometry.height,
+				       toplevel->next.size.width,
+				       toplevel->next.size.height);
+		return;
+	}
+
+	if (toplevel->next.state.fullscreen &&
+	    (toplevel->next.size.width < geometry.width ||
+	     toplevel->next.size.height < geometry.height)) {
+		struct weston_desktop_client *client =
+			weston_desktop_surface_get_client(toplevel->base.desktop_surface);
+		struct wl_resource *client_resource =
+			weston_desktop_client_get_resource(client);
+
+		wl_resource_post_error(client_resource,
+				       XDG_WM_BASE_ERROR_INVALID_SURFACE_STATE,
+				       "xdg_surface geometry (%" PRIi32 " x %" PRIi32 ") "
+				       "is larger than the configured fullscreen state (%" PRIi32 " x %" PRIi32 ")",
+				       geometry.width, geometry.height,
+				       toplevel->next.size.width,
+				       toplevel->next.size.height);
 		return;
 	}
 
@@ -786,7 +838,7 @@ static const struct xdg_toplevel_interface weston_desktop_xdg_toplevel_implement
 	.set_app_id          = weston_desktop_xdg_toplevel_protocol_set_app_id,
 	.show_window_menu    = weston_desktop_xdg_toplevel_protocol_show_window_menu,
 	.move                = weston_desktop_xdg_toplevel_protocol_move,
-        .set_position        = weston_desktop_xdg_toplevel_protocol_set_position,
+	.set_position        = weston_desktop_xdg_toplevel_protocol_set_position,
 	.resize              = weston_desktop_xdg_toplevel_protocol_resize,
 	.set_min_size        = weston_desktop_xdg_toplevel_protocol_set_min_size,
 	.set_max_size        = weston_desktop_xdg_toplevel_protocol_set_max_size,
@@ -854,9 +906,60 @@ weston_desktop_xdg_popup_protocol_grab(struct wl_client *wl_client,
 					  popup->seat, serial);
 }
 
+static bool
+is_positioner_valid(struct weston_desktop_xdg_positioner *positioner)
+{
+	/* Checking whether the size and anchor rect both have a positive size
+	 * is enough to verify both have been correctly set */
+	if (positioner->size.width == 0 || positioner->anchor_rect.width == 0)
+		return false;
+
+	if (positioner->anchor_rect.height == 0)
+		return false;
+
+	return true;
+}
+
+static void
+weston_desktop_xdg_popup_protocol_reposition(struct wl_client *wl_client,
+					     struct wl_resource *resource,
+					     struct wl_resource *positioner_resource,
+					     uint32_t token)
+{
+	struct weston_desktop_surface *dsurface =
+		wl_resource_get_user_data(resource);
+	struct weston_desktop_xdg_popup *popup =
+		weston_desktop_surface_get_implementation_data(dsurface);
+	struct weston_desktop_xdg_positioner *positioner =
+		wl_resource_get_user_data(positioner_resource);
+	struct weston_desktop_surface *parent_dsurface;
+
+	if (!is_positioner_valid(positioner)) {
+		wl_resource_post_error(resource,
+				       XDG_WM_BASE_ERROR_INVALID_POSITIONER,
+				       "positioner object is not complete");
+		return;
+	}
+
+	parent_dsurface = popup->parent->desktop_surface;
+	popup->geometry =
+		weston_desktop_xdg_positioner_get_geometry(positioner,
+							   dsurface,
+							   parent_dsurface);
+	popup->pending_reposition = true;
+	popup->pending_reposition_token = token;
+	if (popup->committed)
+		weston_desktop_xdg_surface_schedule_configure(&popup->base);
+}
+
 static void
 weston_desktop_xdg_popup_send_configure(struct weston_desktop_xdg_popup *popup)
 {
+	if (popup->pending_reposition) {
+		popup->pending_reposition = false;
+		xdg_popup_send_repositioned(popup->resource,
+					    popup->pending_reposition_token);
+	}
 	xdg_popup_send_configure(popup->resource,
 				 popup->geometry.x,
 				 popup->geometry.y,
@@ -889,6 +992,16 @@ static void
 weston_desktop_xdg_popup_update_position(struct weston_desktop_surface *dsurface,
 					 void *user_data)
 {
+	struct weston_desktop_xdg_popup *popup =
+		weston_desktop_surface_get_implementation_data(dsurface);
+	struct weston_desktop_surface *parent_dsurface;
+
+	parent_dsurface = popup->parent->desktop_surface;
+	weston_desktop_surface_set_relative_to(popup->base.desktop_surface,
+					       parent_dsurface,
+					       popup->geometry.x,
+					       popup->geometry.y,
+					       true);
 }
 
 static void
@@ -934,6 +1047,7 @@ weston_desktop_xdg_popup_resource_destroy(struct wl_resource *resource)
 static const struct xdg_popup_interface weston_desktop_xdg_popup_implementation = {
 	.destroy             = weston_desktop_destroy_request,
 	.grab                = weston_desktop_xdg_popup_protocol_grab,
+	.reposition          = weston_desktop_xdg_popup_protocol_reposition,
 };
 
 static void
@@ -1112,10 +1226,7 @@ weston_desktop_xdg_surface_protocol_get_popup(struct wl_client *wl_client,
 	parent_surface = wl_resource_get_user_data(parent_resource);
 	parent = weston_desktop_surface_get_implementation_data(parent_surface);
 
-	/* Checking whether the size and anchor rect both have a positive size
-	 * is enough to verify both have been correctly set */
-	if (positioner->size.width == 0 || positioner->anchor_rect.width == 0 ||
-	    positioner->anchor_rect.height == 0) {
+	if (!is_positioner_valid(positioner)) {
 		wl_resource_post_error(resource,
 				       XDG_WM_BASE_ERROR_INVALID_POSITIONER,
 				       "positioner object is not complete");
@@ -1424,6 +1535,20 @@ weston_desktop_xdg_shell_protocol_get_xdg_surface(struct wl_client *wl_client,
 		wl_resource_get_user_data(surface_resource);
 	struct weston_desktop_xdg_surface *surface;
 
+	if (wsurface->committed) {
+		wl_resource_post_error(resource,
+				       XDG_WM_BASE_ERROR_ROLE,
+				       "xdg_surface must not have any other role");
+		return;
+	}
+
+	if (wsurface->buffer_ref.buffer != NULL) {
+		wl_resource_post_error(resource,
+				       XDG_SURFACE_ERROR_UNCONFIGURED_BUFFER,
+				       "xdg_surface must not have a buffer at creation");
+		return;
+	}
+
 	surface = zalloc(weston_desktop_surface_role_biggest_size);
 	if (surface == NULL) {
 		wl_client_post_no_memory(wl_client);
@@ -1451,13 +1576,6 @@ weston_desktop_xdg_shell_protocol_get_xdg_surface(struct wl_client *wl_client,
 						    id, weston_desktop_xdg_surface_resource_destroy);
 	if (surface->resource == NULL)
 		return;
-
-	if (wsurface->buffer_ref.buffer != NULL) {
-		wl_resource_post_error(surface->resource,
-				       XDG_SURFACE_ERROR_UNCONFIGURED_BUFFER,
-				       "xdg_surface must not have a buffer at creation");
-		return;
-	}
 }
 
 static void

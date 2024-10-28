@@ -3,16 +3,10 @@
 # It is hardcoded to cairo-image for now.
 
 option(
-	'backend-sdm',
+	'disable-power-key',
 	type: 'boolean',
-	value: true,
-	description: 'Weston backend with MSM SDM compositor'
-)
-option(
-	'multi-display',
-	type: 'boolean',
-	value: true,
-	description: 'Weston backend: multi display support'
+	value: false,
+	description: 'Weston backend: disable power key handling'
 )
 option(
 	'backend-drm',
@@ -57,10 +51,10 @@ option(
 	description: 'Weston backend: X11 (nested)'
 )
 option(
-	'backend-fbdev',
+	'deprecated-backend-fbdev',
 	type: 'boolean',
-	value: true,
-	description: 'Weston backend: fbdev'
+	value: false,
+	description: 'Weston backend: fbdev (deprecated)'
 )
 option(
 	'backend-default',
@@ -78,10 +72,10 @@ option(
 )
 
 option(
-	'weston-launch',
+	'deprecated-weston-launch',
 	type: 'boolean',
-	value: true,
-	description: 'Weston launcher for systems without logind'
+	value: false,
+	description: 'Deprecated weston launcher for systems without logind'
 )
 
 option(
@@ -136,6 +130,12 @@ option(
 	value: true,
 	description: 'Weston shell UI: IVI (automotive)'
 )
+option(
+	'shell-kiosk',
+	type: 'boolean',
+	value: true,
+	description: 'Weston shell UI: kiosk (desktop apps)'
+)
 
 option(
 	'desktop-shell-client-default',
@@ -145,10 +145,17 @@ option(
 )
 
 option(
+	'deprecated-wl-shell',
+	type: 'boolean',
+	value: false,
+	description: 'Enable the deprecated wl_shell protocol'
+)
+
+option(
 	'color-management-lcms',
 	type: 'boolean',
 	value: true,
-	description: 'Compositor color management: lcms'
+	description: 'Compositor color management: Little CMS'
 )
 option(
 	'color-management-colord',
@@ -162,6 +169,13 @@ option(
 	type: 'boolean',
 	value: true,
 	description: 'Compositor: support systemd-logind D-Bus protocol'
+)
+
+option(
+	'launcher-libseat',
+	type: 'boolean',
+	value: false,
+	description: 'Compositor: support libseat'
 )
 
 option(
@@ -192,7 +206,7 @@ option(
 option(
 	'simple-clients',
 	type: 'array',
-	choices: [ 'all', 'damage', 'im', 'egl', 'shm', 'touch', 'dmabuf-v4l', 'dmabuf-egl' ],
+	choices: [ 'all', 'damage', 'im', 'egl', 'shm', 'touch', 'dmabuf-feedback', 'dmabuf-v4l', 'dmabuf-egl' ],
 	value: [ 'all' ],
 	description: 'Sample clients: simple test programs'
 )
@@ -217,8 +231,26 @@ option(
 	description: 'Tests: output JUnit XML results'
 )
 option(
+	'test-skip-is-failure',
+	type: 'boolean',
+	value: false,
+	description: 'Tests: consider skip to be a failure'
+)
+option(
+	'test-gl-renderer',
+	type: 'boolean',
+	value: true,
+	description: 'Tests: allow running with GL-renderer'
+)
+option(
 	'doc',
 	type: 'boolean',
 	value: false,
 	description: 'Generate documentation'
+)
+option(
+	'qcom-bsp',
+	type: 'boolean',
+	value: true,
+	description: 'DRM: run qcom bsp related flow'
 )

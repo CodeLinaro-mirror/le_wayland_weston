@@ -17,7 +17,6 @@ deps_weston = [
 	dep_libevdev,
 	dep_libdl,
 	dep_threads,
-	dep_log,
 ]
 
 if get_option('xwayland')
@@ -48,7 +47,8 @@ exe_weston = executable(
 	include_directories: common_inc,
 	dependencies: dep_libexec_weston,
 	install_rpath: dir_module_weston,
-	install: true
+	install: true,
+	c_args: ['-fstack-protector-all']
 )
 install_headers('weston.h', subdir: 'weston')
 
@@ -90,7 +90,8 @@ if get_option('screenshare')
 		dependencies: deps_screenshare,
 		name_prefix: '',
 		install: true,
-		install_dir: dir_module_weston
+		install_dir: dir_module_weston,
+		install_rpath: '$ORIGIN'
 	)
 	env_modmap += 'screen-share.so=@0@;'.format(plugin_screenshare.full_path())
 endif
@@ -115,14 +116,15 @@ if get_option('color-management-lcms')
 		dependencies: [ dep_libexec_weston, dep_libweston_public, dep_lcms2 ],
 		name_prefix: '',
 		install: true,
-		install_dir: dir_module_weston
+		install_dir: dir_module_weston,
+		install_rpath: '$ORIGIN'
 	)
 	env_modmap += 'cms-static.so=@0@;'.format(plugin_lcms.full_path())
 endif
 
 if get_option('color-management-colord')
 	if not get_option('color-management-lcms')
-		error('LCMS must be enabled to support colord')
+		error('LCMS must be enabled to support colord. Or, you can use \'-Dcolor-management-colord=false\'.')
 	endif
 
 	srcs_colord = [
@@ -135,7 +137,7 @@ if get_option('color-management-colord')
 		error('cms-colord requires colord >= 0.1.27 which was not found. Or, you can use \'-Dcolor-management-colord=false\'.')
 	endif
 
-	plugin_colord_deps = [ dep_libweston_public, dep_colord ]
+	plugin_colord_deps = [ dep_libweston_public, dep_colord, dep_lcms2 ]
 
 	foreach depname : [ 'glib-2.0', 'gobject-2.0' ]
 		dep = dependency(depname, required: false)
@@ -151,7 +153,6 @@ if get_option('color-management-colord')
 		include_directories: common_inc,
 		dependencies: plugin_colord_deps,
 		name_prefix: '',
-		override_options: [ 'b_lundef=false' ],
 		install: true,
 		install_dir: dir_module_weston
 	)

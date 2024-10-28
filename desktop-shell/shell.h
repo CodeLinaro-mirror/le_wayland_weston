@@ -62,9 +62,6 @@ struct exposay_output {
 	int num_surfaces;
 	int grid_size;
 	int surface_size;
-
-	int hpadding_outer;
-	int vpadding_outer;
 	int padding_inner;
 };
 
@@ -215,6 +212,7 @@ struct desktop_shell {
 	struct wl_listener output_create_listener;
 	struct wl_listener output_move_listener;
 	struct wl_list output_list;
+	struct wl_list seat_list;
 
 	enum weston_desktop_shell_panel_position panel_position;
 
@@ -234,6 +232,11 @@ get_shell_surface(struct weston_surface *surface);
 
 struct workspace *
 get_current_workspace(struct desktop_shell *shell);
+
+void
+get_output_work_area(struct desktop_shell *shell,
+		     struct weston_output *output,
+		     pixman_rectangle32_t *area);
 
 void
 lower_fullscreen_layer(struct desktop_shell *shell,

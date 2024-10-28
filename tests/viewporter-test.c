@@ -34,49 +34,18 @@
 #include "shared/helpers.h"
 #include "shared/xalloc.h"
 #include "weston-test-client-helper.h"
-#include "viewporter-client-protocol.h"
+#include "weston-test-fixture-compositor.h"
 
-static struct wp_viewporter *
-get_viewporter(struct client *client)
+static enum test_result_code
+fixture_setup(struct weston_test_harness *harness)
 {
-	struct global *g;
-	struct global *global_wpr = NULL;
-	struct wp_viewporter *wpr;
+	struct compositor_setup setup;
 
-	wl_list_for_each(g, &client->global_list, link) {
-		if (strcmp(g->interface, wp_viewporter_interface.name))
-			continue;
+	compositor_setup_defaults(&setup);
 
-		if (global_wpr)
-			assert(0 && "multiple wp_viewporter objects");
-
-		global_wpr = g;
-	}
-
-	assert(global_wpr && "no wp_viewporter found");
-
-	assert(global_wpr->version == 1);
-
-	wpr = wl_registry_bind(client->wl_registry, global_wpr->name,
-			       &wp_viewporter_interface, 1);
-	assert(wpr);
-
-	return wpr;
+	return weston_test_harness_execute_as_client(harness, &setup);
 }
-
-static struct wp_viewport *
-create_viewport(struct client *client)
-{
-	struct wp_viewporter *viewporter;
-	struct wp_viewport *viewport;
-
-	viewporter = get_viewporter(client);
-	viewport = wp_viewporter_get_viewport(viewporter,
-					      client->surface->wl_surface);
-	assert(viewport);
-
-	return viewport;
-}
+DECLARE_FIXTURE_SETUP(fixture_setup);
 
 static void
 set_source(struct wp_viewport *vp, int x, int y, int w, int h)
@@ -88,16 +57,23 @@ set_source(struct wp_viewport *vp, int x, int y, int w, int h)
 TEST(test_viewporter_double_create)
 {
 	struct wp_viewporter *viewporter;
+	struct wp_viewport *vp[2];
 	struct client *client;
 
 	client = create_client_and_test_surface(100, 50, 123, 77);
 
-	viewporter = get_viewporter(client);
-	wp_viewporter_get_viewport(viewporter, client->surface->wl_surface);
-	wp_viewporter_get_viewport(viewporter, client->surface->wl_surface);
+	viewporter = bind_to_singleton_global(client,
+					      &wp_viewporter_interface, 1);
+	vp[0] = wp_viewporter_get_viewport(viewporter, client->surface->wl_surface);
+	vp[1] = wp_viewporter_get_viewport(viewporter, client->surface->wl_surface);
 
 	expect_protocol_error(client, &wp_viewporter_interface,
 			      WP_VIEWPORTER_ERROR_VIEWPORT_EXISTS);
+
+	wp_viewport_destroy(vp[1]);
+	wp_viewport_destroy(vp[0]);
+	wp_viewporter_destroy(viewporter);
+	client_destroy(client);
 }
 
 struct bad_source_rect_args {
@@ -123,7 +99,7 @@ TEST_P(test_viewporter_bad_source_rect, bad_source_rect_args)
 
 	client = create_client_and_test_surface(100, 50, 123, 77);
 
-	vp = create_viewport(client);
+	vp = client_create_viewport(client);
 
 	testlog("wp_viewport.set_source x=%d, y=%d, w=%d, h=%d\n",
 		args->x, args->y, args->w, args->h);
@@ -131,6 +107,9 @@ TEST_P(test_viewporter_bad_source_rect, bad_source_rect_args)
 
 	expect_protocol_error(client, &wp_viewport_interface,
 			      WP_VIEWPORT_ERROR_BAD_VALUE);
+
+	wp_viewport_destroy(vp);
+	client_destroy(client);
 }
 
 TEST(test_viewporter_unset_source_rect)
@@ -140,11 +119,14 @@ TEST(test_viewporter_unset_source_rect)
 
 	client = create_client_and_test_surface(100, 50, 123, 77);
 
-	vp = create_viewport(client);
+	vp = client_create_viewport(client);
 	set_source(vp, -1, -1, -1, -1);
 	wl_surface_commit(client->surface->wl_surface);
 
 	client_roundtrip(client);
+
+	wp_viewport_destroy(vp);
+	client_destroy(client);
 }
 
 struct bad_destination_args {
@@ -168,13 +150,16 @@ TEST_P(test_viewporter_bad_destination_size, bad_destination_args)
 
 	client = create_client_and_test_surface(100, 50, 123, 77);
 
-	vp = create_viewport(client);
+	vp = client_create_viewport(client);
 
 	testlog("wp_viewport.set_destination w=%d, h=%d\n", args->w, args->h);
 	wp_viewport_set_destination(vp, args->w, args->h);
 
 	expect_protocol_error(client, &wp_viewport_interface,
 			      WP_VIEWPORT_ERROR_BAD_VALUE);
+
+	wp_viewport_destroy(vp);
+	client_destroy(client);
 }
 
 TEST(test_viewporter_unset_destination_size)
@@ -184,11 +169,14 @@ TEST(test_viewporter_unset_destination_size)
 
 	client = create_client_and_test_surface(100, 50, 123, 77);
 
-	vp = create_viewport(client);
+	vp = client_create_viewport(client);
 	wp_viewport_set_destination(vp, -1, -1);
 	wl_surface_commit(client->surface->wl_surface);
 
 	client_roundtrip(client);
+
+	wp_viewport_destroy(vp);
+	client_destroy(client);
 }
 
 struct nonint_destination_args {
@@ -213,7 +201,7 @@ TEST_P(test_viewporter_non_integer_destination_size, nonint_destination_args)
 
 	client = create_client_and_test_surface(100, 50, 123, 77);
 
-	vp = create_viewport(client);
+	vp = client_create_viewport(client);
 
 	testlog("non-integer size w=%f, h=%f\n",
 		wl_fixed_to_double(args->w), wl_fixed_to_double(args->h));
@@ -223,6 +211,9 @@ TEST_P(test_viewporter_non_integer_destination_size, nonint_destination_args)
 
 	expect_protocol_error(client, &wp_viewport_interface,
 			      WP_VIEWPORT_ERROR_BAD_SIZE);
+
+	wp_viewport_destroy(vp);
+	client_destroy(client);
 }
 
 struct source_buffer_args {
@@ -274,7 +265,7 @@ get_surface_height(struct surface *surface,
 	return -1;
 }
 
-static void
+static struct wp_viewport *
 setup_source_vs_buffer(struct client *client,
 		       const struct source_buffer_args *args)
 {
@@ -282,7 +273,7 @@ setup_source_vs_buffer(struct client *client,
 	struct wp_viewport *vp;
 
 	surf = client->surface->wl_surface;
-	vp = create_viewport(client);
+	vp = client_create_viewport(client);
 
 	testlog("surface %dx%d\n",
 		get_surface_width(client->surface,
@@ -301,6 +292,8 @@ setup_source_vs_buffer(struct client *client,
 	wp_viewport_set_source(vp, args->x, args->y, args->w, args->h);
 	wp_viewport_set_destination(vp, 99, 99);
 	wl_surface_commit(surf);
+
+	return vp;
 }
 
 /* buffer dimensions */
@@ -396,12 +389,16 @@ TEST_P(test_viewporter_source_outside_buffer, bad_source_buffer_args)
 {
 	const struct source_buffer_args *args = data;
 	struct client *client;
+	struct wp_viewport *vp;
 
 	client = create_client_and_test_surface(100, 50, WIN_W, WIN_H);
-	setup_source_vs_buffer(client, args);
+	vp = setup_source_vs_buffer(client, args);
 
 	expect_protocol_error(client, &wp_viewport_interface,
 			      WP_VIEWPORT_ERROR_OUT_OF_BUFFER);
+
+	wp_viewport_destroy(vp);
+	client_destroy(client);
 }
 
 static const struct source_buffer_args good_source_buffer_args[] = {
@@ -452,10 +449,12 @@ TEST_P(test_viewporter_source_inside_buffer, good_source_buffer_args)
 {
 	const struct source_buffer_args *args = data;
 	struct client *client;
+	struct wp_viewport *vp;
 
 	client = create_client_and_test_surface(100, 50, WIN_W, WIN_H);
-	setup_source_vs_buffer(client, args);
-	client_roundtrip(client);
+	vp = setup_source_vs_buffer(client, args);
+	wp_viewport_destroy(vp);
+	client_destroy(client);
 }
 
 #undef WIN_W
@@ -475,7 +474,7 @@ TEST(test_viewporter_outside_null_buffer)
 	surf = client->surface->wl_surface;
 
 	/* If buffer is NULL, does not matter what the source rect is. */
-	vp = create_viewport(client);
+	vp = client_create_viewport(client);
 	wl_surface_attach(surf, NULL, 0, 0);
 	set_source(vp, 1000, 1000, 20, 10);
 	wp_viewport_set_destination(vp, 99, 99);
@@ -496,6 +495,9 @@ TEST(test_viewporter_outside_null_buffer)
 	wl_surface_commit(surf);
 	expect_protocol_error(client, &wp_viewport_interface,
 			      WP_VIEWPORT_ERROR_OUT_OF_BUFFER);
+
+	wp_viewport_destroy(vp);
+	client_destroy(client);
 }
 
 TEST(test_viewporter_no_surface_set_source)
@@ -504,7 +506,7 @@ TEST(test_viewporter_no_surface_set_source)
 	struct wp_viewport *vp;
 
 	client = create_client_and_test_surface(100, 50, 123, 77);
-	vp = create_viewport(client);
+	vp = client_create_viewport(client);
 	wl_surface_destroy(client->surface->wl_surface);
 	client->surface->wl_surface = NULL;
 
@@ -513,6 +515,9 @@ TEST(test_viewporter_no_surface_set_source)
 
 	expect_protocol_error(client, &wp_viewport_interface,
 			      WP_VIEWPORT_ERROR_NO_SURFACE);
+
+	wp_viewport_destroy(vp);
+	client_destroy(client);
 }
 
 TEST(test_viewporter_no_surface_set_destination)
@@ -521,7 +526,7 @@ TEST(test_viewporter_no_surface_set_destination)
 	struct wp_viewport *vp;
 
 	client = create_client_and_test_surface(100, 50, 123, 77);
-	vp = create_viewport(client);
+	vp = client_create_viewport(client);
 	wl_surface_destroy(client->surface->wl_surface);
 	client->surface->wl_surface = NULL;
 
@@ -530,6 +535,9 @@ TEST(test_viewporter_no_surface_set_destination)
 
 	expect_protocol_error(client, &wp_viewport_interface,
 			      WP_VIEWPORT_ERROR_NO_SURFACE);
+
+	wp_viewport_destroy(vp);
+	client_destroy(client);
 }
 
 TEST(test_viewporter_no_surface_destroy)
@@ -538,12 +546,12 @@ TEST(test_viewporter_no_surface_destroy)
 	struct wp_viewport *vp;
 
 	client = create_client_and_test_surface(100, 50, 123, 77);
-	vp = create_viewport(client);
+	vp = client_create_viewport(client);
 	wl_surface_destroy(client->surface->wl_surface);
 	client->surface->wl_surface = NULL;
 
 	/* But the wl_surface does not exist anymore. */
 	wp_viewport_destroy(vp);
 
-	client_roundtrip(client);
+	client_destroy(client);
 }

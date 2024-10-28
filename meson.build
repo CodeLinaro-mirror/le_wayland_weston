@@ -1,18 +1,18 @@
 project('weston',
 	'c',
 	'cpp',
-	version: '8.0.0',
+	version: '10.0.2',
 	default_options: [
 		'warning_level=3',
 		'c_std=gnu99',
 		'cpp_std=c++11',
 		'b_lundef=true',
 	],
-	meson_version: '>= 0.47',
+	meson_version: '>= 0.52.1',
 	license: 'MIT/Expat',
 )
 
-libweston_major = 8
+libweston_major = 10
 
 # libweston_revision is manufactured to follow the autotools build's
 # library file naming, thanks to libtool
@@ -34,6 +34,7 @@ dir_bin = join_paths(dir_prefix, get_option('bindir'))
 dir_data = join_paths(dir_prefix, get_option('datadir'))
 dir_include_libweston = 'libweston-@0@'.format(libweston_major)
 dir_include_libweston_install = join_paths(dir_include_libweston, 'libweston')
+dir_include_libweston_private_install = join_paths(dir_include_libweston, 'libweston-private')
 dir_lib = join_paths(dir_prefix, get_option('libdir'))
 dir_libexec = join_paths(dir_prefix, get_option('libexecdir'))
 dir_module_weston = join_paths(dir_lib, 'weston')
@@ -42,6 +43,7 @@ dir_data_pc = join_paths(dir_data, 'pkgconfig')
 dir_lib_pc = join_paths(dir_lib, 'pkgconfig')
 dir_man = join_paths(dir_prefix, get_option('mandir'))
 dir_protocol_libweston = join_paths('libweston-@0@'.format(libweston_major), 'protocols')
+dir_weston_shared = 'weston-shared'
 
 public_inc = include_directories('include')
 common_inc = [ include_directories('.'), public_inc ]
@@ -60,10 +62,12 @@ cc = meson.get_compiler('cpp')
 
 global_args = []
 global_args_maybe = [
+	'-Wmissing-prototypes',
 	'-Wno-unused-parameter',
 	'-Wno-shift-negative-value', # required due to Pixman
 	'-Wno-missing-field-initializers',
 	'-Wno-pedantic',
+	'-Wundef',
 	'-fvisibility=hidden',
 ]
 foreach a : global_args_maybe
@@ -104,6 +108,7 @@ config_h.set('_GNU_SOURCE', '1')
 config_h.set('_ALL_SOURCE', '1')
 config_h.set('EGL_NO_X11', '1')
 config_h.set('MESA_EGL_NO_X11_HEADERS', '1')
+config_h.set('EGL_NO_PLATFORM_SPECIFIC_TYPES', '1')
 
 config_h.set_quoted('PACKAGE_STRING', 'weston @0@'.format(version_weston))
 config_h.set_quoted('PACKAGE_VERSION', version_weston)
@@ -117,9 +122,11 @@ config_h.set_quoted('LIBEXECDIR', dir_libexec)
 config_h.set_quoted('MODULEDIR', dir_module_weston)
 config_h.set_quoted('LIBWESTON_MODULEDIR', dir_module_libweston)
 
+config_h.set10('TEST_GL_RENDERER', get_option('test-gl-renderer'))
+
 backend_default = get_option('backend-default')
 if backend_default == 'auto'
-	foreach b : [ 'headless', 'fbdev', 'x11', 'wayland', 'drm', 'sdm' ]
+	foreach b : [ 'headless', 'x11', 'wayland', 'drm' ]
 		if get_option('backend-' + b)
 			backend_default = b
 		endif
@@ -137,24 +144,32 @@ if dep_xkbcommon.version().version_compare('>= 0.5.0')
 	config_h.set('HAVE_XKBCOMMON_COMPOSE', '1')
 endif
 
-dep_wayland_server = dependency('wayland-server', version: '>= 1.17.0')
-dep_wayland_client = dependency('wayland-client', version: '>= 1.17.0')
+if get_option('deprecated-wl-shell')
+	warning('Support for the deprecated wl_shell interface is enabled.')
+	warning('This feature will be removed in a future version.')
+	config_h.set('HAVE_DEPRECATED_WL_SHELL', '1')
+endif
+
+dep_wayland_server = dependency('wayland-server', version: '>= 1.18.0')
+dep_wayland_client = dependency('wayland-client', version: '>= 1.18.0')
 dep_pixman = dependency('pixman-1', version: '>= 0.25.2')
 dep_libinput = dependency('libinput', version: '>= 0.8.0')
 dep_libevdev = dependency('libevdev')
 dep_libm = cc.find_library('m')
 dep_libdl = cc.find_library('dl')
-dep_libdrm = dependency('libdrm', version: '>= 2.4.86')
+dep_libdrm = dependency('libdrm', version: '>= 2.4.95')
 dep_libdrm_headers = dep_libdrm.partial_dependency(compile_args: true)
 dep_threads = dependency('threads')
 dep_gbm = dependency('gbm')
+dep_libdrm_version = dep_libdrm.version()
+if dep_libdrm_version.version_compare('>=2.4.107')
+  message('Found libdrm with human format modifier support.')
+  config_h.set('HAVE_HUMAN_FORMAT_MODIFIER', '1')
+endif
 
-
-dep_gbm = cc.find_library('gbm')
-dep_libsdmcore = cc.find_library('sdmcore')
-dep_libsdmutils = cc.find_library('sdmutils')
-dep_libdrmutils = cc.find_library('drmutils')
-dep_log = cc.find_library('liblog', required : true)
+prog_python = import('python').find_installation('python3')
+files_xxd_py = files('tools/xxd.py')
+cmd_xxd = [ prog_python, files_xxd_py, '@INPUT@', '@OUTPUT@' ]
 
 subdir('include')
 subdir('protocol')
@@ -166,6 +181,7 @@ subdir('compositor')
 subdir('desktop-shell')
 subdir('fullscreen-shell')
 subdir('ivi-shell')
+subdir('kiosk-shell')
 subdir('remoting')
 subdir('pipewire')
 subdir('clients')

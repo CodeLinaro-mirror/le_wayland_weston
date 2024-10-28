@@ -345,9 +345,13 @@ calc_transformation_matrix(struct ivi_rectangle *source_rect,
 	source_center_y = source_rect->y + source_rect->height * 0.5f;
 	weston_matrix_translate(m, -source_center_x, -source_center_y, 0.0f);
 
-	scale_x = (float) dest_rect->width / (float) source_rect->width;
-	scale_y = (float) dest_rect->height / (float) source_rect->height;
-	weston_matrix_scale(m, scale_x, scale_y, 1.0f);
+	if ((dest_rect->width != source_rect->width) ||
+	    (dest_rect->height != source_rect->height))
+	{
+		scale_x = (float) dest_rect->width / (float) source_rect->width;
+		scale_y = (float) dest_rect->height / (float) source_rect->height;
+		weston_matrix_scale(m, scale_x, scale_y, 1.0f);
+	}
 
 	translate_x = dest_rect->width * 0.5f + dest_rect->x;
 	translate_y = dest_rect->height * 0.5f + dest_rect->y;
@@ -2047,6 +2051,16 @@ ivi_layout_init_with_compositor(struct weston_compositor *ec)
 	weston_plugin_api_register(ec, IVI_LAYOUT_API_NAME,
 				   &ivi_layout_interface,
 				   sizeof(struct ivi_layout_interface));
+}
+
+void
+ivi_layout_fini(void)
+{
+	struct ivi_layout *layout = get_instance();
+
+	weston_layer_fini(&layout->layout_layer);
+
+	/* XXX: tear down everything else */
 }
 
 static struct ivi_layout_interface ivi_layout_interface = {

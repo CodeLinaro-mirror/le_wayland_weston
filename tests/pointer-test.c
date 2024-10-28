@@ -31,6 +31,18 @@
 #include "input-timestamps-helper.h"
 #include "shared/timespec-util.h"
 #include "weston-test-client-helper.h"
+#include "weston-test-fixture-compositor.h"
+
+static enum test_result_code
+fixture_setup(struct weston_test_harness *harness)
+{
+	struct compositor_setup setup;
+
+	compositor_setup_defaults(&setup);
+
+	return weston_test_harness_execute_as_client(harness, &setup);
+}
+DECLARE_FIXTURE_SETUP(fixture_setup);
 
 static const struct timespec t0 = { .tv_sec = 0, .tv_nsec = 100000000 };
 static const struct timespec t1 = { .tv_sec = 1, .tv_nsec = 1000001 };
@@ -144,6 +156,8 @@ TEST(test_pointer_top_left)
 	x -= 1; y -= 1;
 	assert(!surface_contains(client->surface, x, y));
 	check_pointer_move(client, x, y);
+
+	client_destroy(client);
 }
 
 TEST(test_pointer_bottom_left)
@@ -169,6 +183,8 @@ TEST(test_pointer_bottom_left)
 	x -= 1; y += 1;
 	assert(!surface_contains(client->surface, x, y));
 	check_pointer_move(client, x, y);
+
+	client_destroy(client);
 }
 
 TEST(test_pointer_top_right)
@@ -194,6 +210,8 @@ TEST(test_pointer_top_right)
 	x += 1; y -= 1;
 	assert(!surface_contains(client->surface, x, y));
 	check_pointer_move(client, x, y);
+
+	client_destroy(client);
 }
 
 TEST(test_pointer_bottom_right)
@@ -219,6 +237,8 @@ TEST(test_pointer_bottom_right)
 	x += 1; y += 1;
 	assert(!surface_contains(client->surface, x, y));
 	check_pointer_move(client, x, y);
+
+	client_destroy(client);
 }
 
 TEST(test_pointer_top_center)
@@ -244,6 +264,8 @@ TEST(test_pointer_top_center)
 	y -= 1;
 	assert(!surface_contains(client->surface, x, y));
 	check_pointer_move(client, x, y);
+
+	client_destroy(client);
 }
 
 TEST(test_pointer_bottom_center)
@@ -269,6 +291,8 @@ TEST(test_pointer_bottom_center)
 	y += 1;
 	assert(!surface_contains(client->surface, x, y));
 	check_pointer_move(client, x, y);
+
+	client_destroy(client);
 }
 
 TEST(test_pointer_left_center)
@@ -294,6 +318,8 @@ TEST(test_pointer_left_center)
 	x -= 1;
 	assert(!surface_contains(client->surface, x, y));
 	check_pointer_move(client, x, y);
+
+	client_destroy(client);
 }
 
 TEST(test_pointer_right_center)
@@ -319,6 +345,8 @@ TEST(test_pointer_right_center)
 	x += 1;
 	assert(!surface_contains(client->surface, x, y));
 	check_pointer_move(client, x, y);
+
+	client_destroy(client);
 }
 
 TEST(test_pointer_surface_move)
@@ -336,6 +364,8 @@ TEST(test_pointer_surface_move)
 	move_client(client, 0, 0);
 	assert(surface_contains(client->surface, 50, 50));
 	check_pointer(client, 50, 50);
+
+	client_destroy(client);
 }
 
 TEST(pointer_motion_events)
@@ -353,6 +383,8 @@ TEST(pointer_motion_events)
 	assert(timespec_eq(&pointer->motion_time_timespec, &t1));
 
 	input_timestamps_destroy(input_ts);
+
+	client_destroy(client);
 }
 
 TEST(pointer_button_events)
@@ -379,6 +411,8 @@ TEST(pointer_button_events)
 	assert(timespec_eq(&pointer->button_time_timespec, &t2));
 
 	input_timestamps_destroy(input_ts);
+
+	client_destroy(client);
 }
 
 TEST(pointer_axis_events)
@@ -401,6 +435,8 @@ TEST(pointer_axis_events)
 	assert(timespec_eq(&pointer->axis_stop_time_timespec, &t2));
 
 	input_timestamps_destroy(input_ts);
+
+	client_destroy(client);
 }
 
 TEST(pointer_timestamps_stop_after_input_timestamps_object_is_destroyed)
@@ -424,6 +460,8 @@ TEST(pointer_timestamps_stop_after_input_timestamps_object_is_destroyed)
 	assert(pointer->state == WL_POINTER_BUTTON_STATE_RELEASED);
 	assert(pointer->button_time_msec == timespec_to_msec(&t2));
 	assert(timespec_is_zero(&pointer->button_time_timespec));
+
+	client_destroy(client);
 }
 
 TEST(pointer_timestamps_stop_after_client_releases_wl_pointer)
@@ -452,4 +490,8 @@ TEST(pointer_timestamps_stop_after_client_releases_wl_pointer)
 	assert(timespec_eq(&pointer->input_timestamp, &t_other));
 
 	input_timestamps_destroy(input_ts);
+
+	free(client->input->pointer);
+	client->input->pointer = NULL;
+	client_destroy(client);
 }

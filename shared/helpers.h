@@ -42,6 +42,23 @@ extern "C" {
 #endif
 
 /**
+ * Compile-time copy of hardcoded arrays.
+ *
+ * @param dst the array to copy to.
+ * @param src the source array.
+ */
+#ifndef ARRAY_COPY
+#define ARRAY_COPY(dst, src) \
+do { \
+	static_assert(ARRAY_LENGTH(src) == ARRAY_LENGTH(dst), \
+		      "src and dst sizes must match"); \
+	static_assert(sizeof(src) == sizeof(dst), \
+		      "src and dst sizes must match"); \
+	memcpy((dst), (src), sizeof(src)); \
+} while (0)
+#endif
+
+/**
  * Returns the smaller of two values.
  *
  * @param x the first item to compare.
@@ -132,6 +149,14 @@ extern "C" {
 # else
 #  define static_assert(cond, msg)
 # endif
+#endif
+
+/** Ensure argument is of given type */
+#ifndef TYPEVERIFY
+#define TYPEVERIFY(type, arg) ({		\
+	typeof(arg) tmp___ = (arg);		\
+	(void)((type)0 == tmp___);		\
+	tmp___; })
 #endif
 
 #ifdef  __cplusplus

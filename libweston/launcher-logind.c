@@ -97,6 +97,7 @@ launcher_logind_take_device(struct launcher_logind *wl, uint32_t major,
 	reply = dbus_connection_send_with_reply_and_block(wl->dbus, m,
 							  -1, NULL);
 	if (!reply) {
+		weston_log("logind: TakeDevice on %d:%d failed.\n", major, minor);
 		r = -ENODEV;
 		goto err_unref;
 	}
@@ -106,6 +107,7 @@ launcher_logind_take_device(struct launcher_logind *wl, uint32_t major,
 				  DBUS_TYPE_BOOLEAN, &paused,
 				  DBUS_TYPE_INVALID);
 	if (!b) {
+		weston_log("logind: error parsing reply to TakeDevice.\n");
 		r = -ENODEV;
 		goto err_reply;
 	}
@@ -173,17 +175,25 @@ launcher_logind_open(struct weston_launcher *launcher, const char *path, int fla
 	int fl, r, fd;
 
 	r = stat(path, &st);
-	if (r < 0)
+	if (r < 0) {
+		weston_log("logind: cannot stat: %s! error=%s\n", path, strerror(errno));
 		return -1;
+	}
+
 	if (!S_ISCHR(st.st_mode)) {
+		weston_log("logind: %s is not a character special file!\n", path);
 		errno = ENODEV;
 		return -1;
 	}
 
 	fd = launcher_logind_take_device(wl, major(st.st_rdev),
 				       minor(st.st_rdev), NULL);
-	if (fd < 0)
-		return fd;
+	if (fd < 0) {
+		weston_log("logind: TakeDevice on %s failed, error=%s\n",
+			   path, strerror(-fd));
+		errno = -fd;
+		return -1;
+	}
 
 	/* Compared to weston_launcher_open() we cannot specify the open-mode
 	 * directly. Instead, logind passes us an fd with sane default modes.
@@ -195,6 +205,7 @@ launcher_logind_open(struct weston_launcher *launcher, const char *path, int fla
 	fl = fcntl(fd, F_GETFL);
 	if (fl < 0) {
 		r = -errno;
+		weston_log("logind: cannot get file flags: %s\n", strerror(errno));
 		goto err_close;
 	}
 
@@ -204,6 +215,7 @@ launcher_logind_open(struct weston_launcher *launcher, const char *path, int fla
 	r = fcntl(fd, F_SETFL, fl);
 	if (r < 0) {
 		r = -errno;
+		weston_log("logind: cannot set O_NONBLOCK: %s\n", strerror(errno));
 		goto err_close;
 	}
 	return fd;
@@ -723,6 +735,29 @@ launcher_logind_activate(struct launcher_logind *wl)
 }
 
 static int
+launcher_logind_get_session(char **session)
+{
+	int r;
+
+	r = sd_pid_get_session(getpid(), session);
+	if (r < 0) {
+		if (r != -ENODATA) {
+			weston_log("logind: not running in a systemd session: %d\n", r);
+			return r;
+		}
+	} else {
+		return r;
+	}
+
+	/* When not inside a systemd session look if there is a suitable one */
+	r = sd_uid_get_display(getuid(), session);
+	if (r < 0)
+		weston_log("logind: cannot find systemd session for uid: %d %d\n", getuid(), r);
+
+	return r;
+}
+
+static int
 launcher_logind_connect(struct weston_launcher **out, struct weston_compositor *compositor,
 			int tty, const char *seat_id, bool sync_drm)
 {
@@ -747,11 +782,9 @@ launcher_logind_connect(struct weston_launcher **out, struct weston_compositor *
 		goto err_wl;
 	}
 
-	r = sd_pid_get_session(getpid(), &wl->sid);
-	if (r < 0) {
-		weston_log("logind: not running in a systemd session\n");
+	r = launcher_logind_get_session(&wl->sid);
+	if (r < 0)
 		goto err_seat;
-	}
 
 	t = NULL;
 	r = sd_session_get_seat(wl->sid, &t);
@@ -767,9 +800,9 @@ launcher_logind_connect(struct weston_launcher **out, struct weston_compositor *
 		goto err_session;
 	}
 
-	r = strcmp(t, "seat0");
+	r = sd_seat_can_tty(t);
 	free(t);
-	if (r == 0) {
+	if (r > 0) {
 		r = weston_sd_session_get_vt(wl->sid, &wl->vtnr);
 		if (r < 0) {
 			weston_log("logind: session not running on a VT\n");
@@ -780,6 +813,10 @@ launcher_logind_connect(struct weston_launcher **out, struct weston_compositor *
 			r = -EINVAL;
 			goto err_session;
 		}
+	} else if (r < 0) {
+		weston_log("logind: could not determine if seat %s has ttys or not", t);
+		r = -EINVAL;
+		goto err_session;
 	}
 
 	loop = wl_display_get_event_loop(compositor->wl_display);
@@ -816,7 +853,8 @@ err_seat:
 err_wl:
 	free(wl);
 err_out:
-	weston_log("logind: cannot setup systemd-logind helper (%d), using legacy fallback\n", r);
+	weston_log("logind: cannot setup systemd-logind helper error: (%s), using legacy fallback\n",
+		   strerror(-r));
 	errno = -r;
 	return -1;
 }
@@ -843,10 +881,14 @@ static int
 launcher_logind_get_vt(struct weston_launcher *launcher)
 {
 	struct launcher_logind *wl = wl_container_of(launcher, wl, base);
+	if (wl->vtnr <= 0) {
+		return -EINVAL;
+	}
 	return wl->vtnr;
 }
 
 const struct launcher_interface launcher_logind_iface = {
+	.name = "logind",
 	.connect = launcher_logind_connect,
 	.destroy = launcher_logind_destroy,
 	.open = launcher_logind_open,
