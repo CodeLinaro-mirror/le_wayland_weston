@@ -25,6 +25,12 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+/*
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 #include "config.h"
 
@@ -60,6 +66,7 @@
 #include <libweston/weston-log.h>
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-unstable-v1-server-protocol.h"
+#include "gbm-buffer-backend.h"
 #include "viewporter-server-protocol.h"
 #include "presentation-time-server-protocol.h"
 #include "xdg-output-unstable-v1-server-protocol.h"
@@ -94,6 +101,8 @@
  */
 
 #define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
+
+struct gbm_buffer_backend_c_interface *gbm_buffer_backend;
 
 static void
 weston_output_transform_scale_init(struct weston_output *output,
@@ -600,6 +609,7 @@ weston_view_create_internal(struct weston_surface *surface)
 	pixman_region32_init(&view->geometry.scissor);
 	pixman_region32_init(&view->transform.boundingbox);
 	view->transform.dirty = 1;
+	view->is_completely_covered = false;
 	weston_view_update_transform(view);
 	pixman_region32_copy(&view->visible, &view->transform.boundingbox);
 
@@ -2591,6 +2601,7 @@ weston_buffer_from_resource(struct weston_compositor *ec,
 	struct weston_buffer *buffer;
 	struct wl_shm_buffer *shm;
 	struct linux_dmabuf_buffer *dmabuf;
+	struct gbm_buffer *gbmbuf;
 	struct wl_listener *listener;
 	struct weston_solid_buffer_values *solid;
 
@@ -2637,6 +2648,25 @@ weston_buffer_from_resource(struct weston_compositor *ec,
 		assert(buffer->pixel_format && !buffer->pixel_format->hide_from_clients);
 		buffer->format_modifier = dmabuf->attributes.modifier[0];
 		if (dmabuf->attributes.flags & ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT)
+			buffer->buffer_origin = ORIGIN_BOTTOM_LEFT;
+		else
+			buffer->buffer_origin = ORIGIN_TOP_LEFT;
+	} else if (gbm_buffer_backend && (gbmbuf = gbm_buffer_backend->buffer_get(buffer->resource))) {
+		buffer->type = WESTON_BUFFER_GBMBUF;
+		buffer->gbmbuf = gbmbuf;
+		buffer->width = gbmbuf->width;
+		buffer->height = gbmbuf->height;
+		buffer->pixel_format =
+			pixel_format_get_info(gbmbuf->format);
+		/* gbmbuf import should assure we don't create a buffer with an
+		 * unknown format */
+		assert(buffer->pixel_format && !buffer->pixel_format->hide_from_clients);
+		/*
+		* To be aligned with dmabuf buffers, since gbmbuf buffers also
+		* have the origin at top-left, invert the Y_INVERT flag to get
+		* the image right.
+		*/
+		if (gbmbuf->flags & ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT)
 			buffer->buffer_origin = ORIGIN_BOTTOM_LEFT;
 		else
 			buffer->buffer_origin = ORIGIN_TOP_LEFT;
@@ -9391,6 +9421,31 @@ weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
 	return true;
 }
 
+/** Import gbmbuf buffer into current renderer
+ *
+ * \param compositor
+ * \param buffer the gbmbuf buffer to import
+ * \return true on usable buffers, false otherwise
+ *
+ * This function tests that the gbm_buffer is usable
+ * for the current renderer. Returns false on unusable buffers. Usually
+ * usability is tested by importing the gbmbuf for composition.
+ *
+ * This hook is also used for detecting if the renderer supports
+ * gbmbuf at all. If the renderer hook is NULL, dmabufs are not
+ * supported.
+ * */
+WL_EXPORT bool
+weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
+				struct gbm_buffer *buffer)
+{
+	struct weston_renderer *renderer;
+	renderer = compositor->renderer;
+	if (renderer->import_gbm_buffer == NULL)
+		return false;
+	return renderer->import_gbm_buffer(compositor, buffer);
+}
+
 WL_EXPORT void
 weston_version(int *major, int *minor, int *micro)
 {
@@ -9722,6 +9777,12 @@ weston_compositor_init_renderer(struct weston_compositor *compositor,
 
 		compositor->renderer->gl = gl_renderer;
 		weston_log("Using GL renderer\n");
+
+		gbm_buffer_backend = weston_load_module("gbm-buffer-backend.so",
+						"gbm_buffer_backend_c_interface",
+						LIBWESTON_MODULEDIR);
+		assert(gbm_buffer_backend);
+
 		break;
 	case WESTON_RENDERER_PIXMAN:
 		ret = pixman_renderer_init(compositor);

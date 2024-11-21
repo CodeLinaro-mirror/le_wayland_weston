@@ -32,6 +32,7 @@ dir_bin = dir_prefix / get_option('bindir')
 dir_data = dir_prefix / get_option('datadir')
 dir_include_libweston = 'libweston-@0@'.format(libweston_major)
 dir_include_libweston_install = dir_include_libweston / 'libweston'
+dir_include_libweston_private_install = join_paths(dir_include_libweston, 'libweston-private')
 dir_lib = dir_prefix /get_option('libdir')
 dir_libexec = dir_prefix / get_option('libexecdir')
 dir_module_weston = dir_lib / 'weston'
@@ -42,6 +43,8 @@ dir_man = dir_prefix / get_option('mandir')
 dir_protocol_libweston = 'libweston-@0@'.format(libweston_major) / 'protocols'
 dir_sysconf = dir_prefix / get_option('sysconfdir')
 dir_gitlab_ci = meson.project_source_root() / '.gitlab-ci'
+dir_weston_shared = 'weston-shared'
+dir_shared = 'shared'
 
 public_inc = include_directories('include')
 common_inc = [ include_directories('.'), public_inc ]
@@ -143,6 +146,8 @@ dep_libdl = cc.find_library('dl')
 dep_libdrm = dependency('libdrm', version: '>= 2.4.108')
 dep_libdrm_headers = dep_libdrm.partial_dependency(compile_args: true)
 dep_threads = dependency('threads')
+dep_libcutils = cc.find_library('cutils')
+dep_gbm = dependency('gbm')
 
 dep_lcms2 = dependency('lcms2', version: '>= 2.9', required: false)
 

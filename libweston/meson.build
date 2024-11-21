@@ -5,6 +5,7 @@ deps_libweston = [
 	dep_libdl,
 	dep_libdrm,
 	dep_xkbcommon,
+	dep_gbm,
 	dep_matrix_c
 ]
 srcs_libweston = [
@@ -171,19 +172,20 @@ if get_option('backend-drm')
 	deps_session_helper = [
 		dep_libseat,
 		dep_libweston_private_h,
+		dep_libweston_public,
 	]
 
-	lib_session_helper = static_library(
+	lib_session_helper = shared_library(
 		'session-helper',
 		srcs_session_helper,
 		include_directories: common_inc,
 		dependencies: deps_session_helper,
-		install: false
+		install: true
 	)
 	dep_session_helper = declare_dependency(link_with: lib_session_helper)
 endif
 
-lib_libinput_backend = static_library(
+lib_libinput_backend = shared_library(
 	'libinput-backend',
 	[
 		'libinput-device.c',
@@ -193,10 +195,11 @@ lib_libinput_backend = static_library(
 	dependencies: [
 		dep_libweston_private,
 		dep_libinput,
-		dependency('libudev', version: '>= 136')
+		dependency('libudev', version: '>= 136'),
+		dep_session_helper
 	],
 	include_directories: common_inc,
-	install: false
+	install: true
 )
 dep_libinput_backend = declare_dependency(
 	link_with: lib_libinput_backend,
@@ -223,6 +226,19 @@ lib_gl_borders = static_library(
 dep_lib_gl_borders = declare_dependency(
 	link_with: lib_gl_borders,
 	dependencies: dep_lib_cairo_shared
+)
+
+install_headers(
+	'backend.h',
+	'libinput-seat.h',
+	'libweston-internal.h',
+	'linux-dmabuf.h',
+	'linux-explicit-synchronization.h',
+	'color.h',
+	'launcher-util.h',
+	'pixman-renderer.h',
+	'pixel-formats.h',
+	subdir: dir_include_libweston_private_install
 )
 
 subdir('color-lcms')

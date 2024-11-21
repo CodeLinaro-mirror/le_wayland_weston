@@ -22,6 +22,11 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -173,7 +178,7 @@ udev_seat_remove_devices(struct udev_seat *seat)
 	}
 }
 
-void
+WL_EXPORT void
 udev_input_disable(struct udev_input *input)
 {
 	if (input->suspended)
@@ -270,7 +275,7 @@ const struct libinput_interface libinput_interface = {
 	close_restricted,
 };
 
-int
+WL_EXPORT int
 udev_input_enable(struct udev_input *input)
 {
 	struct wl_event_loop *loop;
@@ -333,7 +338,7 @@ libinput_log_func(struct libinput *libinput,
 	weston_vlog(format, args);
 }
 
-int
+WL_EXPORT int
 udev_input_init(struct udev_input *input, struct weston_compositor *c,
 		struct udev *udev, const char *seat_id,
 		udev_configure_device_t configure_device)
@@ -378,7 +383,7 @@ udev_input_init(struct udev_input *input, struct weston_compositor *c,
 	return udev_input_enable(input);
 }
 
-void
+WL_EXPORT void
 udev_input_destroy(struct udev_input *input)
 {
 	struct udev_seat *seat, *next;
@@ -489,7 +494,7 @@ udev_seat_destroy(struct udev_seat *seat)
 	free(seat);
 }
 
-struct udev_seat *
+WL_EXPORT struct udev_seat *
 udev_seat_get_named(struct udev_input *input, const char *seat_name)
 {
 	struct udev_seat *seat;
