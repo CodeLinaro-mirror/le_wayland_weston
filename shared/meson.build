@@ -106,3 +106,11 @@ dep_matrix_c = declare_dependency(
 	include_directories: public_inc,
 	dependencies: dep_libm
 )
+
+install_headers(
+	'helpers.h',
+	'timespec-util.h',
+	'weston-egl-ext.h',
+	'string-helpers.h',
+	subdir: dir_shared
+)
