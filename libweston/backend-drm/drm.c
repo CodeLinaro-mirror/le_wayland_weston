@@ -2022,7 +2022,6 @@ drm_head_update_info(struct drm_head *head)
 {
 	drmModeConnector *connector;
 
-	weston_log("%s: updating info\n", __FUNCTION__);
 	connector = drmModeGetConnector(head->backend->drm.fd,
 					head->connector_id);
 	if (!connector) {
@@ -2031,10 +2030,8 @@ drm_head_update_info(struct drm_head *head)
 		return;
 	}
 
-//#ifndef BUILD_DRM_COMPOSITOR
 	if (drm_head_assign_connector_info(head, connector) < 0)
 		drmModeFreeConnector(connector);
-//#endif
 
 	if (head->base.device_changed)
 		drm_head_log_info(head, "updated");
@@ -2224,7 +2221,6 @@ drm_backend_update_heads(struct drm_backend *b, struct udev_device *drm_device)
 
 		head = drm_head_find_by_connector(b, connector_id);
 		if (head) {
-			weston_log("head is present for connector:%d \n", connector_id);
 			drm_head_update_info(head);
 		} else {
 			head = drm_head_create(b, connector_id, drm_device);
@@ -2365,7 +2361,6 @@ udev_drm_event(int fd, uint32_t mask, void *data)
 	event = udev_monitor_receive_device(b->udev_monitor);
 
 	if (udev_event_is_hotplug(b, event)) {
-		weston_log("%s: HOTPLUG event\n", __FUNCTION__);
 		if (udev_event_is_conn_prop_change(b, event, &conn_id, &prop_id))
 			drm_backend_update_conn_props(b, conn_id, prop_id);
 		else
