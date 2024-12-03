@@ -1228,7 +1228,7 @@ clear_paint_node(struct weston_paint_node *pnode,
 	height = gs->height;
 
 	pixman_region32_init(&repaint);
-	pixman_region32_intersect(&repaint, &pnode->view->transform.boundingbox, damage);
+	pixman_region32_copy(&repaint, &pnode->view->transform.boundingbox);
 	pixman_region32_subtract(&repaint, &repaint, &pnode->view->clip);
 
 	if (!pixman_region32_not_empty(&repaint))
@@ -1269,8 +1269,7 @@ out_clear_paint_node:
 }
 
 static void
-draw_paint_node_overlay(struct weston_paint_node *pnode, pixman_region32_t *damage,
-				bool have_primary_view)
+draw_paint_node_overlay(struct weston_paint_node *pnode, pixman_region32_t *damage)
 {
 	pixman_region32_t r;
 	bool is_yuv;
@@ -1301,13 +1300,11 @@ draw_paint_node_overlay(struct weston_paint_node *pnode, pixman_region32_t *dama
 	else if (dmabuf = linux_dmabuf_buffer_get(buffer->resource))
 		is_yuv = gbm_buffer_backend->is_yuv_format(dmabuf->attributes.format);
 
-	/* only can clear view by meeting all the three conditions:
-	 * 1, have views on primary plane. If none of views composed by gpu,
-	 * don't clear framebuffer becuase it had been cleared before.
-	 * 2, the whole surface region is opaque or it's yuv region.
-	 * 3, global alpha value is 1.
+	/* only can clear view by meeting both conditions:
+	 * 1, the whole surface region is opaque or it's yuv region.
+	 * 2, global alpha value is 1.
 	 */
-	if (have_primary_view && (!pixman_region32_not_empty(&r) || is_yuv) &&
+	if ((!pixman_region32_not_empty(&r) || is_yuv) &&
 			(pnode->view->alpha == 1)) {
 	/* clear framebuffer with transparent pixels where this layer would be*/
 		clear_paint_node(pnode, damage);
@@ -1320,7 +1317,6 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
 {
 	struct weston_compositor *compositor = output->compositor;
 	struct weston_paint_node *pnode;
-	bool have_primary_view = false;
 
 	wl_list_for_each_reverse(pnode, &output->paint_node_z_order_list,
 				 z_order_link) {
@@ -1330,10 +1326,9 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
 		if (pnode->view->is_completely_covered)
 			continue;
 		if (pnode->view->plane == &compositor->primary_plane) {
-			have_primary_view = true;
 			draw_paint_node(pnode, damage);
 		} else {
-			draw_paint_node_overlay(pnode, damage, have_primary_view);
+			draw_paint_node_overlay(pnode, damage);
 		}
 	}
 }
@@ -1829,6 +1824,18 @@ gl_renderer_repaint_output(struct weston_output *output,
 			struct gl_surface_state *gs =
 				get_surface_state(pnode->view->surface);
 			gs->used_in_output_repaint = false;
+		}
+		/* Skip screen capture buffer during damage calculation */
+		if (screen_capture_backend->is_screen_capture_view(pnode->view))
+			continue;
+		if (pnode->view->is_completely_covered)
+			continue;
+		/* damage of overlay views hasn't been considered by compositor, but
+		 * since we need to paint them as transparant on GPU render target later,
+		 * merge those regions into output_damage. */
+		if (pnode->view->plane != &compositor->primary_plane) {
+			pixman_region32_union(output_damage, output_damage,
+					&pnode->view->transform.boundingbox);
 		}
 	}
 
