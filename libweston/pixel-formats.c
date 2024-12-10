@@ -43,6 +43,7 @@
 #include "shared/xalloc.h"
 #include "wayland-util.h"
 #include "pixel-formats.h"
+#include "gbm_priv.h"
 
 #ifdef ENABLE_EGL
 #include <EGL/egl.h>
@@ -606,6 +607,10 @@ static const struct pixel_format_info pixel_format_table[] = {
 	{
 		DRM_FORMAT(XYUV8888),
 		.bpp = 32,
+	},
+	{
+		.format = GBM_FORMAT_YCbCr_420_TP10_UBWC,
+		.drm_format_name = "TP10_UBWC",
 	},
 };
 
