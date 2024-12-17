@@ -9778,11 +9778,6 @@ weston_compositor_init_renderer(struct weston_compositor *compositor,
 		compositor->renderer->gl = gl_renderer;
 		weston_log("Using GL renderer\n");
 
-		gbm_buffer_backend = weston_load_module("gbm-buffer-backend.so",
-						"gbm_buffer_backend_c_interface",
-						LIBWESTON_MODULEDIR);
-		assert(gbm_buffer_backend);
-
 		break;
 	case WESTON_RENDERER_PIXMAN:
 		ret = pixman_renderer_init(compositor);
@@ -9813,6 +9808,20 @@ weston_compositor_load_xwayland(struct weston_compositor *compositor)
 	if (module_init(compositor) < 0)
 		return -1;
 	return 0;
+}
+
+/** weston_compositor_load_gbm_buffer_backend
+ */
+WL_EXPORT int
+weston_compositor_load_gbm_buffer_backend()
+{
+		gbm_buffer_backend = weston_load_module("gbm-buffer-backend.so",
+						"gbm_buffer_backend_c_interface",
+						LIBWESTON_MODULEDIR);
+		if (!gbm_buffer_backend)
+			return -1;
+
+		return 0;
 }
 
 /** Load Little CMS color manager plugin

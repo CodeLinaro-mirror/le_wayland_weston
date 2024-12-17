@@ -2516,6 +2516,9 @@ int
 weston_compositor_load_xwayland(struct weston_compositor *compositor);
 
 int
+weston_compositor_load_gbm_buffer_backend();
+
+int
 weston_compositor_load_color_manager(struct weston_compositor *compositor);
 
 bool
