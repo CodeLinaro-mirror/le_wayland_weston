@@ -593,11 +593,54 @@ drm_set_dpms(struct weston_output *output_base, enum dpms_enum level);
 static int
 drm_output_init_pixman(struct drm_output *output, struct drm_backend *b);
 
+/*
+* Arguments passed to full init main function
+*/
+struct full_init_param {
+	struct drm_backend *b;
+	const char *seat_id;
+	void (*configure_device)(struct weston_compositor *compositor,
+								 struct libinput_device *device);
+	/*
+	* If early boot is not enabled, need to return
+	* whether full init is done successfully
+	*/
+	bool success;
+};
+
+struct udev_para {
+	struct udev_input *input;
+	struct weston_compositor *compositor;
+	struct udev *udev;
+	const char *seat_id;
+	void (*configure_device)(struct weston_compositor *compositor,
+					struct libinput_device *device);
+};
+
+static int bg_init_input(void *arg)
+{
+	struct udev_para *para = (struct udev_para*)arg;
+	struct drm_backend *b =
+		(struct drm_backend *)para->compositor->backend;
+
+	if (udev_input_init(para->input,
+			para->compositor, para->udev, para->seat_id, para->configure_device)) {
+		weston_log("udev input init failed\n");
+	}
+
+	wl_event_source_remove(b->input_init);
+	free(para);
+
+	return 0;
+}
+
 static int
 finish_init(void *data)
 {
-	struct drm_backend *b = data;
+	struct full_init_param *param = (struct full_init_param*)data;
+	struct drm_backend *b = param->b;
 	struct drm_output *output;
+	struct udev_para *para = NULL;
 	int fd;
 	bool handoff = false;
 	int ret = 0;
@@ -637,6 +680,39 @@ finish_init(void *data)
 	if (!b->early_boot)
 		goto out;
 
+	/*
+	 * In early perf image, we need to postpone udev
+	 * input initialization, or it fails because udev are
+	 * not full ready
+	 */
+	para = (struct udev_para *)malloc(sizeof(struct udev_para));
+	if (para) {
+		para->input = &b->input;
+		para->compositor = b->compositor;
+		para->udev = b->udev;
+		para->seat_id = param->seat_id;
+		para->configure_device = param->configure_device;
+		struct wl_event_loop *loop = wl_display_get_event_loop(b->compositor->wl_display);
+		b->input_init = wl_event_loop_add_timer(loop, bg_init_input, para);
+		if (b->input_init) {
+			/*
+			 * Set the timer with empirical time cost for systemd
+			 * initialization, will refine it with a final solution
+			 * in future
+			 */
+			wl_event_source_timer_update(b->input_init, 2000);
+		}
+		else
+		{
+			weston_log("failed to add wl-event-loop input_init timer\n");
+			free(para);
+		}
+	}
+	else
+	{
+		weston_log("out of memory\n");
+	}
+
 	wl_list_for_each(output, &b->compositor->output_list, base.link) {
 		struct early_layer *early_layer, *next_early_layer;
 
@@ -661,7 +737,7 @@ finish_init(void *data)
 	}
 
 	wl_event_source_remove(b->finish_full_init);
-
+	free(param);
 	early_drm_display_deinit(false);
 out:
 	b->sdm_repaint = true;
@@ -3199,54 +3275,12 @@ static int init_sdm(void) {
 	return 0;
 }
 
-struct udev_para {
-	struct udev_input *input;
-	struct weston_compositor *compositor;
-	struct udev *udev;
-	const char *seat_id;
-	void (*configure_device)(struct weston_compositor *compositor,
-					struct libinput_device *device);
-};
-
-static int bg_init_input(void *arg)
-{
-	struct udev_para *para = (struct udev_para*)arg;
-	struct drm_backend *b =
-		(struct drm_backend *)para->compositor->backend;
-
-	if (udev_input_init(para->input,
-			para->compositor, para->udev, para->seat_id, para->configure_device)) {
-		weston_log("udev input init failed\n");
-	}
-
-	wl_event_source_remove(b->input_init);
-	free(para);
-
-	return 0;
-}
-
-/*
-* Arguments passed to full init main function
-*/
-struct full_init_param {
-	struct drm_backend *b;
-	const char *seat_id;
-	void (*configure_device)(struct weston_compositor *compositor,
-								 struct libinput_device *device);
-	/*
-	* If early boot is not enabled, need to return
-	* whether full init is done successfully
-	*/
-	bool success;
-};
-
 static void *full_init_main(void *arg) {
 	struct full_init_param *param =
 			(struct full_init_param *)arg;
 	struct drm_backend *b = param->b;
 	struct wl_event_loop *loop;
 	uint32_t key;
-	struct udev_para *para = NULL;
 	const char* seat_id = param->seat_id;
 
 	if (b->early_boot && b->first_repaint) {
@@ -3329,65 +3363,27 @@ static void *full_init_main(void *arg) {
 			renderer_switch_binding, b);
 	if (b->early_boot) {
 		/*
-		 * In early perf image, we need to postpone udev
-		 * input initialization, or it fails because udev are
-		 * not full ready
-		 */
-		para = (struct udev_para *)malloc(sizeof(struct udev_para));
-		if (!para) {
-			weston_log("out of memory\n");
-			goto err_udev_drm_source;
-		}
-		para->input = &b->input;
-		para->compositor = b->compositor;
-		para->udev = b->udev;
-		para->seat_id = param->seat_id;
-		para->configure_device = param->configure_device;
-		b->input_init = wl_event_loop_add_timer(loop, bg_init_input, para);
-		if (!b->input_init) {
-			weston_log("failed to add wl-event-loop input_init timer\n");
-			goto err_free_para;
-		}
-
-		/*
-		 * Set the timer with empirical time cost for systemd
-		 * initialization, will refine it with a final solution
-		 * in future
-		 */
-		wl_event_source_timer_update(b->input_init, 2000);
-
-		/*
 		* Set up a timer to switch to sdm repaint mode
 		*/
-		b->finish_full_init = wl_event_loop_add_timer(loop, finish_init, b);
-		if (!b->finish_full_init) {
-			weston_log("failed to add wl-event-loop finish_init timer\n");
-			goto err_wl_event_input_init;
+		if (b->finish_full_init) {
+			wl_event_source_timer_update(b->finish_full_init, 1);
 		}
-		wl_event_source_timer_update(b->finish_full_init, 1);
 
-		free(param);
 		return NULL;
 	}
 
 	if (udev_input_init(&b->input, b->compositor, b->udev, param->seat_id, param->configure_device) < 0) {
 		weston_log("failed to create input devices\n");
-		goto err_free_para;
+		goto err_udev_drm_source;
 	}
 
-	if (finish_init(b))
+	if (finish_init(param))
 		goto err_udev_input;
 	param->success = true;
 	return NULL;
 
 err_udev_input:
 	udev_input_destroy(&b->input);
-err_wl_event_input_init:
-	if (b->input_init)
-		wl_event_source_remove(b->input_init);
-err_free_para:
-	if (para)
-		free(para);
 err_udev_drm_source:
 	wl_event_source_remove(b->udev_drm_source);
 err_udev_monitor:
@@ -3525,6 +3521,17 @@ drm_backend_create(struct weston_compositor *compositor,
 			weston_log("Failed to create heads for drm\n");
 			goto err_display;
 		}
+
+		/*
+		* Set up a timer to switch to sdm repaint mode
+		*/
+		struct wl_event_loop *loop = wl_display_get_event_loop(b->compositor->wl_display);
+		b->finish_full_init = wl_event_loop_add_timer(loop, finish_init, full_init_param);
+		if (!b->finish_full_init) {
+			weston_log("failed to add wl-event-loop finish_init timer\n");
+			goto err_display;
+		}
+
 		/*
 		* If early boot is enabled, create another thread to do full backend
 		* initialization.
@@ -3534,7 +3541,7 @@ drm_backend_create(struct weston_compositor *compositor,
 				full_init_main, full_init_param)) {
 			weston_log("failed to create full init thread\n");
 			free(full_init_param);
-			goto err_display;
+			goto err_wl_event_finish_full_init;
 		}
 	} else {
 		/* If early boot is disabled, do full backend initialization directly. */
@@ -3550,6 +3557,9 @@ drm_backend_create(struct weston_compositor *compositor,
 
 	return b;
 
+err_wl_event_finish_full_init:
+	if (b->finish_full_init)
+		wl_event_source_remove(b->finish_full_init);
 err_display:
 	early_drm_display_deinit(true);
 err_sprite:
