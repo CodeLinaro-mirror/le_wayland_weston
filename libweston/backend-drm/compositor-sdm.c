@@ -635,118 +635,6 @@ static int bg_init_input(void *arg)
 }
 
 static int
-finish_init(void *data)
-{
-	struct full_init_param *param = (struct full_init_param*)data;
-	struct drm_backend *b = param->b;
-	struct drm_output *output;
-	struct udev_para *para = NULL;
-	int fd;
-	bool handoff = false;
-	int ret = 0;
-
-	if (b->use_pixman) {
-		if (pixman_renderer_init(b->compositor) < 0) {
-			weston_log("Failed to create pixman renderer.\n");
-			return -1;
-		}
-
-		wl_list_for_each(output, &b->compositor->output_list, base.link)
-			drm_output_init_pixman(output, b);
-	} else {
-		/* destroy early renderer if it exsit */
-		b->compositor->renderer->destroy(b->compositor);
-		if (drm_backend_create_gl_renderer(b) < 0) {
-			weston_log("Failed to create GL renderer.\n");
-			return -1;
-		}
-
-		wl_list_for_each(output, &b->compositor->output_list, base.link) {
-			drm_output_init_egl(output, b);
-			drm_set_dpms(&output->base, WESTON_DPMS_ON);
-		}
-
-		if (b->compositor->renderer->import_dmabuf) {
-			if (linux_dmabuf_setup(b->compositor) < 0)
-				weston_log("Error: initializing dmabuf "
-						"support failed.\n");
-		}
-		if (screen_capture_setup(b->compositor) < 0)
-				weston_log("Error: initializing screen_capture_setup "
-						"support failed.\n");
-
-	}
-
-	if (!b->early_boot)
-		goto out;
-
-	/*
-	 * In early perf image, we need to postpone udev
-	 * input initialization, or it fails because udev are
-	 * not full ready
-	 */
-	para = (struct udev_para *)malloc(sizeof(struct udev_para));
-	if (para) {
-		para->input = &b->input;
-		para->compositor = b->compositor;
-		para->udev = b->udev;
-		para->seat_id = param->seat_id;
-		para->configure_device = param->configure_device;
-		struct wl_event_loop *loop = wl_display_get_event_loop(b->compositor->wl_display);
-		b->input_init = wl_event_loop_add_timer(loop, bg_init_input, para);
-		if (b->input_init) {
-			/*
-			 * Set the timer with empirical time cost for systemd
-			 * initialization, will refine it with a final solution
-			 * in future
-			 */
-			wl_event_source_timer_update(b->input_init, 2000);
-		}
-		else
-		{
-			weston_log("failed to add wl-event-loop input_init timer\n");
-			free(para);
-		}
-	}
-	else
-	{
-		weston_log("out of memory\n");
-	}
-
-	wl_list_for_each(output, &b->compositor->output_list, base.link) {
-		struct early_layer *early_layer, *next_early_layer;
-
-		if (!wl_list_empty(&output->early_layer_list) || !wl_list_empty(&output->commited_early_list))
-			handoff = true;
-
-		/*
-		* Schedule a repaint for every output to make sure
-		* outputs display consistently after switching.
-		*/
-		weston_output_schedule_repaint(&output->base);
-	}
-
-	/*
-	 * attach early pipes to sdm display to make sure the early pipes could
-	 * be using correctly by sdm, current frame is using the pipes
-	 */
-	if (handoff) {
-		ret = sdm_service->SetPlaneInitState();
-		if (ret)
-			weston_log("handoff early pipes error %d\n", ret);
-	}
-
-	wl_event_source_remove(b->finish_full_init);
-	free(param);
-	early_drm_display_deinit(false);
-out:
-	b->sdm_repaint = true;
-	weston_log("full initialization finished, switched to sdm repaint!\n");
-	weston_place_marker("W - backend full ready");
-	return 0;
-}
-
-static int
 drm_output_repaint_early(struct weston_output *output_base)
 {
 	struct drm_output *output = (struct drm_output *) output_base;
@@ -3275,12 +3163,136 @@ static int init_sdm(void) {
 	return 0;
 }
 
+static int
+finish_init(void *data)
+{
+	struct full_init_param *param = (struct full_init_param*)data;
+	struct drm_backend *b = param->b;
+	struct weston_compositor *compositor = b->compositor;
+	struct drm_output *output;
+	struct udev_para *para = NULL;
+	int fd;
+	bool handoff = false;
+	uint32_t key;
+	int ret = 0;
+
+	if (compositor) {
+		for (key = KEY_F1; key < KEY_F9; key++)
+			weston_compositor_add_key_binding(compositor, key, MODIFIER_CTRL | MODIFIER_ALT,
+					switch_vt_binding, compositor);
+
+		weston_compositor_add_debug_binding(compositor, KEY_Q,
+				recorder_binding, b);
+		weston_compositor_add_debug_binding(compositor, KEY_W,
+				renderer_switch_binding, b);
+	}
+
+	if (b->use_pixman) {
+		if (pixman_renderer_init(b->compositor) < 0) {
+			weston_log("Failed to create pixman renderer.\n");
+			return -1;
+		}
+
+		wl_list_for_each(output, &b->compositor->output_list, base.link)
+			drm_output_init_pixman(output, b);
+	} else {
+		/* destroy early renderer if it exsit */
+		b->compositor->renderer->destroy(b->compositor);
+		if (drm_backend_create_gl_renderer(b) < 0) {
+			weston_log("Failed to create GL renderer.\n");
+			return -1;
+		}
+
+		wl_list_for_each(output, &b->compositor->output_list, base.link) {
+			drm_output_init_egl(output, b);
+			drm_set_dpms(&output->base, WESTON_DPMS_ON);
+		}
+
+		if (b->compositor->renderer->import_dmabuf) {
+			if (linux_dmabuf_setup(b->compositor) < 0)
+				weston_log("Error: initializing dmabuf "
+						"support failed.\n");
+		}
+		if (screen_capture_setup(b->compositor) < 0)
+				weston_log("Error: initializing screen_capture_setup "
+						"support failed.\n");
+
+	}
+
+	if (!b->early_boot)
+		goto out;
+
+	/*
+	 * In early perf image, we need to postpone udev
+	 * input initialization, or it fails because udev are
+	 * not full ready
+	 */
+	para = (struct udev_para *)malloc(sizeof(struct udev_para));
+	if (para) {
+		para->input = &b->input;
+		para->compositor = b->compositor;
+		para->udev = b->udev;
+		para->seat_id = param->seat_id;
+		para->configure_device = param->configure_device;
+		struct wl_event_loop *loop = wl_display_get_event_loop(b->compositor->wl_display);
+		b->input_init = wl_event_loop_add_timer(loop, bg_init_input, para);
+		if (b->input_init) {
+			/*
+			 * Set the timer with empirical time cost for systemd
+			 * initialization, will refine it with a final solution
+			 * in future
+			 */
+			wl_event_source_timer_update(b->input_init, 2000);
+		}
+		else
+		{
+			weston_log("failed to add wl-event-loop input_init timer\n");
+			free(para);
+		}
+	}
+	else
+	{
+		weston_log("out of memory\n");
+	}
+
+	wl_list_for_each(output, &b->compositor->output_list, base.link) {
+		struct early_layer *early_layer, *next_early_layer;
+
+		if (!wl_list_empty(&output->early_layer_list) || !wl_list_empty(&output->commited_early_list))
+			handoff = true;
+
+		/*
+		* Schedule a repaint for every output to make sure
+		* outputs display consistently after switching.
+		*/
+		weston_output_schedule_repaint(&output->base);
+	}
+
+	/*
+	 * attach early pipes to sdm display to make sure the early pipes could
+	 * be using correctly by sdm, current frame is using the pipes
+	 */
+	if (handoff) {
+		ret = sdm_service->SetPlaneInitState();
+		if (ret)
+			weston_log("handoff early pipes error %d\n", ret);
+	}
+
+	wl_event_source_remove(b->finish_full_init);
+	free(param);
+	early_drm_display_deinit(false);
+out:
+	b->sdm_repaint = true;
+	weston_log("full initialization finished, switched to sdm repaint!\n");
+	weston_place_marker("W - backend full ready");
+	return 0;
+}
+
 static void *full_init_main(void *arg) {
 	struct full_init_param *param =
 			(struct full_init_param *)arg;
 	struct drm_backend *b = param->b;
 	struct wl_event_loop *loop;
-	uint32_t key;
 	const char* seat_id = param->seat_id;
 
 	if (b->early_boot && b->first_repaint) {
@@ -3330,10 +3342,6 @@ static void *full_init_main(void *arg) {
 
 	b->prev_state = WESTON_COMPOSITOR_ACTIVE;
 
-	for (key = KEY_F1; key < KEY_F9; key++)
-		weston_compositor_add_key_binding(compositor, key, MODIFIER_CTRL | MODIFIER_ALT,
-				switch_vt_binding, compositor);
-
 	b->udev_monitor = udev_monitor_new_from_netlink(b->udev, "udev");
 	if (b->udev_monitor == NULL) {
 		weston_log("failed to intialize udev monitor\n");
@@ -3357,10 +3365,6 @@ static void *full_init_main(void *arg) {
 		goto err_udev_drm_source;
 	}
 
-	weston_compositor_add_debug_binding(compositor, KEY_Q,
-			recorder_binding, b);
-	weston_compositor_add_debug_binding(compositor, KEY_W,
-			renderer_switch_binding, b);
 	if (b->early_boot) {
 		/*
 		* Set up a timer to switch to sdm repaint mode
