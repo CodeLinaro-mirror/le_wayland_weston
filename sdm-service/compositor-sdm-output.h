@@ -171,6 +171,8 @@ struct drm_backend {
   bool early_boot;
   /* Whether is the first repaint for weston */
   bool first_repaint;
+  /* Whether is the full initialization is completed */
+  bool full_init_completed;
 
   /* Screen capture data */
   struct screen_capture *screen_cap;

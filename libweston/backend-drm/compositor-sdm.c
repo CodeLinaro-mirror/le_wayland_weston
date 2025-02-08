@@ -3176,6 +3176,11 @@ finish_init(void *data)
 	uint32_t key;
 	int ret = 0;
 
+	if (b->early_boot && b->finish_full_init && !b->full_init_completed) {
+		wl_event_source_timer_update(b->finish_full_init, 10);
+		return 0;
+	}
+
 	if (compositor) {
 		for (key = KEY_F1; key < KEY_F9; key++)
 			weston_compositor_add_key_binding(compositor, key, MODIFIER_CTRL | MODIFIER_ALT,
@@ -3242,7 +3247,7 @@ finish_init(void *data)
 			 * initialization, will refine it with a final solution
 			 * in future
 			 */
-			wl_event_source_timer_update(b->input_init, 2000);
+			wl_event_source_timer_update(b->input_init, 1);
 		}
 		else
 		{
@@ -3366,12 +3371,7 @@ static void *full_init_main(void *arg) {
 	}
 
 	if (b->early_boot) {
-		/*
-		* Set up a timer to switch to sdm repaint mode
-		*/
-		if (b->finish_full_init) {
-			wl_event_source_timer_update(b->finish_full_init, 1);
-		}
+		b->full_init_completed = true;
 
 		return NULL;
 	}
@@ -3547,6 +3547,10 @@ drm_backend_create(struct weston_compositor *compositor,
 			free(full_init_param);
 			goto err_wl_event_finish_full_init;
 		}
+		/*
+		* Set up a timer to switch to sdm repaint mode
+		*/
+		wl_event_source_timer_update(b->finish_full_init, 32);
 	} else {
 		/* If early boot is disabled, do full backend initialization directly. */
 		full_init_main(full_init_param);
