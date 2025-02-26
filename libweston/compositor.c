@@ -26,13 +26,6 @@
  * SOFTWARE.
  */
 
-/*
-* Changes from Qualcomm Innovation Center are provided under the following license:
-*
-* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
-* SPDX-License-Identifier: BSD-3-Clause-Clear
-*/
-
 #include "config.h"
 
 #include <fcntl.h>
@@ -65,7 +58,6 @@
 #include <libweston/libweston.h>
 #include <libweston/weston-log.h>
 #include "linux-dmabuf.h"
-#include "gbm-buffer-backend.h"
 #include "viewporter-server-protocol.h"
 #include "presentation-time-server-protocol.h"
 #include "xdg-output-unstable-v1-server-protocol.h"
@@ -93,7 +85,7 @@
  * \defgroup compositor Compositor
  */
 
-#define DEFAULT_REPAINT_WINDOW 15 /* milliseconds */
+#define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
 
 static void
 weston_output_update_matrix(struct weston_output *output);
@@ -418,7 +410,6 @@ weston_view_create(struct weston_surface *surface)
 	pixman_region32_init(&view->geometry.scissor);
 	pixman_region32_init(&view->transform.boundingbox);
 	view->transform.dirty = 1;
-	view->is_completely_covered = false;
 
 	return view;
 }
@@ -2597,12 +2588,7 @@ view_accumulate_damage(struct weston_view *view,
 	pixman_region32_union(&view->plane->damage,
 			      &view->plane->damage, &damage);
 	pixman_region32_fini(&damage);
-	/* move this line to assign planes in sdm backend
-	 * no matter what value of view->plane, the view->clip should be the same
-	 * but our overlay implementation let view->plane equal to NULL, it can't
-	 * calculate correct clip region here, so calculate it in sdm backend
-	 */
-	//pixman_region32_copy(&view->clip, opaque);
+	pixman_region32_copy(&view->clip, opaque);
 	pixman_region32_union(opaque, opaque, &view->transform.opaque);
 }
 
@@ -3166,11 +3152,7 @@ weston_output_finish_frame(struct weston_output *output,
 	struct timespec vblank_monotonic;
 	int64_t msec_rel;
 
-        //assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
-
-        if(REPAINT_AWAITING_COMPLETION != output->repaint_status) {
-                return;
-        }
+	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
 
 	/*
 	 * If timestamp of latest vblank is given, it must always go forwards.
@@ -8070,31 +8052,6 @@ weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
 		return false;
 
 	return backend->can_scanout_dmabuf(compositor, buffer);
-}
-
-/** Import gbmbuf buffer into current renderer
- *
- * \param compositor
- * \param buffer the gbmbuf buffer to import
- * \return true on usable buffers, false otherwise
- *
- * This function tests that the gbm_buffer is usable
- * for the current renderer. Returns false on unusable buffers. Usually
- * usability is tested by importing the gbmbuf for composition.
- *
- * This hook is also used for detecting if the renderer supports
- * gbmbuf at all. If the renderer hook is NULL, dmabufs are not
- * supported.
- * */
-WL_EXPORT bool
-weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
-				struct gbm_buffer *buffer)
-{
-	struct weston_renderer *renderer;
-	renderer = compositor->renderer;
-	if (renderer->import_gbm_buffer == NULL)
-		return false;
-	return renderer->import_gbm_buffer(compositor, buffer);
 }
 
 WL_EXPORT void

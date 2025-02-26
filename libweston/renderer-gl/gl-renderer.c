@@ -23,11 +23,6 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -65,10 +60,6 @@
 #include "shared/timespec-util.h"
 #include "shared/weston-drm-fourcc.h"
 #include "shared/weston-egl-ext.h"
-#include "gbm_priv.h"
-#include "gbm-buffer-backend.h"
-#include "screen-capture.h"
-#include "bootkpi/logging.h"
 
 #define BUFFER_DAMAGE_COUNT 2
 
@@ -128,7 +119,6 @@ struct egl_image {
 	struct gl_renderer *renderer;
 	EGLImageKHR image;
 	int refcount;
-	bool is_secure; // whether image is protected
 };
 
 enum import_type {
@@ -154,16 +144,6 @@ struct dmabuf_format {
 	uint64_t *modifiers;
 	unsigned *external_only;
 	int num_modifiers;
-};
-
-struct gbmbuf_image {
-	struct gbm_buffer *gbmbuf;
-	int num_images;
-	struct egl_image *images[3];
-	struct wl_list link;
-
-	enum import_type import_type;
-	enum gl_shader_texture_variant shader_variant;
 };
 
 struct yuv_plane_descriptor {
@@ -242,9 +222,6 @@ struct timeline_render_point {
 	struct weston_output *output;
 	struct wl_event_source *event_source;
 };
-
-struct gbm_buffer_backend_c_interface *gbm_buffer_backend;
-struct screen_capture_c_interface *screen_capture_backend;
 
 static uint32_t
 gr_gl_version(uint16_t major, uint16_t minor)
@@ -457,33 +434,6 @@ dmabuf_image_destroy(struct dmabuf_image *image)
 
 	if (image->dmabuf)
 		linux_dmabuf_buffer_set_user_data(image->dmabuf, NULL, NULL);
-
-	wl_list_remove(&image->link);
-	free(image);
-}
-
-static struct gbmbuf_image*
-gbmbuf_image_create(void)
-{
-	struct gbmbuf_image *img;
-
-	img = zalloc(sizeof *img);
-	wl_list_init(&img->link);
-
-	return img;
-}
-
-static void
-gbmbuf_image_destroy(struct gbmbuf_image *image)
-{
-	int i;
-
-	for (i = 0; i < image->num_images; ++i)
-		egl_image_unref(image->images[i]);
-
-	if (image->gbmbuf) {
-		gbm_buffer_backend->set_user_data(image->gbmbuf, NULL, NULL);
-	}
 
 	wl_list_remove(&image->link);
 	free(image);
@@ -1184,158 +1134,15 @@ out:
 }
 
 static void
-gl_renderer_surface_set_color(struct weston_surface *surface,
-		 float red, float green, float blue, float alpha);
-
-/* clear_paint_node: It composes onto GPU composed layer a clear transparent
-					 bounding box of the size same as that of overlay layer
-					 to allow overlay plane to be visible through the GPU
-					 composed layer.
-   Inputs:
-					 struct weston_paint_node *pnode	  : weston paint node
-					 pixman_region32_t	*damage
-   Output:
-					 GPU composed layer pnode->surface will have a clear
-					 transparent bounding box with alpha = 0 and all
-					 3 color channels also equal to 0.
-
- * For more details of changing from weston_view to weston_paint_node, refers to
-   https://gitlab.freedesktop.org/wayland/weston/-/commit/da0f7ea4a7539e3d4fcd21d87303412a060aa6c8
-*/
-static void
-clear_paint_node(struct weston_paint_node *pnode,
-	   pixman_region32_t *damage) /* in global coordinates */
-{
-	struct gl_renderer *gr = get_renderer(pnode->surface->compositor);
-	struct gl_surface_state *gs = get_surface_state(pnode->surface);
-	/* repaint bounding region in global coordinates: */
-	pixman_region32_t repaint;
-	/* non-opaque region in surface coordinates: */
-	pixman_region32_t surface_blend;
-	GLint filter;
-	enum gl_shader_texture_variant shader_variant;
-	int pitch, height;
-	enum buffer_type buffer_type;
-	int i;
-
-	if (gs->shader_variant == SHADER_VARIANT_NONE && !gs->direct_display)
-		return;
-
-	/* gl_renderer_surface_set_color() called below will reset the surface_state,
-	 * so we save the original ones here. */
-	shader_variant = gs->shader_variant;
-	buffer_type =  gs->buffer_type;
-	pitch = gs->pitch;
-	height = gs->height;
-
-	pixman_region32_init(&repaint);
-	pixman_region32_intersect(&repaint, &pnode->view->transform.boundingbox, damage);
-	pixman_region32_subtract(&repaint, &repaint, &pnode->view->clip);
-
-	if (!pixman_region32_not_empty(&repaint))
-		goto out_clear_paint_node;
-
-	glDisable(GL_BLEND);
-	gl_renderer_surface_set_color(pnode->surface, 0.0f, 0.0f, 0.0f, 0.0f);
-
-	if (pnode->view->transform.enabled || pnode->output->zoom.active ||
-	    pnode->output->current_scale != pnode->surface->buffer_viewport.buffer.scale)
-		filter = GL_LINEAR;
-	else
-		filter = GL_NEAREST;
-
-	struct gl_shader_config sconf;
-	if (!gl_shader_config_init_for_paint_node(&sconf, pnode, filter))
-		goto out_clear_paint_node;
-	maybe_censor_override(&sconf, pnode->output, pnode->view);
-
-	/* Reset sonf.input_tex since we have chosen SOLID shader */
-	for (i = 0; i < gs->num_textures; i++)
-		sconf.input_tex[i] = 0;
-
-	pixman_region32_init_rect(&surface_blend, 0, 0,
-				pnode->surface->width, pnode->surface->height);
-	repaint_region(gr, pnode->view, pnode->output, &repaint, &surface_blend, &sconf);
-
-	pixman_region32_fini(&surface_blend);
-
-	/* restore gs setting */
-	gs->shader_variant = shader_variant;
-	gs->buffer_type = buffer_type;
-	gs->pitch = pitch;
-	gs->height = height;
-
-out_clear_paint_node:
-	pixman_region32_fini(&repaint);
-}
-
-static void
-draw_paint_node_overlay(struct weston_paint_node *pnode, pixman_region32_t *damage,
-				bool have_primary_view)
-{
-	pixman_region32_t r;
-	bool is_yuv;
-	struct gbm_buffer *gbmbuf;
-	struct linux_dmabuf_buffer *dmabuf;
-
-	/* The invisible layer could be marked as SDE by strategy, which means both gpu
-	 * and MDP could ignore this kind of view, no hardware pipe for it. But the buffer
-	 * could be NULL in this case, add this judgement to avoid crash.
-	 */
-	if (pnode->surface->buffer_ref.buffer == NULL) {
-	/* TODO: check why it's happen since invisible layers should be handled
-	 * by view->is_completely_covered.
-	 */
-		return;
-	}
-	/* this view is composed directly by overlay */
-	/* compute whether this view has blending */
-	pixman_region32_init_rect(&r, 0, 0, pnode->surface->width,
-			pnode->surface->height);
-	pixman_region32_subtract(&r, &r, &pnode->surface->opaque);
-
-	/* get yuv statement from gbm or dma buffer info */
-	is_yuv = false;
-	struct weston_buffer *buffer = pnode->surface->buffer_ref.buffer;
-	if (gbmbuf = gbm_buffer_backend->buffer_get(buffer->resource))
-		is_yuv = gbm_buffer_backend->is_yuv_format(gbmbuf->format);
-	else if (dmabuf = linux_dmabuf_buffer_get(buffer->resource))
-		is_yuv = gbm_buffer_backend->is_yuv_format(dmabuf->attributes.format);
-
-	/* only can clear view by meeting all the three conditions:
-	 * 1, have views on primary plane. If none of views composed by gpu,
-	 * don't clear framebuffer becuase it had been cleared before.
-	 * 2, the whole surface region is opaque or it's yuv region.
-	 * 3, global alpha value is 1.
-	 */
-	if (have_primary_view && (!pixman_region32_not_empty(&r) || is_yuv) &&
-			(pnode->view->alpha == 1)) {
-	/* clear framebuffer with transparent pixels where this layer would be*/
-		clear_paint_node(pnode, damage);
-	}
-	pixman_region32_fini(&r);
-}
-
-static void
 repaint_views(struct weston_output *output, pixman_region32_t *damage)
 {
 	struct weston_compositor *compositor = output->compositor;
 	struct weston_paint_node *pnode;
-	bool have_primary_view = false;
 
 	wl_list_for_each_reverse(pnode, &output->paint_node_z_order_list,
 				 z_order_link) {
-		/* Skip screen capture buffer during GPU composition */
-		if (screen_capture_backend->is_screen_capture_view(pnode->view))
-			continue;
-		if (pnode->view->is_completely_covered)
-			continue;
-		if (pnode->view->plane == &compositor->primary_plane) {
-			have_primary_view = true;
+		if (pnode->view->plane == &compositor->primary_plane)
 			draw_paint_node(pnode, damage);
-		} else {
-			draw_paint_node_overlay(pnode, damage, have_primary_view);
-		}
 	}
 }
 
@@ -1974,116 +1781,6 @@ gl_renderer_repaint_output(struct weston_output *output,
 	gl_renderer_garbage_collect_programs(gr);
 }
 
-/*
- * Capture screen content into a specified buffer by using FBO. This buffer
- * must be gbm buffer which is created by GBM buffer protocol, otherwise, egl
- * image must be created here.
- */
-static void
-gl_renderer_capture_screen(struct weston_output *output,
-                              struct weston_buffer *buffer,
-                              pixman_region32_t *output_damage)
-{
-	struct gl_output_state *go = get_output_state(output);
-	struct weston_compositor *compositor = output->compositor;
-	pixman_region32_t buffer_damage, total_damage;
-	enum gl_border_status border_damage = BORDER_STATUS_CLEAN;
-	GLuint framebuffer, texture;
-	GLenum status;
-	struct gbm_buffer *gbm_buf = NULL;
-	struct egl_image *cap_buf_image = NULL;
-	struct gbmbuf_image *gbm_buf_image = NULL;
-	struct weston_view *view;
-	struct weston_paint_node *pnode;
-
-	if (!buffer) {
-		weston_log("Error! buffer is NULL.\n");
-		return;
-	}
-
-	if (wl_shm_buffer_get(buffer->resource) ||
-		linux_dmabuf_buffer_get(buffer->resource)) {
-		weston_log("Error! buffer is not supported by screen capture.\n");
-		return;
-	}
-
-	if (gbm_buf = gbm_buffer_backend->buffer_get(buffer->resource)) {
-		gbm_buf_image = gbm_buffer_backend->get_user_data(gbm_buf);
-		cap_buf_image = gbm_buf_image->images[0];
-	} else if (gbm_buf = wl_resource_get_user_data(buffer->resource)) {
-		/* TODO: Create egl image */
-		weston_log("Error! no egl image is bound.\n");
-		return;
-	}
-	if (!cap_buf_image) {
-		weston_log("Error! no egl image is bound.\n");
-		return;
-	}
-
-	/* Prepare for framebuffer */
-	glGenTextures(1, &texture);
-	glBindTexture(GL_TEXTURE_2D, texture);
-	glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, cap_buf_image->image);
-	glBindTexture(GL_TEXTURE_2D, 0);
-
-	glGenFramebuffers(1, &framebuffer);
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-	status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	if (status != GL_FRAMEBUFFER_COMPLETE) {
-		glDeleteFramebuffers(1, &framebuffer);
-		glDeleteTextures(1, &texture);
-		weston_log("Error! can't make FBO.\n");
-		return;
-	}
-
-	/* Calculate the viewport */
-	glViewport(go->borders[GL_RENDERER_BORDER_LEFT].width,
-			   go->borders[GL_RENDERER_BORDER_BOTTOM].height,
-			   gbm_buf->width,
-			   gbm_buf->height);
-
-	/* Calculate the global GL matrix */
-	go->output_matrix = output->matrix;
-	weston_matrix_translate(&go->output_matrix,
-				-(output->current_mode->width / 2.0),
-				-(output->current_mode->height / 2.0), 0);
-	/* Change y to y_invert */
-	weston_matrix_scale(&go->output_matrix,
-			    2.0 / output->current_mode->width,
-			    2.0 / output->current_mode->height, 1);
-
-	pixman_region32_init(&total_damage);
-	pixman_region32_init(&buffer_damage);
-
-	output_get_damage(output, &buffer_damage, &border_damage);
-	output_rotate_damage(output, output_damage, go->border_status);
-
-	pixman_region32_union(&total_damage, &buffer_damage, output_damage);
-	border_damage |= go->border_status;
-
-	/* Draw all views */
-	wl_list_for_each_reverse(pnode, &output->paint_node_z_order_list,
-				 z_order_link) {
-		if (screen_capture_backend->is_screen_capture_view(pnode->view))
-			continue;
-		draw_paint_node(pnode, &total_damage);
-	}
-
-	pixman_region32_fini(&total_damage);
-	pixman_region32_fini(&buffer_damage);
-
-	draw_output_borders(output, border_damage);
-
-	/* Check if FBO rendering is completed. Any efficient way except glFinish? */
-	glFinish();
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	glDeleteFramebuffers(1, &framebuffer);
-	glDeleteTextures(1, &texture);
-
-	go->border_status = BORDER_STATUS_CLEAN;
-}
-
 static int
 gl_renderer_read_pixels(struct weston_output *output,
 			pixman_format_code_t format, void *pixels,
@@ -2442,37 +2139,6 @@ unsupported:
 	}
 }
 
-static bool
-surface_buffer_is_secure(struct weston_surface *es, struct gbm_device *gbm_dev)
-{
-	struct gbm_bo* gbm_bo_ptr;
-	int secure_status, result;
-	bool is_secure_buffer = false;
-
-	gbm_bo_ptr = gbm_bo_import(
-			gbm_dev,
-			GBM_BO_IMPORT_GBM_BUF_TYPE,
-			wl_resource_get_user_data(es->buffer_ref.buffer->resource),
-			GBM_BO_USE_SCANOUT);
-	if (NULL == gbm_bo_ptr) {
-		weston_log("GBM_BO_IMPORT_GBM_BUF_TYPE failed\n");
-	} else {
-		result = gbm_perform(
-				GBM_PERFORM_GET_METADATA,
-				gbm_bo_ptr,
-				GBM_METADATA_GET_SECURE_BUF_STAT,
-				&secure_status);
-		if (GBM_ERROR_NONE == result) {
-			is_secure_buffer = (bool)secure_status;
-		} else {
-			weston_log("GBM_METADATA_GET_SECURE_BUF_STAT failed: %d\n", result);
-		}
-		gbm_bo_destroy(gbm_bo_ptr);
-	}
-
-	return is_secure_buffer;
-}
-
 static void
 gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 		       uint32_t format)
@@ -2480,10 +2146,9 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 	struct weston_compositor *ec = es->compositor;
 	struct gl_renderer *gr = get_renderer(ec);
 	struct gl_surface_state *gs = get_surface_state(es);
-	EGLint attribs[7];
+	EGLint attribs[5];
 	GLenum target;
 	int i, num_planes;
-	bool is_secure_buffer;
 
 	buffer->legacy_buffer = (struct wl_buffer *)buffer->resource;
 	gr->query_buffer(gr->egl_display, buffer->legacy_buffer,
@@ -2531,20 +2196,12 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 	gs->num_images = num_planes;
 	target = gl_shader_texture_variant_get_target(gs->shader_variant);
 	ensure_textures(gs, target, num_planes);
-
-	is_secure_buffer = surface_buffer_is_secure(es, gr->gbm_hdle);
-
 	for (i = 0; i < num_planes; i++) {
-		int atti = 0;
-		attribs[atti++] = EGL_WAYLAND_PLANE_WL;
-		attribs[atti++] = i;
-		attribs[atti++] = EGL_IMAGE_PRESERVED_KHR;
-		attribs[atti++] = EGL_TRUE;
-		if (is_secure_buffer) {
-			attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
-			attribs[atti++] = EGL_TRUE;
-		}
-		attribs[atti++] = EGL_NONE;
+		attribs[0] = EGL_WAYLAND_PLANE_WL;
+		attribs[1] = i;
+		attribs[2] = EGL_IMAGE_PRESERVED_KHR;
+		attribs[3] = EGL_TRUE;
+		attribs[4] = EGL_NONE;
 
 		gs->images[i] = egl_image_create(gr,
 						 EGL_WAYLAND_BUFFER_WL,
@@ -2558,11 +2215,6 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 		glActiveTexture(GL_TEXTURE0 + i);
 		glBindTexture(target, gs->textures[i]);
 		gr->image_target_texture_2d(target, gs->images[i]->image);
-
-		if (is_secure_buffer) {
-			gs->images[i]->is_secure = true;
-			glTexParameteri(target, GL_TEXTURE_PROTECTED_EXT, GL_TRUE);
-		}
 	}
 
 	gs->pitch = buffer->width;
@@ -3209,390 +2861,6 @@ gl_renderer_attach_dmabuf(struct weston_surface *surface,
 	gs->shader_variant = image->shader_variant;
 }
 
-static struct egl_image *
-import_simple_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
-{
-	struct egl_image *egl_image;
-	EGLint attribs[50];
-	int atti = 0;
-	int colorspace = 0;
-	ColorMetaData colormeta = {0};
-	int result = -1;
-
-	/* This requires the Mesa commit in
-	 * Mesa 10.3 (08264e5dad4df448e7718e782ad9077902089a07) or
-	 * Mesa 10.2.7 (55d28925e6109a4afd61f109e845a8a51bd17652).
-	 * Otherwise Mesa closes the fd behind our back and re-importing
-	 * will fail.
-	 * https://bugs.freedesktop.org/show_bug.cgi?id=76188
-	 */
-	attribs[atti++] = EGL_WIDTH;
-	attribs[atti++] = gbmbuf->width;
-	attribs[atti++] = EGL_HEIGHT;
-	attribs[atti++] = gbmbuf->height;
-	attribs[atti++] = EGL_LINUX_DRM_FOURCC_EXT;
-	attribs[atti++] = gbmbuf->format;
-	/* XXX: Add modifier here when supported */
-	if (gbmbuf->num_planes > 0) {
-		attribs[atti++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-		attribs[atti++] = gbmbuf->fd;
-		attribs[atti++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-		attribs[atti++] = gbmbuf->offset[0];
-		attribs[atti++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-		attribs[atti++] = gbmbuf->stride[0];
-	}
-	if (gbmbuf->num_planes > 1) {
-		attribs[atti++] = EGL_DMA_BUF_PLANE1_FD_EXT;
-		attribs[atti++] = -1;
-		attribs[atti++] = EGL_DMA_BUF_PLANE1_OFFSET_EXT;
-		attribs[atti++] = gbmbuf->offset[1];
-		attribs[atti++] = EGL_DMA_BUF_PLANE1_PITCH_EXT;
-		attribs[atti++] = gbmbuf->stride[1];
-	}
-	if (gbmbuf->num_planes > 2) {
-		attribs[atti++] = EGL_DMA_BUF_PLANE2_FD_EXT;
-		attribs[atti++] = -1;
-		attribs[atti++] = EGL_DMA_BUF_PLANE2_OFFSET_EXT;
-		attribs[atti++] = gbmbuf->offset[2];
-		attribs[atti++] = EGL_DMA_BUF_PLANE2_PITCH_EXT;
-		attribs[atti++] = gbmbuf->stride[2];
-	}
-
-	result = gbm_perform(GBM_PERFORM_GET_METADATA,
-			gbmbuf->bo,
-			GBM_METADATA_GET_COLOR_METADATA,
-			&colormeta);
-	if (result == GBM_ERROR_NONE) {
-		switch (colormeta.matrixCoefficients) {
-		case MatrixCoEff_BT709_5:
-			/* currently don't support the 709 full range yet.*/
-			colorspace = (colormeta.range) ? GBM_METADATA_COLOR_SPACE_ITU_R_709 :
-							GBM_METADATA_COLOR_SPACE_ITU_R_709;
-			break;
-		case MatrixCoEff_BT601_6_525:
-		case MatrixCoEff_BT601_6_625:/* fall back to BT601_6_525 case currently.*/
-			colorspace = (colormeta.range) ? GBM_METADATA_COLOR_SPACE_ITU_R_601_FR :
-							GBM_METADATA_COLOR_SPACE_ITU_R_601;
-			break;
-		case MatrixCoEff_BT2020:
-			colorspace = (colormeta.range) ? GBM_METADATA_COLOR_SPACE_ITU_R_2020_FR :
-							GBM_METADATA_COLOR_SPACE_ITU_R_2020;
-			break;
-		default:
-			break;
-		}
-	} else {
-		result = gbm_perform(GBM_PERFORM_GET_METADATA,
-				gbmbuf->bo,
-				GBM_METADATA_GET_COLOR_SPACE,
-				&colorspace);
-	}
-	if (result == GBM_ERROR_NONE) {
-		switch (colorspace) {
-		case GBM_METADATA_COLOR_SPACE_ITU_R_601:
-			attribs[atti++] = EGL_YUV_COLOR_SPACE_HINT_EXT;
-			attribs[atti++] = EGL_ITU_REC601_EXT;
-			attribs[atti++] = EGL_SAMPLE_RANGE_HINT_EXT;
-			attribs[atti++] = EGL_YUV_NARROW_RANGE_EXT;
-			break;
-		case GBM_METADATA_COLOR_SPACE_ITU_R_601_FR:
-			attribs[atti++] = EGL_YUV_COLOR_SPACE_HINT_EXT;
-			attribs[atti++] = EGL_ITU_REC601_EXT;
-			attribs[atti++] = EGL_SAMPLE_RANGE_HINT_EXT;
-			attribs[atti++] = EGL_YUV_FULL_RANGE_EXT;
-			break;
-		case GBM_METADATA_COLOR_SPACE_ITU_R_709:
-			attribs[atti++] = EGL_YUV_COLOR_SPACE_HINT_EXT;
-			attribs[atti++] = EGL_ITU_REC709_EXT;
-			attribs[atti++] = EGL_SAMPLE_RANGE_HINT_EXT;
-			attribs[atti++] = EGL_YUV_NARROW_RANGE_EXT;
-			break;
-		case GBM_METADATA_COLOR_SPACE_ITU_R_2020:
-			attribs[atti++] = EGL_YUV_COLOR_SPACE_HINT_EXT;
-			attribs[atti++] = EGL_ITU_REC2020_EXT;
-			attribs[atti++] = EGL_SAMPLE_RANGE_HINT_EXT;
-			attribs[atti++] = EGL_YUV_NARROW_RANGE_EXT;
-			break;
-		case GBM_METADATA_COLOR_SPACE_ITU_R_2020_FR:
-			attribs[atti++] = EGL_YUV_COLOR_SPACE_HINT_EXT;
-			attribs[atti++] = EGL_ITU_REC2020_EXT;
-			attribs[atti++] = EGL_SAMPLE_RANGE_HINT_EXT;
-			attribs[atti++] = EGL_YUV_FULL_RANGE_EXT;
-			break;
-		default:
-			weston_log("Unsupport GBM_METADATA_COLOR_SPACE:%d\n", colorspace);
-			break;
-		}
-	}
-
-	bool is_secure_buffer = false;
-	int secure_status;
-	result = gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbmbuf->bo, &secure_status);
-	if (GBM_ERROR_NONE == result) {
-		if (secure_status) {
-			is_secure_buffer = true;
-			attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
-			attribs[atti++] = EGL_TRUE;
-		}
-	} else {
-		weston_log("GBM_PERFORM_GET_SECURE_BUFFER_STATUS failed: %d\n", result);
-	}
-
-	attribs[atti++] = EGL_NONE;
-
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->width=%d", gbmbuf->width);
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->height=%d", gbmbuf->height);
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->format=%d", gbmbuf->format);
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->num_planes=%d", gbmbuf->num_planes);
-
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->fd=%d\n", gbmbuf->fd);
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[0]=%d", gbmbuf->offset[0]);
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[0]=%d", gbmbuf->stride[0]);
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[1]=%d", gbmbuf->offset[1]);
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[1]=%d", gbmbuf->stride[1]);
-
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->offset[2]=%d", gbmbuf->offset[2]);
-	GBM_PROTOCOL_LOG(LOG_DBG,"gbmbuf->stride[2]=%d", gbmbuf->stride[2]);
-
-	egl_image = egl_image_create(gr, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
-	if (is_secure_buffer && egl_image != NULL) {
-		egl_image->is_secure = true;
-	}
-
-	GBM_PROTOCOL_LOG(LOG_DBG,"import_simple_gbm_buffer::Image created =%p\n", egl_image);
-
-	return egl_image;
-
-}
-
-static GLenum
-choose_texture_gbm_buf_target(struct gbm_buffer *gbmbuf)
-{
-	if (gbmbuf->num_planes > 1)
-		return GL_TEXTURE_EXTERNAL_OES;
-
-	switch (gbmbuf->format & ~DRM_FORMAT_BIG_ENDIAN) {
-	case DRM_FORMAT_YUYV:
-	case DRM_FORMAT_YVYU:
-	case DRM_FORMAT_UYVY:
-	case DRM_FORMAT_VYUY:
-	case DRM_FORMAT_AYUV:
-		return GL_TEXTURE_EXTERNAL_OES;
-	default:
-		return GL_TEXTURE_2D;
-	}
-}
-
-static void
-gl_renderer_destroy_gbm_buffer(struct gbm_buffer *gbm_buf)
-{
-	struct gbmbuf_image *image = gbm_buffer_backend->get_user_data(gbm_buf);
-
-	gbmbuf_image_destroy(image);
-}
-
-static struct gbmbuf_image *
-import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
-{
-	struct egl_image *egl_image;
-	struct gbmbuf_image *image = NULL;
-	EGLint attribs[30];
-	GLenum target;
-
-	memset(attribs, 0, sizeof(EGLint));
-	image = gbmbuf_image_create();
-	image->gbmbuf = gbmbuf;
-
-	egl_image = import_simple_gbm_buffer(gr, gbmbuf);
-
-	if (egl_image) {
-		image->num_images = 1;
-		image->images[0] = egl_image;
-		image->import_type = IMPORT_TYPE_DIRECT;
-		target = choose_texture_gbm_buf_target(gbmbuf);
-
-		switch (target) {
-		case GL_TEXTURE_2D:
-			image->shader_variant = SHADER_VARIANT_RGBA;
-			break;
-		default:
-			image->shader_variant = SHADER_VARIANT_EXTERNAL;
-		}
-	} else {
-		gbmbuf_image_destroy(image);
-		return NULL;
-	}
-
-	return image;
-}
-
-static bool
-gl_renderer_import_gbm_buffer(struct weston_compositor *ec, struct gbm_buffer *gbm_buf)
-{
-	struct gl_renderer *gr = get_renderer(ec);
-	struct gbmbuf_image *image;
-	struct gbm_device * gbm = gr->gbm_hdle;
-	struct gbm_buf_info  buf_info;
-	generic_buf_layout_t buf_lyt;
-	struct gbm_bo *bo;
-	uint32_t j;
-
-	buf_info.fd		  = gbm_buf->fd;
-	buf_info.metadata_fd = gbm_buf->metadata_fd;
-	buf_info.height	  = gbm_buf->height;
-	buf_info.width	   = gbm_buf->width;
-	buf_info.format	  = gbm_buf->format;
-
-	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Invoked");
-
-	//We will import BO to create an entry into the hash map fo this fd
-	bo = gbm_bo_import(gbm, GBM_BO_IMPORT_GBM_BUF_TYPE, &buf_info, GBM_BO_USE_RENDERING);
-	//save gbm buffer object
-	gbm_buf->bo = bo;
-
-	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:bo created= %p",bo);
-
-	int ret=gbm_perform(GBM_PERFORM_GET_PLANE_INFO, bo, &buf_lyt);
-	if (ret == GBM_ERROR_NONE){
-		gbm_buf->num_planes = buf_lyt.num_planes;
-		for(j = 0; j < buf_lyt.num_planes; j++){
-			gbm_buf->offset[j] = buf_lyt.planes[j].offset;
-			gbm_buf->stride[j] = buf_lyt.planes[j].v_increment;
-		}
-	} else {
-		weston_log("gl_renderer_import_gbm_buffer::GET YUV Info failed\n");
-		return false;
-	}
-
-	//Fill up the remaining fields with default values
-	for (; j < MAX_NUM_PLANES; j++){
-		gbm_buf->offset[j] = 0;
-		gbm_buf->stride[j] = 0;
-	}
-
-	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Invoke import_gbm_buffer()");
-
-	image = import_gbm_buffer(gr, gbm_buf);
-	if (!image)
-		return false;
-	/* Cache retains a ref. */
-	wl_list_insert(&gr->gbmbuf_images, &image->link);
-	gbm_buffer_backend->set_user_data(gbm_buf, image, gl_renderer_destroy_gbm_buffer);
-
-	GBM_PROTOCOL_LOG(LOG_DBG,"gl_renderer_import_gbm_buffer:Exited");
-	return true;
-}
-
-static bool
-import_known_gbmbuf(struct gl_renderer *gr, struct gbmbuf_image *image)
-{
-	switch (image->import_type) {
-	case IMPORT_TYPE_DIRECT:
-		image->images[0] = import_simple_gbm_buffer(gr, image->gbmbuf);
-		if (!image->images[0])
-			return false;
-		image->num_images = 1;
-		break;
-	default:
-		weston_log("Invalid import type for gbmbuf\n");
-		return false;
-	}
-
-	return true;
-}
-
-static void
-gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
-	          struct weston_buffer *buffer,
-	          struct gbm_buffer *gbmbuf)
-{
-	struct gl_renderer *gr = get_renderer(surface->compositor);
-	struct gl_surface_state *gs = get_surface_state(surface);
-	struct gbmbuf_image *image;
-	GLenum target;
-	int i, ret;
-
-	buffer->width = gbmbuf->width;
-	buffer->height = gbmbuf->height;
-	/*
-	 * To be aligned with dmabuf buffers, since gbmbuf buffers also
-	 * have the origin at top-left, invert the Y_INVERT flag to get
-	 * the image right.
-	 */
-	buffer->y_inverted =
-		!(gbmbuf->flags & ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT);
-
-	for (i = 0; i < gs->num_images; i++)
-		egl_image_unref(gs->images[i]);
-
-	gs->num_images = 0;
-
-	/*
-	 * We try to always hold an imported EGLImage from the dmabuf
-	 * to prevent the client from preventing re-imports. But, we also
-	 * need to re-import every time the contents may change because
-	 * GL driver's caching may need flushing.
-	 *
-	 * Here we release the cache reference which has to be final.
-	 */
-	image = gbm_buffer_backend->get_user_data(gbmbuf);
-	/* The gbmbuf_image should have been created during the import except early gbm buffer */
-	//assert(image != NULL);
-
-	if (image) {
-		for (i = 0; i < image->num_images; ++i) {
-			ret = egl_image_unref(image->images[i]);
-			assert(ret == 0);
-		}
-		image->num_images = 0;
-
-		if (!import_known_gbmbuf(gr, image)) {
-			gbm_buffer_backend->send_server_error(gbmbuf, "EGL gbmbuf import failed");
-			return;
-		}
-	} else {
-		/*
-		 * If there's no image, expecting early gbm buffer case.
-		 * Set shader_variant to ensure clear_view could be triggered successfully
-		 * after full backend is ready.
-		 */
-		target = choose_texture_gbm_buf_target(gbmbuf);
-
-		switch (target) {
-		case GL_TEXTURE_2D:
-			gs->shader_variant = SHADER_VARIANT_RGBA;
-			break;
-		default:
-			gs->shader_variant = SHADER_VARIANT_EXTERNAL;
-			break;
-		}
-		return;
-	}
-
-	gs->num_images = image->num_images;
-	for (i = 0; i < gs->num_images; ++i)
-		gs->images[i] = egl_image_ref(image->images[i]);
-
-	target = gl_shader_texture_variant_get_target(image->shader_variant);
-	ensure_textures(gs, target, gs->num_images);
-
-	for (i = 0; i < gs->num_images; ++i) {
-		glActiveTexture(GL_TEXTURE0 + i);
-		glBindTexture(target, gs->textures[i]);
-		gr->image_target_texture_2d(target, gs->images[i]->image);
-		if (gs->images[i]->is_secure)
-		{
-			glTexParameteri(target, GL_TEXTURE_PROTECTED_EXT, GL_TRUE);
-		}
-	}
-
-	gs->shader_variant = image->shader_variant;
-	gs->pitch = buffer->width;
-	gs->height = buffer->height;
-	gs->buffer_type = BUFFER_TYPE_EGL;
-	gs->y_inverted = buffer->y_inverted;
-}
-
 static const struct weston_drm_format_array *
 gl_renderer_get_supported_formats(struct weston_compositor *ec)
 {
@@ -3663,14 +2931,10 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	struct gl_surface_state *gs = get_surface_state(es);
 	struct wl_shm_buffer *shm_buffer;
 	struct linux_dmabuf_buffer *dmabuf;
-	struct gbm_buffer *gbmbuf;
 	EGLint format;
 	int i;
 
-	/* screen capture buffer will call weston_buffer_reference in screen_capture_attach */
-	if(!screen_capture_backend->is_screen_capture_buffer(buffer)) {
-		weston_buffer_reference(&gs->buffer_ref, buffer);
-	}
+	weston_buffer_reference(&gs->buffer_ref, buffer);
 	weston_buffer_release_reference(&gs->buffer_release_ref,
 					es->buffer_release_ref.buffer_release);
 
@@ -3699,8 +2963,6 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 		gl_renderer_attach_egl(es, buffer, format);
 	else if ((dmabuf = linux_dmabuf_buffer_get(buffer->resource)))
 		gl_renderer_attach_dmabuf(es, buffer, dmabuf);
-	else if ((gbmbuf = gbm_buffer_backend->buffer_get(buffer->resource)))
-		gl_renderer_attach_gbm_buffer(es, buffer, gbmbuf);
 	else {
 		weston_log("unhandled buffer type!\n");
 		if (gr->has_bind_display) {
@@ -3715,9 +2977,6 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 		weston_buffer_send_server_error(buffer,
 			"disconnecting due to unhandled buffer type");
 	}
-
-	/* Create screen capture buffer after creating egl image. FBO path needs it */
-	screen_capture_backend->attach(ec, buffer);
 }
 
 static void
@@ -3965,22 +3224,6 @@ gl_renderer_create_surface(struct weston_surface *surface)
 	if (surface->buffer_ref.buffer) {
 		gl_renderer_attach(surface, surface->buffer_ref.buffer);
 		gl_renderer_flush_damage(surface);
-	} else if (surface->surf_color.is_pended) {
-		/*
-		 * if weston_surface_set_color is called before
-		 * gl renderer is initialized, surface color is stored
-		 * in surf_color and is_pended is set to true. Here,
-		 * gs color is set accordingly.
-		 */
-		gs->color[0] = surface->surf_color.red;
-		gs->color[1] = surface->surf_color.green;
-		gs->color[2] = surface->surf_color.blue;
-		gs->color[3] = surface->surf_color.alpha;
-		gs->buffer_type = BUFFER_TYPE_SOLID;
-		gs->pitch = 1;
-		gs->height = 1;
-		gs->shader_variant = SHADER_VARIANT_SOLID;
-		surface->surf_color.is_pended = false;
 	}
 
 	return 0;
@@ -4084,25 +3327,8 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 				  const uint32_t *drm_formats,
 				  unsigned drm_formats_count)
 {
-	static bool firstCreateWin = true;
-	if (firstCreateWin)
-	{
-		bootkpi_log_init();
-		bootkpi_log_line("G - first create window start");
-	}
-
 	EGLSurface egl_surface = EGL_NO_SURFACE;
 	EGLConfig egl_config;
-
-	int atti = 0;
-	EGLint attribs[3];
-	int is_secure_surface = 0;
-	gbm_perform(GBM_PERFORM_GET_SURFACE_SECURE_STATUS, (struct gbm_surface *)window_for_platform, &is_secure_surface);
-	if (is_secure_surface) {
-		attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
-		attribs[atti++] = EGL_TRUE;
-	}
-	attribs[atti++] = EGL_NONE;
 
 	egl_config = gl_renderer_get_egl_config(gr, EGL_WINDOW_BIT,
 						drm_formats, drm_formats_count);
@@ -4115,18 +3341,11 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 		egl_surface = gr->create_platform_window(gr->egl_display,
 							 egl_config,
 							 window_for_platform,
-							 attribs);
+							 NULL);
 	else
 		egl_surface = eglCreateWindowSurface(gr->egl_display,
 						     egl_config,
-						     window_for_legacy, attribs);
-
-	if (firstCreateWin)
-	{
-		bootkpi_log_init();
-		bootkpi_log_line("G - first create window end");
-		firstCreateWin = false;
-	}
+						     window_for_legacy, NULL);
 
 	return egl_surface;
 }
@@ -4319,7 +3538,6 @@ gl_renderer_destroy(struct weston_compositor *ec)
 	struct gl_renderer *gr = get_renderer(ec);
 	struct dmabuf_image *image, *next;
 	struct dmabuf_format *format, *next_format;
-	struct gbmbuf_image *gbm_image, *g_next;
 
 	wl_signal_emit(&gr->destroy_signal, gr);
 
@@ -4340,9 +3558,6 @@ gl_renderer_destroy(struct weston_compositor *ec)
 
 	wl_list_for_each_safe(format, next_format, &gr->dmabuf_formats, link)
 		dmabuf_format_destroy(format);
-
-	wl_list_for_each_safe(gbm_image, g_next, &gr->gbmbuf_images, link)
-		gbmbuf_image_destroy(gbm_image);
 
 	weston_drm_format_array_fini(&gr->supported_formats);
 
@@ -4436,21 +3651,6 @@ gl_renderer_display_create(struct weston_compositor *ec,
 	struct gl_renderer *gr;
 	int ret;
 
-	/* load protocol implementation backends */
-	gbm_buffer_backend = weston_load_module("gbm-buffer-backend.so",
-						"gbm_buffer_backend_c_interface");
-	assert(gbm_buffer_backend);
-	screen_capture_backend = weston_load_module("screen-capture.so",
-						"screen_capture_c_interface");
-	assert(screen_capture_backend);
-
-	static bool firstCreateDisplay = true;
-	if (firstCreateDisplay)
-	{
-		bootkpi_log_init();
-		bootkpi_log_line("G - setup egl start");
-	}
-
 	gr = zalloc(sizeof *gr);
 	if (gr == NULL)
 		return -1;
@@ -4458,9 +3658,6 @@ gl_renderer_display_create(struct weston_compositor *ec,
 	gr->compositor = ec;
 	wl_list_init(&gr->shader_list);
 	gr->platform = options->egl_platform;
-
-	//gbm device handle
-	gr->gbm_hdle =(struct gbm_device *)options->egl_native_display;
 
 	gr->shader_scope = gl_shader_scope_create(gr);
 	if (!gr->shader_scope)
@@ -4471,7 +3668,6 @@ gl_renderer_display_create(struct weston_compositor *ec,
 
 	gr->base.read_pixels = gl_renderer_read_pixels;
 	gr->base.repaint_output = gl_renderer_repaint_output;
-	gr->base.capture_screen = gl_renderer_capture_screen;
 	gr->base.flush_damage = gl_renderer_flush_damage;
 	gr->base.attach = gl_renderer_attach;
 	gr->base.surface_set_color = gl_renderer_surface_set_color;
@@ -4509,13 +3705,6 @@ gl_renderer_display_create(struct weston_compositor *ec,
 		}
 	}
 
-	if (firstCreateDisplay)
-	{
-		bootkpi_log_init();
-		bootkpi_log_line("G - setup egl end");
-		firstCreateDisplay = false;
-	}
-
 	ec->capabilities |= WESTON_CAP_ROTATION_ANY;
 	ec->capabilities |= WESTON_CAP_CAPTURE_YFLIP;
 	ec->capabilities |= WESTON_CAP_VIEW_CLIP_MASK;
@@ -4523,10 +3712,8 @@ gl_renderer_display_create(struct weston_compositor *ec,
 		ec->capabilities |= WESTON_CAP_EXPLICIT_SYNC;
 
 	wl_list_init(&gr->dmabuf_images);
-	wl_list_init(&gr->gbmbuf_images);
 	if (gr->has_dmabuf_import) {
 		gr->base.import_dmabuf = gl_renderer_import_dmabuf;
-		gr->base.import_gbm_buffer = gl_renderer_import_gbm_buffer;
 		gr->base.get_supported_formats = gl_renderer_get_supported_formats;
 		ret = populate_supported_formats(ec, &gr->supported_formats);
 		if (ret < 0)
@@ -4680,11 +3867,6 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	if (gr->has_context_priority) {
 		context_attribs[nattr++] = EGL_CONTEXT_PRIORITY_LEVEL_IMG;
 		context_attribs[nattr++] = EGL_CONTEXT_PRIORITY_HIGH_IMG;
-	}
-
-	if (property_get_bool("weston.protected_context", false)) {
-		context_attribs[nattr++] = EGL_PROTECTED_CONTENT_EXT;
-		context_attribs[nattr++] = EGL_TRUE;
 	}
 
 	assert(nattr < ARRAY_LENGTH(context_attribs));

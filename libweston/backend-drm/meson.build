@@ -2,7 +2,7 @@ if not get_option('backend-drm')
 	subdir_done()
 endif
 
-lib_backlight = shared_library(
+lib_backlight = static_library(
 	'backlight',
 	'libbacklight.c',
 	dependencies: [
@@ -10,7 +10,7 @@ lib_backlight = shared_library(
 		dependency('libudev')
 	],
 	include_directories: common_inc,
-	install: true
+	install: false
 )
 dep_backlight = declare_dependency(
 	link_with: lib_backlight,
@@ -95,8 +95,3 @@ plugin_drm = shared_library(
 env_modmap += 'drm-backend.so=@0@;'.format(plugin_drm.full_path())
 
 install_headers(backend_drm_h, subdir: dir_include_libweston_install)
-
-install_headers(
-	'libbacklight.h',
-	subdir: dir_include_libweston_private_install
-)

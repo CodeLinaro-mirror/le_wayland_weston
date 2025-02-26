@@ -25,13 +25,6 @@
  * SOFTWARE.
  */
 
-/*
-* Changes from Qualcomm Innovation Center are provided under the following license:
-*
-* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
-* SPDX-License-Identifier: BSD-3-Clause-Clear
-*/
-
 #include "config.h"
 
 #include <assert.h>
@@ -1350,7 +1343,7 @@ error:
 static bool
 display_set_up_gbm(struct display *display, char const* drm_render_node)
 {
-	display->gbm.drm_fd = drmOpen(drm_render_node, NULL);
+	display->gbm.drm_fd = open(drm_render_node, O_RDWR);
 	if (display->gbm.drm_fd < 0) {
 		fprintf(stderr, "Failed to open drm render node %s\n",
 			drm_render_node);
@@ -1497,7 +1490,7 @@ main(int argc, char **argv)
 	struct window *window;
 	uint32_t format = DRM_FORMAT_XRGB8888;
 	int opts = 0;
-	char const *drm_render_node = "msm_drm";
+	char const *drm_render_node = "/dev/dri/renderD128";
 	int c, option_index, ret = 0;
 	int window_size = 256;
 

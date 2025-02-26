@@ -71,7 +71,7 @@ simple_clients = [
 			dependency('libudev', version: '>= 136'),
 			# gbm_bo_get_fd_for_plane() from 21.1.0
 			dependency('gbm', version: '>= 21.1.1',
-				required: simple_build_all and simple_clients_enabled.contains('dmabuf-feedback'),
+				required: simple_build_all or simple_clients_enabled.contains('dmabuf-feedback'),
 				not_found_message: 'dmabuf-feedback requires gbm which was not found. If you rather not build this, drop "dmabuf-feedback" from simple-clients option.',
 				disabler: true)
 		],

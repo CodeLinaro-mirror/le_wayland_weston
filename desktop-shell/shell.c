@@ -23,13 +23,6 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-/*
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause-Clear
- */
-
 #include "config.h"
 
 #include <stdlib.h>
@@ -108,8 +101,6 @@ struct shell_surface {
 
 	struct weston_desktop_surface *desktop_surface;
 	struct weston_view *view;
-	struct weston_surface *fade_surface;
-	struct weston_view *wview_anim_fade;
 	int32_t last_width, last_height;
 
 	struct desktop_shell *shell;
@@ -203,10 +194,6 @@ struct shell_seat {
 };
 
 
-static struct weston_view *
-shell_fade_create_fade_out_view(struct shell_surface *shsurf,
-				struct weston_surface *surface);
-
 static struct desktop_shell *
 shell_surface_get_shell(struct shell_surface *shsurf);
 
@@ -277,8 +264,7 @@ desktop_shell_destroy_surface(struct shell_surface *shsurf)
 
 	wl_signal_emit(&shsurf->destroy_signal, shsurf);
 
-	if (shsurf->fade_surface)
-		weston_surface_destroy(shsurf->fade_surface);
+	weston_view_destroy(shsurf->view);
 	if (shsurf->output_destroy_listener.notify) {
 		wl_list_remove(&shsurf->output_destroy_listener.link);
 		shsurf->output_destroy_listener.notify = NULL;
@@ -2267,8 +2253,8 @@ fade_out_done(struct weston_view_animation *animation, void *data)
 
 	loop = wl_display_get_event_loop(shsurf->shell->compositor->wl_display);
 
-	if (weston_view_is_mapped(shsurf->wview_anim_fade)) {
-		weston_view_unmap(shsurf->wview_anim_fade);
+	if (weston_view_is_mapped(shsurf->view)) {
+		weston_view_unmap(shsurf->view);
 		wl_event_loop_add_idle(loop, fade_out_done_idle_cb, shsurf);
 	}
 }
@@ -2387,25 +2373,8 @@ desktop_surface_removed(struct weston_desktop_surface *desktop_surface,
 			pixman_region32_init(&surface->pending.input);
 			pixman_region32_fini(&surface->input);
 			pixman_region32_init(&surface->input);
-
-			/* its location might have changed, but also might've
-			 * migrated to a different output, so re-compute  this
-			 * as the animation requires having the same output as
-			 * the view */
-			weston_view_set_output(shsurf->wview_anim_fade,
-						shsurf->view->output);
-			weston_view_set_position(shsurf->wview_anim_fade,
-						shsurf->view->geometry.x,
-						shsurf->view->geometry.y);
-
-			weston_layer_entry_insert(&shsurf->view->layer_link,
-						&shsurf->wview_anim_fade->layer_link);
-
-			/* unmap the "original" view */
-			weston_view_unmap(shsurf->view);
-			weston_fade_run(shsurf->wview_anim_fade, 1.0, 0.0, 300.0,
+			weston_fade_run(shsurf->view, 1.0, 0.0, 300.0,
 					fade_out_done, shsurf);
-
 			return;
 		} else {
 			weston_surface_destroy(surface);
@@ -2531,13 +2500,8 @@ desktop_surface_committed(struct weston_desktop_surface *desktop_surface,
 	if (!weston_surface_is_mapped(surface)) {
 		map(shell, shsurf, sx, sy);
 		surface->is_mapped = true;
-		if (shsurf->shell->win_close_animation_type == ANIMATION_FADE) {
+		if (shsurf->shell->win_close_animation_type == ANIMATION_FADE)
 			++surface->ref_count;
-			shsurf->fade_surface = surface;
-			shsurf->wview_anim_fade =
-				shell_fade_create_fade_out_view(shsurf, surface);
-
-		}
 		return;
 	}
 
@@ -4028,29 +3992,6 @@ shell_fade_create_surface_for_output(struct desktop_shell *shell, struct shell_o
 	return view;
 }
 
-static struct weston_view *
-shell_fade_create_fade_out_view(struct shell_surface *shsurf,
-				struct weston_surface *surface)
-{
-	struct weston_view *view;
-	struct weston_output *woutput;
-
-	view = weston_view_create(surface);
-	if (!view)
-		return NULL;
-
-	woutput = get_focused_output(surface->compositor);
-	/* set the initial position and output just in case we happen to not
-	 * move it around and just destroy it */
-	weston_view_set_output(view, woutput);
-	weston_view_set_position(view,
-				 shsurf->view->geometry.x,
-				 shsurf->view->geometry.y);
-	view->is_mapped = true;
-
-	return view;
-}
-
 static void
 shell_fade(struct desktop_shell *shell, enum fade_type type)
 {
@@ -4414,6 +4355,7 @@ bind_desktop_shell(struct wl_client *client,
 
 	resource = wl_resource_create(client, &weston_desktop_shell_interface,
 				      1, id);
+
 	if (client == shell->child.client) {
 		wl_resource_set_implementation(resource,
 					       &desktop_shell_implementation,

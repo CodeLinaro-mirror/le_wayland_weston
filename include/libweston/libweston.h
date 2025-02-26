@@ -68,11 +68,6 @@ struct weston_point2d_device_normalized {
 	double y;
 };
 
-struct surface_color {
-	bool is_pended;
-	float red, blue, green, alpha;
-};
-
 struct weston_surface;
 struct weston_buffer;
 struct shell_surface;
@@ -86,7 +81,6 @@ struct weston_pointer_constraint;
 struct ro_anonymous_file;
 struct weston_color_profile;
 struct weston_color_transform;
-struct gbm_buffer;
 
 enum weston_keyboard_modifier {
 	MODIFIER_CTRL = (1 << 0),
@@ -377,13 +371,8 @@ struct weston_output {
 			  uint16_t *g,
 			  uint16_t *b);
 
-	void (*enable_ppm)(struct weston_output *output, int32_t enable);
-	void (*set_ppm)(struct weston_output *output, int32_t ppm);
-
 	bool enabled; /**< is in the output_list, not pending list */
 	int scale;
-	/* Indicate current repainting need gpu do compositon. */
-	bool need_gpu_composition;
 
 	struct weston_color_profile *color_profile;
 	struct weston_color_transform *from_sRGB_to_output;
@@ -955,9 +944,6 @@ struct weston_renderer {
 			       uint32_t width, uint32_t height);
 	void (*repaint_output)(struct weston_output *output,
 			       pixman_region32_t *output_damage);
-	void (*capture_screen)(struct weston_output *output,
-                   struct weston_buffer *buffer,
-                   pixman_region32_t *output_damage);
 	void (*flush_damage)(struct weston_surface *surface);
 	void (*attach)(struct weston_surface *es, struct weston_buffer *buffer);
 	void (*surface_set_color)(struct weston_surface *surface,
@@ -975,10 +961,6 @@ struct weston_renderer {
 				    void *target, size_t size,
 				    int src_x, int src_y,
 				    int width, int height);
-
-	/** See weston_compositor_import_gbm_buffer() */
-	bool (*import_gbm_buffer)(struct weston_compositor *ec,
-			        struct gbm_buffer *buffer);
 
 	/** See weston_compositor_import_dmabuf() */
 	bool (*import_dmabuf)(struct weston_compositor *ec,
@@ -1387,12 +1369,6 @@ struct weston_view {
 	uint32_t psf_flags;
 
 	bool is_mapped;
-
-	/* Indicate if this view is used for screen capture. */
-	bool is_capture_view;
-
-	/* Indicate if this view is completely covered by above opaque regions. */
-	bool is_completely_covered;
 };
 
 struct weston_surface_state {
@@ -1562,7 +1538,6 @@ struct weston_surface {
 
 	/* An list of per seat pointer constraints. */
 	struct wl_list pointer_constraints;
-	struct surface_color surf_color;
 
 	/* zwp_surface_synchronization_v1 resource for this surface */
 	struct wl_resource *synchronization_resource;
@@ -1930,9 +1905,6 @@ weston_log(const char *fmt, ...)
 int
 weston_log_continue(const char *fmt, ...)
 	__attribute__ ((format (printf, 1, 2)));
-
-void
-weston_place_marker(const char *name);
 
 enum weston_screenshooter_outcome {
 	WESTON_SCREENSHOOTER_SUCCESS,

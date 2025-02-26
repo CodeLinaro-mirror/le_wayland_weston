@@ -5,7 +5,6 @@ deps_libweston = [
 	dep_libdl,
 	dep_libdrm,
 	dep_xkbcommon,
-	dep_gbm,
 	dep_matrix_c
 ]
 srcs_libweston = [
@@ -149,10 +148,7 @@ srcs_session_helper = [
 	'launcher-util.c',
 	'launcher-weston-launch.c',
 ]
-deps_session_helper = [
-	dep_libweston_private_h,
-	dep_libweston_private,
-]
+deps_session_helper = [ dep_libweston_private_h ]
 
 if get_option('backend-drm')
 	deps_session_helper += dep_libdrm
@@ -198,17 +194,17 @@ if get_option('launcher-libseat')
 	]
 endif
 
-lib_session_helper = shared_library(
+lib_session_helper = static_library(
 	'session-helper',
 	srcs_session_helper,
 	include_directories: common_inc,
 	dependencies: deps_session_helper,
-	install: true
+	install: false
 )
 dep_session_helper = declare_dependency(link_with: lib_session_helper)
 
 
-lib_libinput_backend = shared_library(
+lib_libinput_backend = static_library(
 	'libinput-backend',
 	[
 		'libinput-device.c',
@@ -216,12 +212,11 @@ lib_libinput_backend = shared_library(
 	],
 	dependencies: [
 		dep_libweston_private,
-		dep_session_helper,
 		dep_libinput,
 		dependency('libudev', version: '>= 136')
 	],
 	include_directories: common_inc,
-	install: true
+	install: false
 )
 dep_libinput_backend = declare_dependency(
 	link_with: lib_libinput_backend,
@@ -251,17 +246,6 @@ if get_option('deprecated-weston-launch')
 
 	meson.add_install_script('echo', 'REMINDER: You are installing weston-launch, please make it setuid-root.')
 endif
-
-install_headers(
-	'backend.h',
-	'libinput-seat.h',
-	'libweston-internal.h',
-	'linux-dmabuf.h',
-	'color.h',
-	'launcher-util.h',
-	'pixman-renderer.h',
-	subdir: dir_include_libweston_private_install
-)
 
 subdir('color-lcms')
 subdir('renderer-gl')
