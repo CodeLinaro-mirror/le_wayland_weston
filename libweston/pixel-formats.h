@@ -42,6 +42,10 @@ struct pixel_format_info {
 	/** The DRM format name without the DRM_FORMAT_ prefix. */
 	const char *drm_format_name;
 
+	/** If true, is only for internal use and should not be advertised to
+	 * clients to allow them to create buffers of this format. */
+	bool hide_from_clients;
+
 	/** If non-zero, number of planes in base (non-modified) format. */
 	int num_planes;
 
@@ -57,6 +61,9 @@ struct pixel_format_info {
 	 *  the alpha channel to 1.0 (or ignore it) if the format is
 	 *  opaque. */
 	uint32_t sampler_type;
+
+	/** GL internal format; to be used when creating FBO renderbuffers */
+	int gl_internalformat;
 
 	/** GL format, if data can be natively/directly uploaded. Note that
 	 *  whilst DRM formats are little-endian unless explicitly specified,
@@ -76,9 +83,10 @@ struct pixel_format_info {
 
 	/** If set, this format can be used with the legacy drmModeAddFB()
 	 *  function (not AddFB2), using this and the bpp member. */
-	int depth;
+	int addfb_legacy_depth;
 
-	/** See 'depth' member above. */
+	/** Number of bits required to store a single pixel, for
+	 *  single-planar formats. */
 	int bpp;
 
 	/** Horizontal subsampling; if non-zero, divide the width by this
@@ -186,6 +194,19 @@ const struct pixel_format_info *
 pixel_format_get_info_by_drm_name(const char *drm_format_name);
 
 /**
+ * Get pixel format information for a Pixman format code
+ *
+ * Given a Pixman format code, return a pixel format info structure describing
+ * the properties of that format.
+ *
+ * @param pixman_format Pixman format code to get info for
+ * @returns A pixel format structure (must not be freed), or NULL if the
+ *          format could not be found
+ */
+const struct pixel_format_info *
+pixel_format_get_info_by_pixman(pixman_format_code_t pixman_format);
+
+/**
  * Get number of planes used by a pixel format
  *
  * Given a pixel format info structure, return the number of planes
@@ -248,6 +269,36 @@ const struct pixel_format_info *
 pixel_format_get_info_by_opaque_substitute(uint32_t format);
 
 /**
+ * Return the horizontal subsampling factor for a given plane
+ *
+ * When horizontal subsampling is effective, a sampler bound to a secondary
+ * plane must bind the sampler with a smaller effective width. This function
+ * returns the subsampling factor to use for the given plane.
+ *
+ * @param format Pixel format info structure
+ * @param plane Zero-indexed plane number
+ * @returns Horizontal subsampling factor for the given plane
+ */
+unsigned int
+pixel_format_hsub(const struct pixel_format_info *format,
+		  unsigned int plane);
+
+/**
+ * Return the vertical subsampling factor for a given plane
+ *
+ * When vertical subsampling is effective, a sampler bound to a secondary
+ * plane must bind the sampler with a smaller effective height. This function
+ * returns the subsampling factor to use for the given plane.
+ *
+ * @param format Pixel format info structure
+ * @param plane Zero-indexed plane number
+ * @returns Vertical subsampling factor for the given plane
+ */
+unsigned int
+pixel_format_vsub(const struct pixel_format_info *format,
+		  unsigned int plane);
+
+/**
  * Return the effective sampling width for a given plane
  *
  * When horizontal subsampling is effective, a sampler bound to a secondary
@@ -297,3 +348,26 @@ pixel_format_height_for_plane(const struct pixel_format_info *format,
  */
 char *
 pixel_format_get_modifier(uint64_t modifier);
+
+/**
+ * Return the wl_shm format code
+ *
+ * @param info Pixel format info structure
+ * @returns The wl_shm format code for this pixel format.
+ */
+uint32_t
+pixel_format_get_shm_format(const struct pixel_format_info *info);
+
+/**
+ * Get pixel format array for an array of DRM format codes
+ *
+ * Given an array of DRM format codes, return an array of corresponding pixel
+ * format info pointers.
+ *
+ * @param formats Array of DRM format codes to get info for
+ * @param formats_count Number of entries in formats.
+ * @returns An array of pixel format info pointers, or NULL if any format could
+ *          not be found. Must be freed by the caller.
+ */
+const struct pixel_format_info **
+pixel_format_get_array(const uint32_t *formats, unsigned int formats_count);

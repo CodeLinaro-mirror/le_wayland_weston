@@ -29,11 +29,28 @@
 
 #include "color.h"
 #include "shared/helpers.h"
-#include "shared/string-helpers.h"
+#include "shared/xalloc.h"
+
+struct cmnoop_color_profile {
+	struct weston_color_profile base;
+};
 
 struct weston_color_manager_noop {
 	struct weston_color_manager base;
+	struct cmnoop_color_profile *stock_cprof; /* no real content */
 };
+
+static bool
+check_output_eotf_mode(struct weston_output *output)
+{
+	if (output->eotf_mode == WESTON_EOTF_MODE_SDR)
+		return true;
+
+	weston_log("Error: color manager no-op does not support EOTF mode %s of output %s.\n",
+		   weston_eotf_mode_to_str(output->eotf_mode),
+		   output->name);
+	return false;
+}
 
 static struct weston_color_manager_noop *
 get_cmnoop(struct weston_color_manager *cm_base)
@@ -41,10 +58,68 @@ get_cmnoop(struct weston_color_manager *cm_base)
 	return container_of(cm_base, struct weston_color_manager_noop, base);
 }
 
-static void
-cmnoop_destroy_color_profile(struct weston_color_profile *cprof)
+static inline struct cmnoop_color_profile *
+get_cprof(struct weston_color_profile *cprof_base)
 {
-	/* Never called, as never creates an actual color profile. */
+	return container_of(cprof_base, struct cmnoop_color_profile, base);
+}
+
+static struct cmnoop_color_profile *
+ref_cprof(struct cmnoop_color_profile *cprof)
+{
+	if (!cprof)
+		return NULL;
+
+	weston_color_profile_ref(&cprof->base);
+	return cprof;
+}
+
+static void
+unref_cprof(struct cmnoop_color_profile *cprof)
+{
+	if (!cprof)
+		return;
+
+	weston_color_profile_unref(&cprof->base);
+}
+
+static void
+cmnoop_color_profile_destroy(struct cmnoop_color_profile *cprof)
+{
+	free(cprof->base.description);
+	free(cprof);
+}
+
+static void
+cmnoop_destroy_color_profile(struct weston_color_profile *cprof_base)
+{
+	struct cmnoop_color_profile *cprof = get_cprof(cprof_base);
+
+	cmnoop_color_profile_destroy(cprof);
+}
+
+static struct cmnoop_color_profile *
+cmnoop_color_profile_create(struct weston_color_manager_noop *cm, char *desc)
+{
+	struct cmnoop_color_profile *cprof;
+
+	cprof = xzalloc(sizeof *cprof);
+
+	weston_color_profile_init(&cprof->base, &cm->base);
+	cprof->base.description = desc;
+
+	return cprof;
+}
+
+static struct weston_color_profile *
+cmnoop_get_stock_sRGB_color_profile(struct weston_color_manager *cm_base)
+{
+	struct weston_color_manager_noop *cm = get_cmnoop(cm_base);
+	struct cmnoop_color_profile *cprof;
+
+	cprof = ref_cprof(cm->stock_cprof);
+
+	return &cprof->base;
 }
 
 static bool
@@ -55,7 +130,7 @@ cmnoop_get_color_profile_from_icc(struct weston_color_manager *cm,
 				  struct weston_color_profile **cprof_out,
 				  char **errmsg)
 {
-	str_printf(errmsg, "ICC profiles are unsupported.");
+	*errmsg = xstrdup("ICC profiles are unsupported.");
 	return false;
 }
 
@@ -71,8 +146,15 @@ cmnoop_get_surface_color_transform(struct weston_color_manager *cm_base,
 				   struct weston_output *output,
 				   struct weston_surface_color_transform *surf_xform)
 {
-	/* TODO: Assert surface has no colorspace set */
-	assert(output->color_profile == NULL);
+	struct weston_color_manager_noop *cmnoop = get_cmnoop(cm_base);
+
+	/* TODO: Assert that, if the surface has a cprof, it is the stock one */
+
+	assert(output->color_profile &&
+	       get_cprof(output->color_profile) == cmnoop->stock_cprof);
+
+	if (!check_output_eotf_mode(output))
+		return false;
 
 	/* Identity transform */
 	surf_xform->transform = NULL;
@@ -81,41 +163,43 @@ cmnoop_get_surface_color_transform(struct weston_color_manager *cm_base,
 	return true;
 }
 
-static bool
-cmnoop_get_output_color_transform(struct weston_color_manager *cm_base,
-				  struct weston_output *output,
-				  struct weston_color_transform **xform_out)
+static struct weston_output_color_outcome *
+cmnoop_create_output_color_outcome(struct weston_color_manager *cm_base,
+				   struct weston_output *output)
 {
-	assert(output->color_profile == NULL);
+	struct weston_color_manager_noop *cmnoop = get_cmnoop(cm_base);
+	struct weston_output_color_outcome *co;
 
-	/* Identity transform */
-	*xform_out = NULL;
+	assert(output->color_profile &&
+	       get_cprof(output->color_profile) == cmnoop->stock_cprof);
 
-	return true;
+	if (!check_output_eotf_mode(output))
+		return NULL;
+
+	co = xzalloc(sizeof *co);
+
+	/* Identity transform on everything */
+	co->from_blend_to_output = NULL;
+	co->from_sRGB_to_blend = NULL;
+	co->from_sRGB_to_output = NULL;
+
+	co->hdr_meta.group_mask = 0;
+
+	return co;
 }
 
 static bool
-cmnoop_get_sRGB_to_output_color_transform(struct weston_color_manager *cm_base,
-					  struct weston_output *output,
-					  struct weston_color_transform **xform_out)
+cmnoop_create_stock_profile(struct weston_color_manager_noop *cm)
 {
-	assert(output->color_profile == NULL);
+	char *desc;
 
-	/* Identity transform */
-	*xform_out = NULL;
+	desc = xstrdup("stock sRGB color profile");
 
-	return true;
-}
-
-static bool
-cmnoop_get_sRGB_to_blend_color_transform(struct weston_color_manager *cm_base,
-					 struct weston_output *output,
-					 struct weston_color_transform **xform_out)
-{
-	assert(output->color_profile == NULL);
-
-	/* Identity transform */
-	*xform_out = NULL;
+	cm->stock_cprof = cmnoop_color_profile_create(cm, desc);
+	if (!cm->stock_cprof) {
+		free(desc);
+		return false;
+	}
 
 	return true;
 }
@@ -123,8 +207,12 @@ cmnoop_get_sRGB_to_blend_color_transform(struct weston_color_manager *cm_base,
 static bool
 cmnoop_init(struct weston_color_manager *cm_base)
 {
+	struct weston_color_manager_noop *cm = get_cmnoop(cm_base);
+
+	if (!cmnoop_create_stock_profile(cm))
+		return false;
+
 	/* No renderer requirements to check. */
-	/* Nothing to initialize. */
 	return true;
 }
 
@@ -132,6 +220,9 @@ static void
 cmnoop_destroy(struct weston_color_manager *cm_base)
 {
 	struct weston_color_manager_noop *cmnoop = get_cmnoop(cm_base);
+
+	assert(cmnoop->stock_cprof->base.ref_count == 1);
+	unref_cprof(cmnoop->stock_cprof);
 
 	free(cmnoop);
 }
@@ -141,9 +232,7 @@ weston_color_manager_noop_create(struct weston_compositor *compositor)
 {
 	struct weston_color_manager_noop *cm;
 
-	cm = zalloc(sizeof *cm);
-	if (!cm)
-		return NULL;
+	cm = xzalloc(sizeof *cm);
 
 	cm->base.name = "no-op";
 	cm->base.compositor = compositor;
@@ -151,15 +240,11 @@ weston_color_manager_noop_create(struct weston_compositor *compositor)
 	cm->base.init = cmnoop_init;
 	cm->base.destroy = cmnoop_destroy;
 	cm->base.destroy_color_profile = cmnoop_destroy_color_profile;
+	cm->base.get_stock_sRGB_color_profile = cmnoop_get_stock_sRGB_color_profile;
 	cm->base.get_color_profile_from_icc = cmnoop_get_color_profile_from_icc;
 	cm->base.destroy_color_transform = cmnoop_destroy_color_transform;
-	cm->base.get_surface_color_transform =
-	      cmnoop_get_surface_color_transform;
-	cm->base.get_output_color_transform = cmnoop_get_output_color_transform;
-	cm->base.get_sRGB_to_output_color_transform =
-	      cmnoop_get_sRGB_to_output_color_transform;
-	cm->base.get_sRGB_to_blend_color_transform =
-	      cmnoop_get_sRGB_to_blend_color_transform;
+	cm->base.get_surface_color_transform = cmnoop_get_surface_color_transform;
+	cm->base.create_output_color_outcome = cmnoop_create_output_color_outcome;
 
 	return &cm->base;
 }

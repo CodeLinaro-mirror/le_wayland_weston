@@ -2,6 +2,7 @@
  * Copyright © 2019 Collabora, Ltd.
  * Copyright © 2019 Harish Krupo
  * Copyright © 2019 Intel Corporation
+ * Copyright 2021 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -37,6 +38,12 @@
 #include "shared/weston-egl-ext.h"  /* for PFN* stuff */
 #include "shared/helpers.h"
 
+/* Keep the following in sync with vertex.glsl. */
+enum gl_shader_texcoord_input {
+	SHADER_TEXCOORD_INPUT_ATTRIB = 0,
+	SHADER_TEXCOORD_INPUT_SURFACE,
+};
+
 enum gl_shader_texture_variant {
 	SHADER_VARIANT_NONE = 0,
 /* Keep the following in sync with fragment.glsl. */
@@ -56,6 +63,13 @@ enum gl_shader_color_curve {
 	SHADER_COLOR_CURVE_LUT_3x1D,
 };
 
+/* Keep the following in sync with fragment.glsl. */
+enum gl_shader_color_mapping {
+	SHADER_COLOR_MAPPING_IDENTITY = 0,
+	SHADER_COLOR_MAPPING_3DLUT,
+	SHADER_COLOR_MAPPING_MATRIX,
+};
+
 /** GL shader requirements key
  *
  * This structure is used as a binary blob key for building and searching
@@ -67,16 +81,20 @@ enum gl_shader_color_curve {
  */
 struct gl_shader_requirements
 {
+	unsigned texcoord_input:1; /* enum gl_shader_texcoord_input */
+
 	unsigned variant:4; /* enum gl_shader_texture_variant */
 	bool input_is_premult:1;
 	bool green_tint:1;
-	unsigned color_pre_curve:1; /* enum gl_shader_color_curve */
 
+	unsigned color_pre_curve:1; /* enum gl_shader_color_curve */
+	unsigned color_mapping:2; /* enum gl_shader_color_mapping */
+	unsigned color_post_curve:1; /* enum gl_shader_color_curve */
 	/*
 	 * The total size of all bitfields plus pad_bits_ must fill up exactly
 	 * how many bytes the compiler allocates for them together.
 	 */
-	unsigned pad_bits_:25;
+	unsigned pad_bits_:21;
 };
 static_assert(sizeof(struct gl_shader_requirements) ==
 	      4 /* total bitfield size in bytes */,
@@ -90,17 +108,28 @@ struct gl_shader_config {
 	struct gl_shader_requirements req;
 
 	struct weston_matrix projection;
+	struct weston_matrix surface_to_buffer;
 	float view_alpha;
 	GLfloat unicolor[4];
 	GLint input_tex_filter; /* GL_NEAREST or GL_LINEAR */
 	GLuint input_tex[GL_SHADER_INPUT_TEX_MAX];
 	GLuint color_pre_curve_lut_tex;
 	GLfloat color_pre_curve_lut_scale_offset[2];
+	union {
+		struct {
+			GLuint  tex;
+			GLfloat scale_offset[2];
+		} lut3d;
+		GLfloat matrix[9];
+	} color_mapping;
+	GLuint color_post_curve_lut_tex;
+	GLfloat color_post_curve_lut_scale_offset[2];
 };
 
 struct gl_renderer {
 	struct weston_renderer base;
 	struct weston_compositor *compositor;
+	struct weston_log_scope *renderer_scope;
 
 	bool fragment_shader_debug;
 	bool fan_debug;
@@ -111,8 +140,6 @@ struct gl_renderer {
 	EGLDisplay egl_display;
 	EGLContext egl_context;
 	EGLConfig egl_config;
-
-	EGLSurface dummy_surface;
 
 	uint32_t gl_version;
 
@@ -156,6 +183,10 @@ struct gl_renderer {
 
 	bool has_texture_type_2_10_10_10_rev;
 	bool has_gl_texture_rg;
+	bool has_texture_norm16;
+	bool has_texture_storage;
+	bool has_pack_reverse;
+	bool has_rgb8_rgba8;
 
 	struct gl_shader *current_shader;
 	struct gl_shader *fallback_shader;
@@ -178,6 +209,16 @@ struct gl_renderer {
 	bool has_wait_sync;
 	PFNEGLWAITSYNCKHRPROC wait_sync;
 
+	bool has_disjoint_timer_query;
+	PFNGLGENQUERIESEXTPROC gen_queries;
+	PFNGLDELETEQUERIESEXTPROC delete_queries;
+	PFNGLBEGINQUERYEXTPROC begin_query;
+	PFNGLENDQUERYEXTPROC end_query;
+#if !defined(NDEBUG)
+	PFNGLGETQUERYOBJECTIVEXTPROC get_query_object_iv;
+#endif
+	PFNGLGETQUERYOBJECTUI64VEXTPROC get_query_object_ui64v;
+
 	bool gl_supports_color_transforms;
 
 	/** Shader program cache in most recently used order
@@ -198,7 +239,8 @@ void
 gl_renderer_print_egl_error_state(void);
 
 void
-gl_renderer_log_extensions(const char *name, const char *extensions);
+gl_renderer_log_extensions(struct gl_renderer *gr,
+			   const char *name, const char *extensions);
 
 void
 log_egl_config_info(EGLDisplay egldpy, EGLConfig eglconfig);
@@ -206,8 +248,8 @@ log_egl_config_info(EGLDisplay egldpy, EGLConfig eglconfig);
 EGLConfig
 gl_renderer_get_egl_config(struct gl_renderer *gr,
 			   EGLint egl_surface_type,
-			   const uint32_t *drm_formats,
-			   unsigned drm_formats_count);
+			   const struct pixel_format_info *const *formats,
+			   unsigned formats_count);
 
 int
 gl_renderer_setup_egl_display(struct gl_renderer *gr, void *native_display);

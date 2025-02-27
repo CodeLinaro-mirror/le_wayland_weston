@@ -35,6 +35,7 @@ fixture_setup(struct weston_test_harness *harness)
 	struct compositor_setup setup;
 
 	compositor_setup_defaults(&setup);
+	setup.shell = SHELL_TEST_DESKTOP;
 
 	return weston_test_harness_execute_as_client(harness, &setup);
 }
@@ -55,7 +56,7 @@ output_contains_client(struct client *client)
 static void
 check_client_move(struct client *client, int x, int y)
 {
-	move_client(client, x, y);
+	move_client_offscreenable(client, x, y);
 
 	if (output_contains_client(client)) {
 		assert(client->surface->output == client->output);

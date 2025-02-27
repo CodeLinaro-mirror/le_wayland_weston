@@ -1,5 +1,6 @@
 /*
  * Copyright 2021 Collabora, Ltd.
+ * Copyright 2021 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -98,6 +99,90 @@ struct weston_color_curve {
 	} u;
 };
 
+/** Type or formula for a color mapping */
+enum weston_color_mapping_type {
+	/** Identity function, no-op */
+	WESTON_COLOR_MAPPING_TYPE_IDENTITY = 0,
+
+	/** 3D-dimensional look-up table */
+	WESTON_COLOR_MAPPING_TYPE_3D_LUT,
+
+	/** matrix */
+	WESTON_COLOR_MAPPING_TYPE_MATRIX,
+};
+
+/**
+ * A three-dimensional look-up table
+ *
+ * A 3D LUT is a three-dimensional array where each element is an RGB triplet.
+ * A 3D LUT is usually an approximation of some arbitrary color mapping
+ * function that cannot be represented in any simpler form. The array contains
+ * samples from the approximated function, and values between samples are
+ * estimated by interpolation. The array is accessed with three indices, one
+ * for each input dimension (color channel).
+ *
+ * Color channel values in the range [0.0, 1.0] are mapped linearly to
+ * 3D LUT indices such that 0.0 maps exactly to the first element and 1.0 maps
+ * exactly to the last element in each dimension.
+ *
+ * This object represents a 3D LUT and offers an interface for realizing it
+ * as a data array with a custom size.
+ */
+struct weston_color_mapping_3dlut {
+	/**
+	 * Create a 3D LUT data array
+	 *
+	 * \param xform This color transformation object.
+	 * \param values Memory to hold the resulting data array.
+	 * \param len The number of elements in each dimension.
+	 *
+	 * The array \c values must be at least 3 * len * len * len elements
+	 * in size.
+	 *
+	 * Given the red index ri, green index gi and blue index bi, the
+	 * corresponding array element index
+	 *
+	 *     i = 3 * (len * len * bi + len * gi + ri) + c
+	 *
+	 * where
+	 *
+	 *     c = 0 for red output value,
+	 *     c = 1 for green output value, and
+	 *     c = 2 for blue output value
+	 */
+	void
+	(*fill_in)(struct weston_color_transform *xform,
+		   float *values, unsigned len);
+
+	/** Optimal 3D LUT size along each dimension */
+	unsigned optimal_len;
+};
+
+/**
+ * A 3x3 matrix and data is arranged as column major
+ */
+struct weston_color_mapping_matrix {
+	float matrix[9];
+};
+
+/**
+ * Color mapping function
+ *
+ * This object can represent a 3D LUT to do a color space conversion
+ *
+ */
+struct weston_color_mapping {
+	/** Which member of 'u' defines the color mapping type */
+	enum weston_color_mapping_type type;
+
+	/** Parameters for the color mapping function */
+	union {
+		/* identity: no parameters */
+		struct weston_color_mapping_3dlut lut3d;
+		struct weston_color_mapping_matrix mat;
+	} u;
+};
+
 /**
  * Describes a color transformation formula
  *
@@ -124,10 +209,10 @@ struct weston_color_transform {
 	struct weston_color_curve pre_curve;
 
 	/** Step 3: color mapping */
-	/* TBD: e.g. a 3D LUT or a matrix */
+	struct weston_color_mapping mapping;
 
 	/** Step 4: color curve after color mapping */
-	/* struct weston_color_curve post_curve; */
+	struct weston_color_curve post_curve;
 };
 
 /**
@@ -177,6 +262,14 @@ struct weston_color_manager {
 	void
 	(*destroy_color_profile)(struct weston_color_profile *cprof);
 
+	/** Gets a reference to the stock sRGB color profile
+	 *
+	 * \param cm The color manager.
+	 * \return A reference to the stock sRGB profile, never returns NULL.
+	 */
+	struct weston_color_profile *
+	(*get_stock_sRGB_color_profile)(struct weston_color_manager *cm);
+
 	/** Create a color profile from ICC data
 	 *
 	 * \param cm The color manager.
@@ -223,53 +316,19 @@ struct weston_color_manager {
 				       struct weston_output *output,
 				       struct weston_surface_color_transform *surf_xform);
 
-	/** Get output's blending space to output transformation
+	/** Compute derived color properties for an output
 	 *
 	 * \param cm The color manager.
-	 * \param output The output for the destination color space.
-	 * \param xform_out Pointer for storing the weston_color_transform.
-	 * \return True on success, false on failure.
+	 * \param output The output.
+	 * \return A new color_outcome object on success, NULL on failure.
 	 *
-	 * The callee is responsible for increasing the reference count on the
-	 * weston_color_transform it stores via xform_out. On failure, xform_out
-	 * is untouched.
+	 * The callee (color manager) must inspect the weston_output (color
+	 * profile, EOTF mode, etc.) and create a fully populated
+	 * weston_output_color_outcome object.
 	 */
-	bool
-	(*get_output_color_transform)(struct weston_color_manager *cm,
-				      struct weston_output *output,
-				      struct weston_color_transform **xform_out);
-
-	/** Get sRGB to output transformation
-	 *
-	 * \param cm The color manager.
-	 * \param output The output for the destination color space.
-	 * \param xform_out Pointer for storing the weston_color_transform.
-	 * \return True on success, false on failure.
-	 *
-	 * The callee is responsible for increasing the reference count on the
-	 * weston_color_transform it stores via xform_out. On failure, xform_out
-	 * is untouched.
-	 */
-	bool
-	(*get_sRGB_to_output_color_transform)(struct weston_color_manager *cm,
-					      struct weston_output *output,
-					      struct weston_color_transform **xform_out);
-
-	/** Get sRGB to output's blending space transformation
-	 *
-	 * \param cm The color manager.
-	 * \param output The output for the destination blending color space.
-	 * \param xform_out Pointer for storing the weston_color_transform.
-	 * \return True on success, false on failure.
-	 *
-	 * The callee is responsible for increasing the reference count on the
-	 * weston_color_transform it stores via xform_out. On failure, xform_out
-	 * is untouched.
-	 */
-	bool
-	(*get_sRGB_to_blend_color_transform)(struct weston_color_manager *cm,
-					     struct weston_output *output,
-					     struct weston_color_transform **xform_out);
+	struct weston_output_color_outcome *
+	(*create_output_color_outcome)(struct weston_color_manager *cm,
+				       struct weston_output *output);
 };
 
 void
@@ -285,6 +344,9 @@ weston_color_transform_unref(struct weston_color_transform *xform);
 void
 weston_color_transform_init(struct weston_color_transform *xform,
 			    struct weston_color_manager *cm);
+
+char *
+weston_color_transform_string(const struct weston_color_transform *xform);
 
 void
 weston_surface_color_transform_copy(struct weston_surface_color_transform *dst,
@@ -304,5 +366,14 @@ weston_color_manager_noop_create(struct weston_compositor *compositor);
 /* DSO module entrypoint */
 struct weston_color_manager *
 weston_color_manager_create(struct weston_compositor *compositor);
+
+const char *
+weston_eotf_mode_to_str(enum weston_eotf_mode e);
+
+char *
+weston_eotf_mask_to_str(uint32_t eotf_mask);
+
+void
+weston_output_color_outcome_destroy(struct weston_output_color_outcome **pco);
 
 #endif /* WESTON_COLOR_H */

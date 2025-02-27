@@ -238,8 +238,6 @@ weston_log_subscription_get_data(struct weston_log_subscription *sub)
  * subscription
  * @param scope the scope in order to add the subscription to the scope's
  * subscription list
- * @returns a weston_log_subscription object in case of success, or NULL
- * otherwise
  *
  * @sa weston_log_subscription_destroy, weston_log_subscription_remove,
  * weston_log_subscription_add
@@ -913,6 +911,56 @@ weston_log_scope_timestamp(struct weston_log_scope *scope,
 	return buf;
 }
 
+/** Returns a timestamp useful for adding it to a log scope.
+ *
+ * @example
+ * char timestr[128];
+ * static int cached_dm = -1;
+ * char *time_buff = weston_log_timestamp(timestr, sizeof(timestr),  &cached_dm);
+ * weston_log_scope_printf(log_scope, "%s %s", time_buff, other_data);
+ *
+ * @param buf a user-supplied buffer
+ * @param len user-supplied length of the buffer
+ * @param cached_tm_mday a cached day of the month, as an integer. Setting this
+ * pointer different from NULL, to an integer value other than was retrieved as
+ * current day of the month, would add an additional line under the form of
+ * 'Date: Y-m-d Z\n'. Setting the pointer to NULL would not print any date, nor
+ * if the value matches the current day of month. Helps identify logs that
+ * spawn multiple days, while still having a shorter time stamp format.
+ * @ingroup log
+ */
+WL_EXPORT char *
+weston_log_timestamp(char *buf, size_t len, int *cached_tm_mday)
+{
+       struct timeval tv;
+       struct tm *brokendown_time;
+       char datestr[128];
+       char timestr[128];
+
+       gettimeofday(&tv, NULL);
+
+       brokendown_time = localtime(&tv.tv_sec);
+       if (brokendown_time == NULL) {
+               snprintf(buf, len, "%s", "[(NULL)localtime] ");
+               return buf;
+       }
+
+       memset(datestr, 0, sizeof(datestr));
+       if (cached_tm_mday && brokendown_time->tm_mday != *cached_tm_mday) {
+               strftime(datestr, sizeof(datestr), "Date: %Y-%m-%d %Z\n",
+                        brokendown_time);
+               *cached_tm_mday = brokendown_time->tm_mday;
+       }
+
+       strftime(timestr, sizeof(timestr), "%H:%M:%S", brokendown_time);
+       /* if datestr is empty it prints only timestr*/
+       snprintf(buf, len, "%s[%s.%03li]", datestr,
+                timestr, (tv.tv_usec / 1000));
+
+       return buf;
+}
+
+
 void
 weston_log_subscriber_release(struct weston_log_subscriber *subscriber)
 {
@@ -1008,4 +1056,67 @@ weston_log_subscription_iterate(struct weston_log_scope *scope,
 		return NULL;
 
 	return container_of(node, struct weston_log_subscription, source_link);
+}
+
+/** Iterate over all debug scopes added to a weston_log_context
+ *
+ * @param log_ctx the log context
+ * @param nscope the iterator, use NULL to start from the head of the list
+ * @returns the next log scope from list added to weston_log_ctx
+ *
+ * Note that that \c nscope needs to be NULL-initialized before calling
+ * this function.
+ *
+ * This helper can be used by libweston users to grab all the debug scopes
+ * created. This would be an alternative to using weston-debug private
+ * extension.
+ *
+ */
+WL_EXPORT struct weston_log_scope *
+weston_log_scopes_iterate(struct weston_log_context *log_ctx,
+                          struct weston_log_scope *nscope)
+{
+        struct wl_list *list;
+        struct wl_list *node;
+
+        assert(log_ctx);
+
+        list = &log_ctx->scope_list;
+
+        if (nscope) {
+                node = nscope->compositor_link.next;
+        } else {
+                node = list->next;
+        }
+
+	assert(node);
+	assert(!nscope || node != &nscope->compositor_link);
+
+        if (node == list)
+                return NULL;
+
+        return container_of(node, struct weston_log_scope, compositor_link);
+}
+
+/** Helper to retrieve, in human readable form,  the name of a log scope
+ *
+ * @param scope the scope in question
+ * @returns the name of the scope as a pointer to a string
+ */
+WL_EXPORT const char *
+weston_log_scope_get_name(struct weston_log_scope *scope)
+{
+        return scope->name;
+}
+
+/** Helper to retreive, in human reable form, the description of a log scope
+ *
+ * @param scope the scope in question
+ * @returns the description of the scope as pointer to a string
+ *
+ */
+WL_EXPORT const char *
+weston_log_scope_get_description(struct weston_log_scope *scope)
+{
+        return scope->desc;
 }

@@ -38,6 +38,7 @@
 #include <fcntl.h>
 
 #include "shared/helpers.h"
+#include "shared/string-helpers.h"
 #include "weston-test-fixture-compositor.h"
 #include "weston.h"
 #include "test-config.h"
@@ -92,6 +93,11 @@ prog_args_fini(struct prog_args *p)
 {
 	int i;
 
+	/* If our args have never been saved, then we haven't called the
+	 * compositor, but we still need to free the args, not leak them. */
+	if (!p->saved)
+		prog_args_save(p);
+
 	if (p->saved) {
 		for (i = 0; i < p->argc; i++)
 			free(p->saved[i]);
@@ -116,7 +122,8 @@ get_lock_path(void)
 		return NULL;
 	}
 
-	if (asprintf(&lock_path, "%s/%s", env_path, suffix) == -1)
+	str_printf(&lock_path, "%s/%s", env_path, suffix);
+	if (!lock_path)
 		return NULL;
 
 	return lock_path;
@@ -181,8 +188,8 @@ compositor_setup_defaults_(struct compositor_setup *setup,
 	*setup = (struct compositor_setup) {
 		.test_quirks = (struct weston_testsuite_quirks){ },
 		.backend = WESTON_BACKEND_HEADLESS,
-		.renderer = RENDERER_NOOP,
-		.shell = SHELL_DESKTOP,
+		.renderer = WESTON_RENDERER_NOOP,
+		.shell = SHELL_TEST_DESKTOP,
 		.xwayland = false,
 		.width = 320,
 		.height = 240,
@@ -199,52 +206,37 @@ static const char *
 backend_to_str(enum weston_compositor_backend b)
 {
 	static const char * const names[] = {
-		[WESTON_BACKEND_DRM] = "drm-backend.so",
-		[WESTON_BACKEND_FBDEV] = "fbdev-backend.so",
-		[WESTON_BACKEND_HEADLESS] = "headless-backend.so",
-		[WESTON_BACKEND_RDP] = "rdp-backend.so",
-		[WESTON_BACKEND_WAYLAND] = "wayland-backend.so",
-		[WESTON_BACKEND_X11] = "X11-backend.so",
+		[WESTON_BACKEND_DRM] = "drm",
+		[WESTON_BACKEND_HEADLESS] = "headless",
+		[WESTON_BACKEND_RDP] = "rdp",
+		[WESTON_BACKEND_VNC] = "vnc",
+		[WESTON_BACKEND_WAYLAND] = "wayland",
+		[WESTON_BACKEND_X11] = "x11",
 	};
 	assert(b >= 0 && b < ARRAY_LENGTH(names));
 	return names[b];
 }
 
 static const char *
-renderer_to_arg(enum weston_compositor_backend b, enum renderer_type r)
+renderer_to_str(enum weston_renderer_type t)
 {
-	static const char * const headless_names[] = {
-		[RENDERER_NOOP] = NULL,
-		[RENDERER_PIXMAN] = "--use-pixman",
-		[RENDERER_GL] = "--use-gl",
+	static const char * const names[] = {
+		[WESTON_RENDERER_NOOP] = "noop",
+		[WESTON_RENDERER_PIXMAN] = "pixman",
+		[WESTON_RENDERER_GL] = "gl",
 	};
-	static const char * const drm_names[] = {
-		[RENDERER_PIXMAN] = "--use-pixman",
-		[RENDERER_GL] = NULL,
-	};
-
-	switch (b) {
-	case WESTON_BACKEND_HEADLESS:
-		assert(r >= RENDERER_NOOP && r <= RENDERER_GL);
-		return headless_names[r];
-	case WESTON_BACKEND_DRM:
-		assert(r >= RENDERER_PIXMAN && r <= RENDERER_GL);
-		return drm_names[r];
-	default:
-		assert(0 && "renderer_to_str() does not know the backend");
-	}
-
-	return NULL;
+	assert(t >= 0 && t <= ARRAY_LENGTH(names));
+	return names[t];
 }
 
 static const char *
 shell_to_str(enum shell_type t)
 {
 	static const char * const names[] = {
-		[SHELL_TEST_DESKTOP] = "weston-test-desktop-shell.so",
-		[SHELL_DESKTOP] = "desktop-shell.so",
-		[SHELL_FULLSCREEN] = "fullscreen-shell.so",
-		[SHELL_IVI] = "ivi-shell.so",
+		[SHELL_TEST_DESKTOP] = "weston-test-desktop",
+		[SHELL_DESKTOP] = "desktop",
+		[SHELL_FULLSCREEN] = "fullscreen",
+		[SHELL_IVI] = "ivi",
 	};
 	assert(t >= 0 && t < ARRAY_LENGTH(names));
 	return names[t];
@@ -284,75 +276,82 @@ execute_compositor(const struct compositor_setup *setup,
 	struct weston_testsuite_data test_data;
 	struct prog_args args;
 	char *tmp;
-	const char *ctmp, *drm_device;
-	int ret, lock_fd = -1;
-
-	if (setenv("WESTON_MODULE_MAP", WESTON_MODULE_MAP, 0) < 0 ||
-	    setenv("WESTON_DATA_DIR", WESTON_DATA_DIR, 0) < 0) {
-		fprintf(stderr, "Error: environment setup failed.\n");
-		return RESULT_HARD_ERROR;
-	}
-
-#ifndef BUILD_DRM_COMPOSITOR
-	if (setup->backend == WESTON_BACKEND_DRM) {
-		fprintf(stderr, "DRM-backend required but not built, skipping.\n");
-		return RESULT_SKIP;
-	}
-#endif
-
-#ifndef BUILD_FBDEV_COMPOSITOR
-	if (setup->backend == WESTON_BACKEND_FBDEV) {
-		fprintf(stderr, "fbdev-backend required but not built, skipping.\n");
-		return RESULT_SKIP;
-	}
-#endif
-
-#ifndef BUILD_RDP_COMPOSITOR
-	if (setup->backend == WESTON_BACKEND_RDP) {
-		fprintf(stderr, "RDP-backend required but not built, skipping.\n");
-		return RESULT_SKIP;
-	}
-#endif
-
-#ifndef BUILD_WAYLAND_COMPOSITOR
-	if (setup->backend == WESTON_BACKEND_WAYLAND) {
-		fprintf(stderr, "wayland-backend required but not built, skipping.\n");
-		return RESULT_SKIP;
-	}
-#endif
-
-#ifndef BUILD_X11_COMPOSITOR
-	if (setup->backend == WESTON_BACKEND_X11) {
-		fprintf(stderr, "X11-backend required but not built, skipping.\n");
-		return RESULT_SKIP;
-	}
-#endif
-
-#ifndef ENABLE_EGL
-	if (setup->renderer == RENDERER_GL) {
-		fprintf(stderr, "GL-renderer required but not built, skipping.\n");
-		return RESULT_SKIP;
-	}
-#endif
-
-#if !TEST_GL_RENDERER
-	if (setup->renderer == RENDERER_GL) {
-		fprintf(stderr, "GL-renderer disabled for tests, skipping.\n");
-		return RESULT_SKIP;
-	}
-#endif
+	const char *drm_device;
+	int lock_fd = -1;
+	int ret = RESULT_OK;
 
 	prog_args_init(&args);
 
 	/* argv[0] */
-	asprintf(&tmp, "weston-%s", setup->testset_name);
+	str_printf(&tmp, "weston-%s", setup->testset_name);
 	prog_args_take(&args, tmp);
 
-	asprintf(&tmp, "--backend=%s", backend_to_str(setup->backend));
+	str_printf(&tmp, "--backend=%s", backend_to_str(setup->backend));
 	prog_args_take(&args, tmp);
+
+	/* Test suite needs the debug protocol to be able to take screenshots */
+	prog_args_take(&args, strdup("--debug"));
+
+	str_printf(&tmp, "--socket=%s", setup->testset_name);
+	prog_args_take(&args, tmp);
+
+	str_printf(&tmp, "--modules=%s%s%s", TESTSUITE_PLUGIN_PATH,
+		   setup->extra_module ? "," : "",
+		   setup->extra_module ? setup->extra_module : "");
+	prog_args_take(&args, tmp);
+
+	if (setup->backend != WESTON_BACKEND_DRM) {
+		str_printf(&tmp, "--width=%d", setup->width);
+		prog_args_take(&args, tmp);
+
+		str_printf(&tmp, "--height=%d", setup->height);
+		prog_args_take(&args, tmp);
+	}
+
+	if (setup->scale != 1) {
+		str_printf(&tmp, "--scale=%d", setup->scale);
+		prog_args_take(&args, tmp);
+	}
+
+	if (setup->transform != WL_OUTPUT_TRANSFORM_NORMAL) {
+		str_printf(&tmp, "--transform=%s",
+			   transform_to_str(setup->transform));
+		prog_args_take(&args, tmp);
+	}
+
+	if (setup->config_file) {
+		str_printf(&tmp, "--config=%s", setup->config_file);
+		prog_args_take(&args, tmp);
+		free(setup->config_file);
+	} else {
+		prog_args_take(&args, strdup("--no-config"));
+	}
+
+	str_printf(&tmp, "--renderer=%s", renderer_to_str(setup->renderer));
+	prog_args_take(&args, tmp);
+
+	str_printf(&tmp, "--shell=%s", shell_to_str(setup->shell));
+	prog_args_take(&args, tmp);
+
+	if (setup->logging_scopes) {
+		str_printf(&tmp, "--logger-scopes=%s", setup->logging_scopes);
+		prog_args_take(&args, tmp);
+	}
+
+	if (setup->xwayland)
+		prog_args_take(&args, strdup("--xwayland"));
+
+	if (setenv("WESTON_MODULE_MAP", WESTON_MODULE_MAP, 0) < 0 ||
+	    setenv("WESTON_DATA_DIR", WESTON_DATA_DIR, 0) < 0) {
+		fprintf(stderr, "Error: environment setup failed.\n");
+		ret = RESULT_HARD_ERROR;
+	}
 
 	if (setup->backend == WESTON_BACKEND_DRM) {
-
+#ifndef BUILD_DRM_COMPOSITOR
+		fprintf(stderr, "DRM-backend required but not built, skipping.\n");
+		ret = RESULT_SKIP;
+#else
 		drm_device = getenv("WESTON_TEST_SUITE_DRM_DEVICE");
 		if (!drm_device) {
 			fprintf(stderr, "Skipping DRM-backend tests because " \
@@ -360,9 +359,9 @@ execute_compositor(const struct compositor_setup *setup,
 				"See test suite documentation to learn how " \
 				"to run them.\n");
 			ret = RESULT_SKIP;
-			goto out;
 		}
-		asprintf(&tmp, "--drm-device=%s", drm_device);
+
+		str_printf(&tmp, "--drm-device=%s", drm_device);
 		prog_args_take(&args, tmp);
 
 		prog_args_take(&args, strdup("--seat=weston-test-seat"));
@@ -370,72 +369,46 @@ execute_compositor(const struct compositor_setup *setup,
 		prog_args_take(&args, strdup("--continue-without-input"));
 
 		lock_fd = wait_for_lock();
-		if (lock_fd == -1) {
+		if (lock_fd == -1)
 			ret = RESULT_FAIL;
-			goto out;
-		}
+#endif
 	}
 
-	/* Test suite needs the debug protocol to be able to take screenshots */
-	prog_args_take(&args, strdup("--debug"));
-
-	asprintf(&tmp, "--socket=%s", setup->testset_name);
-	prog_args_take(&args, tmp);
-
-	asprintf(&tmp, "--modules=%s%s%s", TESTSUITE_PLUGIN_PATH,
-		 setup->extra_module ? "," : "",
-		 setup->extra_module ? setup->extra_module : "");
-	prog_args_take(&args, tmp);
-
-	if (setup->backend != WESTON_BACKEND_DRM &&
-	    setup->backend != WESTON_BACKEND_FBDEV) {
-		asprintf(&tmp, "--width=%d", setup->width);
-		prog_args_take(&args, tmp);
-
-		asprintf(&tmp, "--height=%d", setup->height);
-		prog_args_take(&args, tmp);
+#ifndef BUILD_RDP_COMPOSITOR
+	if (setup->backend == WESTON_BACKEND_RDP) {
+		fprintf(stderr, "RDP-backend required but not built, skipping.\n");
+		ret = RESULT_SKIP;
 	}
+#endif
 
-	if (setup->scale != 1) {
-		asprintf(&tmp, "--scale=%d", setup->scale);
-		prog_args_take(&args, tmp);
+#ifndef BUILD_WAYLAND_COMPOSITOR
+	if (setup->backend == WESTON_BACKEND_WAYLAND) {
+		fprintf(stderr, "wayland-backend required but not built, skipping.\n");
+		ret = RESULT_SKIP;
 	}
+#endif
 
-	if (setup->transform != WL_OUTPUT_TRANSFORM_NORMAL) {
-		asprintf(&tmp, "--transform=%s",
-			 transform_to_str(setup->transform));
-		prog_args_take(&args, tmp);
+#ifndef BUILD_X11_COMPOSITOR
+	if (setup->backend == WESTON_BACKEND_X11) {
+		fprintf(stderr, "X11-backend required but not built, skipping.\n");
+		ret = RESULT_SKIP;
 	}
+#endif
 
-	if (setup->config_file) {
-		asprintf(&tmp, "--config=%s", setup->config_file);
-		prog_args_take(&args, tmp);
-		free(setup->config_file);
-	} else {
-		prog_args_take(&args, strdup("--no-config"));
+#ifndef ENABLE_EGL
+	if (setup->renderer == WESTON_RENDERER_GL) {
+		fprintf(stderr, "GL-renderer required but not built, skipping.\n");
+		ret = RESULT_SKIP;
 	}
-
-	ctmp = renderer_to_arg(setup->backend, setup->renderer);
-	if (ctmp)
-		prog_args_take(&args, strdup(ctmp));
-
-	asprintf(&tmp, "--shell=%s", shell_to_str(setup->shell));
-	prog_args_take(&args, tmp);
-
-	if (setup->logging_scopes) {
-		asprintf(&tmp, "--logger-scopes=%s", setup->logging_scopes);
-		prog_args_take(&args, tmp);
-	}
-
-	if (setup->xwayland)
-		prog_args_take(&args, strdup("--xwayland"));
+#endif
 
 	test_data.test_quirks = setup->test_quirks;
 	test_data.test_private_data = data;
 	prog_args_save(&args);
-	ret = wet_main(args.argc, args.argv, &test_data);
 
-out:
+	if (ret == RESULT_OK)
+		ret = wet_main(args.argc, args.argv, &test_data);
+
 	prog_args_fini(&args);
 
 	/* We acquired a lock (if this is a DRM-backend test) and now we can
@@ -472,7 +445,8 @@ open_ini_file(struct compositor_setup *setup)
 	wd = realpath(".", NULL);
 	assert(wd);
 
-	if (asprintf(&tmp_path, "%s/%s.ini", wd, setup->testset_name) == -1) {
+	str_printf(&tmp_path, "%s/%s.ini", wd, setup->testset_name);
+	if (!tmp_path) {
 		fprintf(stderr, "Fail formatting Weston.ini file name.\n");
 		goto out;
 	}

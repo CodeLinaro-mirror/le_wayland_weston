@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 #include <libweston/libweston.h>
 #include <libweston/weston-log.h>
@@ -46,6 +47,7 @@
 
 #include "shared/helpers.h"
 #include "shared/timespec-util.h"
+#include "shared/xalloc.h"
 
 #define MAX_TOUCH_DEVICES 32
 
@@ -63,6 +65,10 @@ struct weston_test {
 
 	pthread_t client_thread;
 	struct wl_event_source *client_source;
+
+	struct wl_list output_list;
+	struct wl_listener output_created_listener;
+	struct wl_listener output_destroyed_listener;
 };
 
 struct weston_test_surface {
@@ -72,6 +78,100 @@ struct weston_test_surface {
 	int32_t x, y;
 	struct weston_test *test;
 };
+
+struct weston_test_output {
+	struct weston_test *test;
+	struct weston_output *output;
+	struct wl_listener repaint_listener;
+	struct wl_list link;
+};
+
+static void
+maybe_breakpoint(struct weston_test *test,
+		 enum weston_test_breakpoint breakpoint,
+		 void *resource)
+{
+	struct wet_test_pending_breakpoint *bp, *tmp;
+	struct wet_testsuite_data *tsd = weston_compositor_get_test_data(test->compositor);
+
+	wl_list_for_each_safe(bp, tmp, &tsd->breakpoints.list, link) {
+		struct wet_test_active_breakpoint *active_bp;
+
+		if (breakpoint != bp->breakpoint)
+			continue;
+		if (bp->resource && resource != bp->resource)
+			continue;
+
+		/* Remove this breakpoint from the list; ownership passes to
+		 * the active breakpoint */
+		wl_list_remove(&bp->link);
+
+		/* The active breakpoint and the pending one which triggered it
+		 * are now owned by the client */
+		active_bp = xzalloc(sizeof(*active_bp));
+		active_bp->compositor = test->compositor;
+		active_bp->resource = resource;
+		active_bp->template_ = bp;
+
+		/* Wake the client with the active breakpoint, and wait for it
+		 * to return control */
+		tsd->breakpoints.active_bp = active_bp;
+		wet_test_post_sem(&tsd->breakpoints.client_break);
+		wet_test_wait_sem(&tsd->breakpoints.server_release);
+
+		/* Only ever trigger a single breakpoint at a time */
+		return;
+	}
+}
+
+static void
+output_repaint_listener(struct wl_listener *listener, void *data)
+{
+	struct weston_test_output *to =
+		container_of(listener, struct weston_test_output,
+			     repaint_listener);
+	struct weston_head *head;
+
+	wl_list_for_each(head, &to->output->head_list, output_link) {
+		maybe_breakpoint(to->test, WESTON_TEST_BREAKPOINT_POST_REPAINT,
+				 head);
+	}
+}
+
+static void
+output_created_listener(struct wl_listener *listener, void *data)
+{
+	struct weston_output *output = data;
+	struct weston_test_output *to = xzalloc(sizeof(*to));
+	struct weston_test *test =
+		container_of(listener, struct weston_test,
+			     output_created_listener);
+
+	to->test = test;
+	to->output = output;
+	to->repaint_listener.notify = output_repaint_listener;
+	wl_signal_add(&output->frame_signal, &to->repaint_listener);
+	wl_list_insert(&test->output_list, &to->link);
+}
+
+static void
+output_destroyed_listener(struct wl_listener *listener, void *data)
+{
+	struct weston_output *output = data;
+	struct weston_test_output *to, *tmp;
+	struct weston_test *test =
+		container_of(listener, struct weston_test,
+			     output_destroyed_listener);
+
+	wl_list_for_each_safe(to, tmp, &test->output_list, link) {
+		if (to->output != output)
+			continue;
+
+		wl_list_remove(&to->repaint_listener.link);
+		wl_list_remove(&to->link);
+		free(to);
+	}
+}
 
 static void
 touch_device_add(struct weston_test *test)
@@ -146,26 +246,33 @@ notify_pointer_position(struct weston_test *test, struct wl_resource *resource)
 	struct weston_seat *seat = get_seat(test);
 	struct weston_pointer *pointer = weston_seat_get_pointer(seat);
 
-	weston_test_send_pointer_position(resource, pointer->x, pointer->y);
+	weston_test_send_pointer_position(resource,
+					  wl_fixed_from_double(pointer->pos.c.x),
+					  wl_fixed_from_double(pointer->pos.c.y));
 }
 
 static void
-test_surface_committed(struct weston_surface *surface, int32_t sx, int32_t sy)
+test_surface_committed(struct weston_surface *surface,
+		       struct weston_coord_surface new_origin)
 {
 	struct weston_test_surface *test_surface = surface->committed_private;
 	struct weston_test *test = test_surface->test;
+	struct weston_coord_global pos;
 
-	if (wl_list_empty(&test_surface->view->layer_link.link))
-		weston_layer_entry_insert(&test->layer.view_list,
-					  &test_surface->view->layer_link);
+	if (!weston_surface_has_content(surface))
+		return;
 
-	weston_view_set_position(test_surface->view,
-				 test_surface->x, test_surface->y);
+	weston_surface_map(test_surface->surface);
+
+	pos.c = weston_coord(test_surface->x, test_surface->y);
+	weston_view_set_position(test_surface->view, pos);
+
+	if (wl_list_empty(&test_surface->view->layer_link.link)) {
+		weston_view_move_to_layer(test_surface->view,
+					  &test->layer.view_list);
+	}
 
 	weston_view_update_transform(test_surface->view);
-
-	test_surface->surface->is_mapped = true;
-	test_surface->view->is_mapped = true;
 }
 
 static int
@@ -285,12 +392,13 @@ move_pointer(struct wl_client *client, struct wl_resource *resource,
 	struct weston_seat *seat = get_seat(test);
 	struct weston_pointer *pointer = weston_seat_get_pointer(seat);
 	struct weston_pointer_motion_event event = { 0 };
+	struct weston_coord_global pos;
 	struct timespec time;
 
+	pos.c = weston_coord(x, y);
 	event = (struct weston_pointer_motion_event) {
 		.mask = WESTON_POINTER_MOTION_REL,
-		.dx = wl_fixed_to_double(wl_fixed_from_int(x) - pointer->x),
-		.dy = wl_fixed_to_double(wl_fixed_from_int(y) - pointer->y),
+		.rel = weston_coord_global_sub(pos, pointer->pos).c,
 	};
 
 	timespec_from_proto(&time, tv_sec_hi, tv_sec_lo, tv_nsec);
@@ -421,13 +529,49 @@ send_touch(struct wl_client *client, struct wl_resource *resource,
 	struct weston_test *test = wl_resource_get_user_data(resource);
 	struct weston_touch_device *device = test->touch_device[0];
 	struct timespec time;
+	struct weston_coord_global pos;
 
 	assert(device);
 
 	timespec_from_proto(&time, tv_sec_hi, tv_sec_lo, tv_nsec);
 
-	notify_touch(device, &time, touch_id, wl_fixed_to_double(x),
-		     wl_fixed_to_double(y), touch_type);
+	if (touch_type == WL_TOUCH_UP) {
+		if (x != 0 || y != 0) {
+			wl_resource_post_error(resource,
+					       WESTON_TEST_ERROR_TOUCH_UP_WITH_COORDINATE,
+					       "Test protocol sent valid "
+					       "coordinates with WL_TOUCH_UP");
+
+			return;
+		}
+
+		notify_touch(device, &time, touch_id, NULL, touch_type);
+	} else {
+		pos.c = weston_coord_from_fixed(x, y);
+		notify_touch(device, &time, touch_id, &pos, touch_type);
+	}
+}
+
+static void
+client_break(struct wl_client *client, struct wl_resource *resource,
+	     uint32_t _breakpoint, uint32_t resource_id)
+{
+	struct weston_test *test = wl_resource_get_user_data(resource);
+	struct wet_testsuite_data *tsd = weston_compositor_get_test_data(test->compositor);
+	struct wet_test_pending_breakpoint *bp;
+	enum weston_test_breakpoint breakpoint = _breakpoint;
+
+	bp = calloc(1, sizeof(*bp));
+	bp->breakpoint = breakpoint;
+
+	if (resource_id != 0) {
+		struct wl_resource *resource =
+			wl_client_get_object(client, resource_id);
+		assert(resource);
+		bp->resource = wl_resource_get_user_data(resource);
+	}
+
+	wl_list_insert(&tsd->breakpoints.list, &bp->link);
 }
 
 static const struct weston_test_interface test_implementation = {
@@ -440,12 +584,24 @@ static const struct weston_test_interface test_implementation = {
 	device_release,
 	device_add,
 	send_touch,
+	client_break,
 };
+
+static void
+destroy_test(struct wl_resource *resource)
+{
+	struct weston_test *test = wl_resource_get_user_data(resource);
+	struct wet_testsuite_data *tsd = weston_compositor_get_test_data(test->compositor);
+
+	assert(tsd->wl_client);
+	tsd->wl_client = NULL;
+}
 
 static void
 bind_test(struct wl_client *client, void *data, uint32_t version, uint32_t id)
 {
 	struct weston_test *test = data;
+	struct wet_testsuite_data *tsd = weston_compositor_get_test_data(test->compositor);
 	struct wl_resource *resource;
 
 	resource = wl_resource_create(client, &weston_test_interface, 1, id);
@@ -455,8 +611,12 @@ bind_test(struct wl_client *client, void *data, uint32_t version, uint32_t id)
 	}
 
 	wl_resource_set_implementation(resource,
-				       &test_implementation, test, NULL);
+				       &test_implementation, test,
+				       destroy_test);
 
+	/* There can only be one wl_client bound */
+	assert(!tsd->wl_client);
+	tsd->wl_client = client;
 	notify_pointer_position(test, resource);
 }
 
@@ -542,6 +702,21 @@ create_client_thread(struct weston_test *test, struct wet_testsuite_data *data)
 
 	data->thread_event_pipe = pipefd[1];
 
+	ret = sem_init(&data->breakpoints.client_break, 0, 0);
+	if (ret != 0) {
+		weston_log("Creating breakpoint semaphore failed: %s (%d)\n",
+			   strerror(errno), errno);
+		goto out_source;
+	}
+
+	ret = sem_init(&data->breakpoints.server_release, 0, 0);
+	if (ret != 0) {
+		weston_log("Creating release semaphore failed: %s (%d)\n",
+			   strerror(errno), errno);
+		goto out_source;
+	}
+
+
 	/* Ensure we don't accidentally get signals to the thread. */
 	sigfillset(&blocked);
 	sigdelset(&blocked, SIGSEGV);
@@ -585,6 +760,8 @@ idle_launch_testsuite(void *test_)
 	if (!data)
 		return;
 
+	wl_list_init(&data->breakpoints.list);
+
 	switch (data->type) {
 	case TEST_TYPE_CLIENT:
 		if (create_client_thread(test, data) < 0) {
@@ -614,11 +791,21 @@ static void
 handle_compositor_destroy(struct wl_listener *listener,
 			  void *weston_compositor)
 {
+	struct weston_compositor *compositor = weston_compositor;
+	struct wet_testsuite_data *data;
 	struct weston_test *test;
+	struct weston_output *output;
 
 	test = wl_container_of(listener, test, destroy_listener);
+	data = weston_compositor_get_test_data(test->compositor);
 
 	wl_list_remove(&test->destroy_listener.link);
+	wl_list_remove(&test->output_created_listener.link);
+	wl_list_remove(&test->output_destroyed_listener.link);
+	wl_list_for_each(output, &compositor->output_list, link) {
+		output_destroyed_listener(&test->output_destroyed_listener,
+					  output);
+	}
 
 	if (test->client_source) {
 		weston_log_scope_printf(test->log, "Cancelling client thread...\n");
@@ -628,6 +815,8 @@ handle_compositor_destroy(struct wl_listener *listener,
 
 	if (test->is_seat_initialized)
 		test_seat_release(test);
+
+	data->wl_client = NULL;
 
 	wl_list_remove(&test->layer.view_list.link);
 	wl_list_remove(&test->layer.link);
@@ -641,6 +830,7 @@ wet_module_init(struct weston_compositor *ec,
 		int *argc, char *argv[])
 {
 	struct weston_test *test;
+	struct weston_output *output;
 	struct wl_event_loop *loop;
 
 	test = zalloc(sizeof *test);
@@ -657,6 +847,15 @@ wet_module_init(struct weston_compositor *ec,
 	test->compositor = ec;
 	weston_layer_init(&test->layer, ec);
 	weston_layer_set_position(&test->layer, WESTON_LAYER_POSITION_CURSOR - 1);
+
+	wl_list_init(&test->output_list);
+	wl_list_for_each(output, &ec->output_list, link)
+		output_created_listener(&test->output_created_listener, output);
+	test->output_created_listener.notify = output_created_listener;
+	wl_signal_add(&ec->output_created_signal, &test->output_created_listener);
+	test->output_destroyed_listener.notify = output_destroyed_listener;
+	wl_signal_add(&ec->output_destroyed_signal,
+		      &test->output_destroyed_listener);
 
 	test->log = weston_compositor_add_log_scope(ec, "test-harness-plugin",
 					"weston-test plugin's own actions",

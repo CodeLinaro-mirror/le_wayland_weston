@@ -6,7 +6,7 @@ underlying environment where it runs on. Ultimately, the back-end is
 responsible for handling the input and generate an output. Weston, as a
 libweston user, can be run on different back-ends, including nested, by using
 the wayland backend, but also on X11 or on a stand-alone back-end like
-DRM/KMS and now deprecated fbdev.
+DRM/KMS.
 
 In most cases, people should allow Weston to choose the backend automatically
 as it will produce the best results. That happens for instance when running
@@ -14,7 +14,7 @@ Weston on a machine that already has another graphical environment running,
 being either another wayland compositor (e.g.  Weston) or on a X11 server.
 You should only specify the backend manually if you know that what Weston picks
 is not the best, or the one you intended to use is different than the one
-loaded.  In that case, the backend can be selected by using ``-B [backend.so]``
+loaded.  In that case, the backend can be selected by using ``-B [backend]``
 command line option.  As each back-end uses a different way to get input and
 produce output, it means that the most suitable back-end depends on the
 environment being used.
@@ -28,22 +28,30 @@ Available back-ends:
 * **x11** -- run as a x11 application, nested in a X11 display server instance
 * **rdp** -- run as an RDP server without local input or output
 * **headless** -- run without input or output, useful for test suite
-* **fbdev** -- run stand-alone on fbdev/evdev (deprecated)
+* **pipewire** -- run without input, output into a PipeWire node
 
 The job of gathering all the surfaces (windows) being displayed on an output and
 stitching them together is performed by a *renderer*. By doing so, it is
 compositing all surfaces into a single image, which is being handed out to a
 back-end, and finally, displayed on the screen.
 
-libweston has a CPU-based type of renderer by making use of the
-`Pixman <http://www.pixman.org/>`_ library, but also one that can make
-use of the GPU to do that, which uses `OpenGL ES <https://www.khronos.org/opengles/>`_
-and it is simply called the GL-renderer.
+libweston provides two useful renderers. One uses
+`OpenGL ES <https://www.khronos.org/opengles/>`_, which will often be accelerated
+by your GPU when suitable drivers are installed. The other uses the
+`Pixman <http://www.pixman.org>`_ library which is entirely CPU (software)
+rendered. You can select between these with the ``--renderer=gl`` and
+``--renderer=pixman`` arguments when starting Weston.
 
-Most of the back-ends provide a command line option to disable the GL-renderer,
-and use the CPU for doing that. That happens by appending to the command line
-``--use-pixman`` when running Weston. One might use the CPU-based renderer
-to exclude any other potential issues with the GL-renderer.
+Multi-back-end support
+----------------------
+
+Some back-ends can be selected via a comma-separated list to run in parallel,
+for example ``-B drm,vnc``. The first back-end in the list is the *primary*
+back-end. It creates the renderer and creates its outputs first. The following
+back-ends are *secondary* backends. They reuse the renderer and create their
+outputs afterwards. Currently, all back-ends support being loaded as the primary
+back-end. The PipeWire and VNC backends support being loaded as secondary
+backends.
 
 Additional set-up steps
 -----------------------
@@ -91,17 +99,20 @@ You can start Weston from a VT assuming that there's a seat manager supported by
 backend to be used by ``libseat`` can optionally be selected with
 ``$LIBSEAT_BACKEND``.  If ``libseat`` and ``seatd`` are both installed, but
 ``seatd`` is not already running, it can be started with ``sudo -- seatd -g
-video``.  If no seat manager supported by ``libseat`` is available, you can use
-the ``weston-launch`` application that can handle VT switching.
+video``.
 
-Another way of launching Weston is via ssh or a serial terminal.  The simplest
-option here is to use the ``libseat`` launcher with ``seatd``.  The process for
+Launching Weston via ssh or a serial terminal is best with the ``libseat``
+launcher and ``seatd``. Logind will refuse to give access to local seats from
+remote connections directly. The process for
 setting that up is identical to the one described above, where one just need to
 ensure that ``seatd`` is running with the appropriate arguments, after which one
-can just run ``weston``.  Another option, is to rely on logind and start weston
-as systemd user service: :ref:`weston-user-service`. Alternatively and as a last
-resort, one can run Weston as root, specifying the tty to use on the command
-line: If TTY 2 is active, one would run ``weston --tty 2`` as root.
+can just run ``weston``. ``seatd`` will lend out the current VT, and if you want
+to run on a different VT you need to ``chvt`` first. Make sure nothing will try
+to take over the seat or VT via logind at the same time in case logind is
+running.
+
+If you want to rely on logind, you can start weston as a systemd user service:
+:ref:`weston-user-service`.
 
 Running Weston on a different seat on a stand-alone back-end
 ------------------------------------------------------------
@@ -171,7 +182,14 @@ Then, weston can be run by selecting the DRM-backend and the seat ``seat-insecur
 
 ::
 
-        ./weston -Bdrm-backend.so --seat=seat-insecure
+        SEATD_VTBOUND=0 ./weston -Bdrm --seat=seat-insecure
+
+This assumes you are using the libseat launcher of Weston with the "builtin"
+backend of libseat. Libseat automatically falls back to the builtin backend if
+``seatd`` is not running and a ``logind`` service is not running or refuses.
+You can also force it with ``LIBSEAT_BACKEND=builtin`` if needed.
+``SEATD_VTBOUND=0`` tells libseat that there is no VT associated with the
+chosen seat.
 
 If everything went well you should see weston be up-and-running on an output
 connected to that DRM device.
@@ -183,10 +201,12 @@ Running weston from a systemd service
 
 Weston could also be started, as a systemd user `service
 <https://www.freedesktop.org/software/systemd/man/systemd.service.html>`_,
-rather than as systemd system service, still relying on logind launcher.  In
+rather than as systemd system service.  In
 order to do that we would need two
 `unit <https://man7.org/linux/man-pages/man5/systemd.unit.5.html>`_ files,
 a ``.service`` and a ``.socket`` one.
+The ``systemd-notify.so`` module needs to be enabled to notify systemd when
+Weston has finished its startup and is ready to accept client connections.
 
 On a Debian system, the systemd user units are under ``/etc/systemd/user/``
 directory.
@@ -229,7 +249,7 @@ directory.
         StandardError=journal
 
         # add a ~/.config/weston.ini and weston will pick-it up
-        ExecStart=/usr/bin/weston
+        ExecStart=/usr/bin/weston --modules=systemd-notify.so
 
         [Install]
         WantedBy=graphical-session.target

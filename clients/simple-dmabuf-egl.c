@@ -58,6 +58,7 @@
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
+#include <libweston/matrix.h>
 #include "shared/weston-egl-ext.h"
 
 /* Possible options that affect the displayed image */
@@ -131,7 +132,7 @@ struct buffer {
 	int release_fence_fd;
 };
 
-#define NUM_BUFFERS 3
+#define NUM_BUFFERS 4
 
 struct window {
 	struct display *display;
@@ -149,6 +150,7 @@ struct window {
 		GLuint pos;
 		GLuint color;
 		GLuint offset_uniform;
+		GLuint reflection_uniform;
 	} gl;
 	bool render_mandelbrot;
 };
@@ -329,9 +331,7 @@ static int
 create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 		     int width, int height, uint32_t opts)
 {
-	/* Y-Invert the buffer image, since we are going to renderer to the
-	 * buffer through a FBO. */
-	static uint32_t flags = ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT;
+	static uint32_t flags = 0;
 	struct zwp_linux_buffer_params_v1 *params;
 	int i;
 
@@ -341,18 +341,26 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 	buffer->format = display->format;
 	buffer->release_fence_fd = -1;
 
-#ifdef HAVE_GBM_MODIFIERS
 	if (display->modifiers_count > 0) {
+#ifdef HAVE_GBM_BO_CREATE_WITH_MODIFIERS2
+		buffer->bo = gbm_bo_create_with_modifiers2(display->gbm.device,
+							   buffer->width,
+							   buffer->height,
+							   buffer->format,
+							   display->modifiers,
+							   display->modifiers_count,
+							   GBM_BO_USE_RENDERING);
+#else
 		buffer->bo = gbm_bo_create_with_modifiers(display->gbm.device,
 							  buffer->width,
 							  buffer->height,
 							  buffer->format,
 							  display->modifiers,
 							  display->modifiers_count);
+#endif
 		if (buffer->bo)
 			buffer->modifier = gbm_bo_get_modifier(buffer->bo);
 	}
-#endif
 
 	if (!buffer->bo) {
 		buffer->bo = gbm_bo_create(display->gbm.device,
@@ -368,7 +376,6 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 		goto error;
 	}
 
-#ifdef HAVE_GBM_MODIFIERS
 	buffer->plane_count = gbm_bo_get_plane_count(buffer->bo);
 	for (i = 0; i < buffer->plane_count; ++i) {
 		int ret;
@@ -389,27 +396,11 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 		buffer->strides[i] = gbm_bo_get_stride_for_plane(buffer->bo, i);
 		buffer->offsets[i] = gbm_bo_get_offset(buffer->bo, i);
 	}
-#else
-	buffer->plane_count = 1;
-	buffer->strides[0] = gbm_bo_get_stride(buffer->bo);
-	buffer->dmabuf_fds[0] = gbm_bo_get_fd(buffer->bo);
-	if (buffer->dmabuf_fds[0] < 0) {
-		fprintf(stderr, "error: failed to get dmabuf_fd\n");
-		goto error;
-	}
-#endif
 
 	params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
 
-	if ((opts & OPT_DIRECT_DISPLAY) && display->direct_display) {
+	if ((opts & OPT_DIRECT_DISPLAY) && display->direct_display)
 		weston_direct_display_v1_enable(display->direct_display, params);
-		/* turn off Y_INVERT otherwise linux-dmabuf will reject it and
-		 * we need all dmabuf flags turned off */
-		flags &= ~ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT;
-
-		fprintf(stdout, "image is y-inverted as direct-display flag was set, "
-				"dmabuf y-inverted attribute flag was removed\n");
-	}
 
 	for (i = 0; i < buffer->plane_count; ++i) {
 		zwp_linux_buffer_params_v1_add(params,
@@ -493,11 +484,12 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 
 static const char *vert_shader_text =
 	"uniform float offset;\n"
+	"uniform mat4 reflection;\n"
 	"attribute vec4 pos;\n"
 	"attribute vec4 color;\n"
 	"varying vec4 v_color;\n"
 	"void main() {\n"
-	"  gl_Position = pos + vec4(offset, offset, 0.0, 0.0);\n"
+	"  gl_Position = reflection * (pos + vec4(offset, offset, 0.0, 0.0));\n"
 	"  v_color = color;\n"
 	"}\n";
 
@@ -510,11 +502,12 @@ static const char *frag_shader_text =
 
 static const char *vert_shader_mandelbrot_text =
 	"uniform float offset;\n"
+	"uniform mat4 reflection;\n"
 	"attribute vec4 pos;\n"
 	"varying vec2 v_pos;\n"
 	"void main() {\n"
 	"  v_pos = pos.xy;\n"
-	"  gl_Position = pos + vec4(offset, offset, 0.0, 0.0);\n"
+	"  gl_Position = reflection * (pos + vec4(offset, offset, 0.0, 0.0));\n"
 	"}\n";
 
 
@@ -614,6 +607,8 @@ window_set_up_gl(struct window *window)
 
 	window->gl.offset_uniform =
 		glGetUniformLocation(window->gl.program, "offset");
+	window->gl.reflection_uniform =
+		glGetUniformLocation(window->gl.program, "reflection");
 
 	return window->gl.program != 0;
 }
@@ -793,6 +788,7 @@ render(struct window *window, struct buffer *buffer)
 	GLfloat offset;
 	struct timeval tv;
 	uint64_t time_ms;
+	struct weston_matrix reflection;
 
 	gettimeofday(&tv, NULL);
 	time_ms = tv.tv_sec * 1000 + tv.tv_usec / 1000;
@@ -801,12 +797,32 @@ render(struct window *window, struct buffer *buffer)
 	 * to offsets in the [-0.5, 0.5) range. */
 	offset = (time_ms % iteration_ms) / (float) iteration_ms - 0.5;
 
+	weston_matrix_init(&reflection);
+	/* perform a reflection about x-axis to keep the same orientation of
+	 * the vertices colors,  as outlined in the comment at the beginning
+	 * of this function.
+	 *
+	 * We need to render upside-down, because rendering through an FBO
+	 * causes the bottom of the image to be written to the top pixel row of
+	 * the buffer, y-flipping the image.
+	 *
+	 * Reflection is a specialized version of scaling with the
+	 * following matrix:
+	 *
+	 * [1,  0,  0]
+	 * [0, -1,  0]
+	 * [0,  0,  1]
+	 */
+	weston_matrix_scale(&reflection, 1, -1, 1);
+
 	/* Direct all GL draws to the buffer through the FBO */
 	glBindFramebuffer(GL_FRAMEBUFFER, buffer->gl_fbo);
 
 	glViewport(0, 0, window->width, window->height);
 
 	glUniform1f(window->gl.offset_uniform, offset);
+	glUniformMatrix4fv(window->gl.reflection_uniform, 1, GL_FALSE,
+			   (GLfloat *) reflection.d);
 
 	glClearColor(0.0,0.0, 0.0, 1.0);
 	glClear(GL_COLOR_BUFFER_BIT);
@@ -836,6 +852,7 @@ render_mandelbrot(struct window *window, struct buffer *buffer)
 	struct timeval tv;
 	uint64_t time_ms;
 	int i;
+	struct weston_matrix reflection;
 
 	gettimeofday(&tv, NULL);
 	time_ms = tv.tv_sec * 1000 + tv.tv_usec / 1000;
@@ -844,12 +861,17 @@ render_mandelbrot(struct window *window, struct buffer *buffer)
 	 * to offsets in the [-0.5, 0.5) range. */
 	offset = (time_ms % iteration_ms) / (float) iteration_ms - 0.5;
 
+	weston_matrix_init(&reflection);
+	weston_matrix_scale(&reflection, 1, -1, 1);
+
 	/* Direct all GL draws to the buffer through the FBO */
 	glBindFramebuffer(GL_FRAMEBUFFER, buffer->gl_fbo);
 
 	glViewport(0, 0, window->width, window->height);
 
 	glUniform1f(window->gl.offset_uniform, offset);
+	glUniformMatrix4fv(window->gl.reflection_uniform, 1, GL_FALSE,
+			   (GLfloat *) reflection.d);
 
 	glClearColor(0.6, 0.6, 0.6, 1.0);
 	glClear(GL_COLOR_BUFFER_BIT);
@@ -976,7 +998,7 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 		zwp_linux_buffer_release_v1_add_listener(
 			buffer->buffer_release, &buffer_release_listener, buffer);
 	} else {
-		glFinish();
+		glFlush();
 	}
 
 	wl_surface_attach(window->surface, buffer->buffer, 0, 0);
@@ -1000,7 +1022,7 @@ dmabuf_modifiers(void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf,
 		 uint32_t format, uint32_t modifier_hi, uint32_t modifier_lo)
 {
 	struct display *d = data;
-	uint64_t modifier = ((uint64_t)modifier_hi << 32) | modifier_lo;
+	uint64_t modifier = u64_from_u32s(modifier_hi, modifier_lo);
 
 	if (format != d->format) {
 		return;

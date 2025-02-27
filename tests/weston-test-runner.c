@@ -34,11 +34,17 @@
 #include <errno.h>
 #include <signal.h>
 #include <getopt.h>
+#include <dlfcn.h>
 
 #include "test-config.h"
 #include "weston-test-runner.h"
 #include "weston-testsuite-data.h"
 #include "shared/string-helpers.h"
+
+/* This is a glibc extension; if we can't use it then make it harmless. */
+#ifndef RTLD_NODELETE
+#define RTLD_NODELETE 0
+#endif
 
 /**
  * \defgroup testharness Test harness
@@ -144,7 +150,8 @@ find_test(const char *name)
 }
 
 static enum test_result_code
-run_test(int fixture_nr, const struct weston_test_entry *t, void *data,
+run_test(struct wet_testsuite_data *suite_data, int fixture_nr,
+	 const struct weston_test_entry *t, void *data,
 	 int iteration)
 {
 	struct weston_test_run_info info;
@@ -159,7 +166,7 @@ run_test(int fixture_nr, const struct weston_test_entry *t, void *data,
 	info.fixture_nr = fixture_nr;
 
 	test_run_info_ = &info;
-	t->run(data);
+	t->run(suite_data, data);
 	test_run_info_ = NULL;
 
 	/*
@@ -271,10 +278,11 @@ run_case(struct wet_testsuite_data *suite_data,
 		suite_data->fixture_name, t->name, iteration_nr);
 
 	if (suite_data->type == TEST_TYPE_PLUGIN) {
-		ret = run_test(fixture_nr, t, suite_data->compositor,
+		ret = run_test(suite_data, fixture_nr, t, suite_data->compositor,
 			       iteration);
 	} else {
-		ret = run_test(fixture_nr, t, (void *)test_data, iteration);
+		ret = run_test(suite_data, fixture_nr, t, (void *)test_data,
+			       iteration);
 	}
 
 	switch (ret) {
@@ -627,8 +635,22 @@ main(int argc, char *argv[])
 	enum test_result_code ret;
 	enum test_result_code result = RESULT_OK;
 	const struct fixture_setup_array *fsa;
+	const char *leak_dl_handle;
 	int fi;
 	int fi_end;
+
+	/* This is horrific, but it gives us working leak checking. If we
+	 * actually unload llvmpipe, then we also unload LLVM, and some global
+	 * setup it's done - which llvmpipe can't tear down because the actual
+	 * client might be using LLVM instead.
+	 *
+	 * Turns out if llvmpipe is always live, then the pointers are always
+	 * reachable, so LeakSanitizer just tells us about our own code rather
+	 * than LLVM's, so ...
+	 */
+	leak_dl_handle = getenv("WESTON_CI_LEAK_DL_HANDLE");
+	if (leak_dl_handle)
+		(void) dlopen(leak_dl_handle, RTLD_LAZY | RTLD_GLOBAL | RTLD_NODELETE);
 
 	harness = weston_test_harness_create(argc, argv);
 
@@ -642,6 +664,7 @@ main(int argc, char *argv[])
 		fi_end = fi + 1;
 	}
 
+	printf("TAP version 13\n");
 	tap_plan(&harness->data, fi_end - fi);
 	testlog("Iterating through %d fixtures.\n", fi_end - fi);
 

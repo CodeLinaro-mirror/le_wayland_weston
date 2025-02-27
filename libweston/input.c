@@ -38,6 +38,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <errno.h>
+#include <linux/input.h>
 
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
@@ -48,6 +49,7 @@
 #include "relative-pointer-unstable-v1-server-protocol.h"
 #include "pointer-constraints-unstable-v1-server-protocol.h"
 #include "input-timestamps-unstable-v1-server-protocol.h"
+#include "tablet-unstable-v2-server-protocol.h"
 
 enum pointer_constraint_type {
 	POINTER_CONSTRAINT_TYPE_LOCK,
@@ -61,13 +63,9 @@ enum motion_direction {
 	MOTION_DIRECTION_NEGATIVE_Y = 1 << 3,
 };
 
-struct vec2d {
-	double x, y;
-};
-
 struct line {
-	struct vec2d a;
-	struct vec2d b;
+	struct weston_coord a;
+	struct weston_coord b;
 };
 
 struct border {
@@ -310,43 +308,42 @@ static void unbind_resource(struct wl_resource *resource)
 	wl_list_remove(wl_resource_get_link(resource));
 }
 
-WL_EXPORT void
+WL_EXPORT struct weston_coord_global
 weston_pointer_motion_to_abs(struct weston_pointer *pointer,
-			     struct weston_pointer_motion_event *event,
-			     wl_fixed_t *x, wl_fixed_t *y)
+			     struct weston_pointer_motion_event *event)
 {
+	struct weston_coord_global pos;
+
 	if (event->mask & WESTON_POINTER_MOTION_ABS) {
-		*x = wl_fixed_from_double(event->x);
-		*y = wl_fixed_from_double(event->y);
+		return event->abs;
 	} else if (event->mask & WESTON_POINTER_MOTION_REL) {
-		*x = pointer->x + wl_fixed_from_double(event->dx);
-		*y = pointer->y + wl_fixed_from_double(event->dy);
-	} else {
-		assert(!"invalid motion event");
-		*x = *y = 0;
+		pos.c = weston_coord_add(pointer->pos.c, event->rel);
+		return pos;
 	}
+
+	assert(!"invalid motion event");
+	pos.c = weston_coord(0, 0);
+	return pos;
 }
 
 static bool
 weston_pointer_motion_to_rel(struct weston_pointer *pointer,
 			     struct weston_pointer_motion_event *event,
-			     double *dx, double *dy,
-			     double *dx_unaccel, double *dy_unaccel)
+			     struct weston_coord *rel,
+			     struct weston_coord *rel_unaccel)
 {
 	if (event->mask & WESTON_POINTER_MOTION_REL &&
 	    event->mask & WESTON_POINTER_MOTION_REL_UNACCEL) {
-		*dx = event->dx;
-		*dy = event->dy;
-		*dx_unaccel = event->dx_unaccel;
-		*dy_unaccel = event->dy_unaccel;
+		*rel = event->rel;
+		*rel_unaccel = event->rel_unaccel;
 		return true;
 	} else if (event->mask & WESTON_POINTER_MOTION_REL) {
-		*dx_unaccel = *dx = event->dx;
-		*dy_unaccel = *dy = event->dy;
+		*rel = event->rel;
+		*rel_unaccel = event->rel;
 		return true;
 	} else if (event->mask & WESTON_POINTER_MOTION_REL_UNACCEL) {
-		*dx_unaccel = *dx = event->dx_unaccel;
-		*dy_unaccel = *dy = event->dy_unaccel;
+		*rel = event->rel_unaccel;
+		*rel_unaccel = event->rel_unaccel;
 		return true;
 	} else {
 		return false;
@@ -429,6 +426,26 @@ touch_focus_resource_destroyed(struct wl_listener *listener, void *data)
 }
 
 static void
+tablet_tool_focus_view_destroyed(struct wl_listener *listener, void *data)
+{
+	struct weston_tablet_tool *tool =
+		container_of(listener, struct weston_tablet_tool,
+			     focus_view_listener);
+
+	weston_tablet_tool_set_focus(tool, NULL, 0);
+}
+
+static void
+tablet_tool_focus_resource_destroyed(struct wl_listener *listener, void *data)
+{
+	struct weston_tablet_tool *tool =
+		container_of(listener, struct weston_tablet_tool,
+			     focus_resource_listener);
+
+	weston_tablet_tool_set_focus(tool, NULL, 0);
+}
+
+static void
 move_resources(struct wl_list *destination, struct wl_list *source)
 {
 	wl_list_insert_list(destination, source);
@@ -455,17 +472,25 @@ default_grab_pointer_focus(struct weston_pointer_grab *grab)
 {
 	struct weston_pointer *pointer = grab->pointer;
 	struct weston_view *view;
-	wl_fixed_t sx, sy;
+	bool surface_jump = false;
 
 	if (pointer->button_count > 0)
 		return;
 
 	view = weston_compositor_pick_view(pointer->seat->compositor,
-					   pointer->x, pointer->y,
-					   &sx, &sy);
+					   pointer->pos);
+	if (view && view == pointer->focus) {
+		struct weston_coord_surface surf_pos;
 
-	if (pointer->focus != view || pointer->sx != sx || pointer->sy != sy)
-		weston_pointer_set_focus(pointer, view, sx, sy);
+		weston_view_update_transform(view);
+
+		surf_pos = weston_coord_global_to_surface(view, pointer->pos);
+		if (pointer->sx != wl_fixed_from_double(surf_pos.c.x) ||
+		    pointer->sy != wl_fixed_from_double(surf_pos.c.y))
+			surface_jump = true;
+	}
+	if (pointer->focus != view || surface_jump)
+		weston_pointer_set_focus(pointer, view);
 }
 
 static void
@@ -474,8 +499,7 @@ pointer_send_relative_motion(struct weston_pointer *pointer,
 			     struct weston_pointer_motion_event *event)
 {
 	uint64_t time_usec;
-	double dx, dy, dx_unaccel, dy_unaccel;
-	wl_fixed_t dxf, dyf, dxf_unaccel, dyf_unaccel;
+	struct weston_coord rel, rel_unaccel;
 	struct wl_list *resource_list;
 	struct wl_resource *resource;
 
@@ -483,8 +507,8 @@ pointer_send_relative_motion(struct weston_pointer *pointer,
 		return;
 
 	if (!weston_pointer_motion_to_rel(pointer, event,
-					  &dx, &dy,
-					  &dx_unaccel, &dy_unaccel))
+					  &rel,
+					  &rel_unaccel))
 		return;
 
 	resource_list = &pointer->focus_client->relative_pointer_resources;
@@ -492,18 +516,15 @@ pointer_send_relative_motion(struct weston_pointer *pointer,
 	if (time_usec == 0)
 		time_usec = timespec_to_usec(time);
 
-	dxf = wl_fixed_from_double(dx);
-	dyf = wl_fixed_from_double(dy);
-	dxf_unaccel = wl_fixed_from_double(dx_unaccel);
-	dyf_unaccel = wl_fixed_from_double(dy_unaccel);
-
 	wl_resource_for_each(resource, resource_list) {
 		zwp_relative_pointer_v1_send_relative_motion(
 			resource,
 			(uint32_t) (time_usec >> 32),
 			(uint32_t) time_usec,
-			dxf, dyf,
-			dxf_unaccel, dyf_unaccel);
+			wl_fixed_from_double(rel.x),
+			wl_fixed_from_double(rel.y),
+			wl_fixed_from_double(rel_unaccel.x),
+			wl_fixed_from_double(rel_unaccel.y));
 	}
 }
 
@@ -534,19 +555,28 @@ weston_pointer_send_motion(struct weston_pointer *pointer,
 			   const struct timespec *time,
 			   struct weston_pointer_motion_event *event)
 {
-	wl_fixed_t x, y;
-	wl_fixed_t old_sx = pointer->sx;
-	wl_fixed_t old_sy = pointer->sy;
+	wl_fixed_t old_sx;
+	wl_fixed_t old_sy;
+	struct weston_view *old_focus = pointer->focus;
 
 	if (pointer->focus) {
-		weston_pointer_motion_to_abs(pointer, event, &x, &y);
-		weston_view_from_global_fixed(pointer->focus, x, y,
-					      &pointer->sx, &pointer->sy);
+		struct weston_coord_global pos;
+		struct weston_coord_surface surf_pos;
+
+		pos = weston_pointer_motion_to_abs(pointer, event);
+		old_sx = pointer->sx;
+		old_sy = pointer->sy;
+		weston_view_update_transform(pointer->focus);
+
+		surf_pos = weston_coord_global_to_surface(pointer->focus, pos);
+		pointer->sx = wl_fixed_from_double(surf_pos.c.x);
+		pointer->sy = wl_fixed_from_double(surf_pos.c.y);
 	}
 
 	weston_pointer_move(pointer, event);
 
-	if (old_sx != pointer->sx || old_sy != pointer->sy) {
+	if (pointer->focus && old_focus == pointer->focus &&
+	    (old_sx != pointer->sx || old_sy != pointer->sy)) {
 		pointer_send_motion(pointer, time,
 				    pointer->sx, pointer->sy);
 	}
@@ -623,17 +653,15 @@ default_grab_pointer_button(struct weston_pointer_grab *grab,
 	struct weston_pointer *pointer = grab->pointer;
 	struct weston_compositor *compositor = pointer->seat->compositor;
 	struct weston_view *view;
-	wl_fixed_t sx, sy;
 
 	weston_pointer_send_button(pointer, time, button, state);
 
 	if (pointer->button_count == 0 &&
 	    state == WL_POINTER_BUTTON_STATE_RELEASED) {
 		view = weston_compositor_pick_view(compositor,
-						   pointer->x, pointer->y,
-						   &sx, &sy);
+						   pointer->pos);
 
-		weston_pointer_set_focus(pointer, view, sx, sy);
+		weston_pointer_set_focus(pointer, view);
 	}
 }
 
@@ -804,8 +832,7 @@ weston_touch_has_focus_resource(struct weston_touch *touch)
  * \param touch The touch where the down events originates from.
  * \param time The timestamp of the event
  * \param touch_id The touch_id value of the event
- * \param x The x value of the event
- * \param y The y value of the event
+ * \param pos The global coordinate of the event
  *
  * For every resource that is currently in focus, send a wl_touch.down event
  * with the passed parameters. The focused resources are the wl_touch
@@ -813,19 +840,21 @@ weston_touch_has_focus_resource(struct weston_touch *touch)
  */
 WL_EXPORT void
 weston_touch_send_down(struct weston_touch *touch, const struct timespec *time,
-		       int touch_id, wl_fixed_t x, wl_fixed_t y)
+		       int touch_id, struct weston_coord_global pos)
 {
 	struct wl_display *display = touch->seat->compositor->wl_display;
 	uint32_t serial;
 	struct wl_resource *resource;
 	struct wl_list *resource_list;
-	wl_fixed_t sx, sy;
+	struct weston_coord_surface surf_pos;
 	uint32_t msecs;
 
 	if (!weston_touch_has_focus_resource(touch))
 		return;
 
-	weston_view_from_global_fixed(touch->focus, x, y, &sx, &sy);
+	weston_view_update_transform(touch->focus);
+
+	surf_pos = weston_coord_global_to_surface(touch->focus, pos);
 
 	resource_list = &touch->focus_resource_list;
 	serial = wl_display_next_serial(display);
@@ -836,16 +865,18 @@ weston_touch_send_down(struct weston_touch *touch, const struct timespec *time,
 						   time);
 		wl_touch_send_down(resource, serial, msecs,
 				   touch->focus->surface->resource,
-				   touch_id, sx, sy);
+				   touch_id,
+				   wl_fixed_from_double(surf_pos.c.x),
+				   wl_fixed_from_double(surf_pos.c.y));
 	}
 }
 
 static void
 default_grab_touch_down(struct weston_touch_grab *grab,
 			const struct timespec *time, int touch_id,
-			wl_fixed_t x, wl_fixed_t y)
+			struct weston_coord_global pos)
 {
-	weston_touch_send_down(grab->touch, time, touch_id, x, y);
+	weston_touch_send_down(grab->touch, time, touch_id, pos);
 }
 
 /** Send wl_touch.up events to focused resources.
@@ -894,8 +925,7 @@ default_grab_touch_up(struct weston_touch_grab *grab,
  * \param touch The touch where the motion events originates from.
  * \param time The timestamp of the event
  * \param touch_id The touch_id value of the event
- * \param x The x value of the event
- * \param y The y value of the event
+ * \param pos The global coordinate of the event
  *
  * For every resource that is currently in focus, send a wl_touch.motion event
  * with the passed parameters. The focused resources are the wl_touch
@@ -904,17 +934,19 @@ default_grab_touch_up(struct weston_touch_grab *grab,
 WL_EXPORT void
 weston_touch_send_motion(struct weston_touch *touch,
 			 const struct timespec *time, int touch_id,
-			 wl_fixed_t x, wl_fixed_t y)
+			 struct weston_coord_global pos)
 {
 	struct wl_resource *resource;
 	struct wl_list *resource_list;
-	wl_fixed_t sx, sy;
 	uint32_t msecs;
+	struct weston_coord_surface surf_pos;
 
 	if (!weston_touch_has_focus_resource(touch))
 		return;
 
-	weston_view_from_global_fixed(touch->focus, x, y, &sx, &sy);
+	weston_view_update_transform(touch->focus);
+
+	surf_pos = weston_coord_global_to_surface(touch->focus, pos);
 
 	resource_list = &touch->focus_resource_list;
 	msecs = timespec_to_msec(time);
@@ -922,17 +954,18 @@ weston_touch_send_motion(struct weston_touch *touch,
 		send_timestamps_for_input_resource(resource,
 						   &touch->timestamps_list,
 						   time);
-		wl_touch_send_motion(resource, msecs,
-				     touch_id, sx, sy);
+		wl_touch_send_motion(resource, msecs, touch_id,
+				     wl_fixed_from_double(surf_pos.c.x),
+				     wl_fixed_from_double(surf_pos.c.y));
 	}
 }
 
 static void
 default_grab_touch_motion(struct weston_touch_grab *grab,
 			  const struct timespec *time, int touch_id,
-			  wl_fixed_t x, wl_fixed_t y)
+			  struct weston_coord_global pos)
 {
-	weston_touch_send_motion(grab->touch, time, touch_id, x, y);
+	weston_touch_send_motion(grab->touch, time, touch_id, pos);
 }
 
 
@@ -1102,6 +1135,16 @@ find_resource_for_surface(struct wl_list *list, struct weston_surface *surface)
 	return wl_resource_find_for_client(list, wl_resource_get_client(surface->resource));
 }
 
+static struct wl_resource *
+find_resource_for_view(struct wl_list *list, struct weston_view *view)
+{
+	if (!view)
+		return NULL;
+
+	return find_resource_for_surface(list,
+					 view->surface);
+}
+
 /** Send wl_keyboard.modifiers events to focused resources and pointer
  *  focused resources.
  *
@@ -1233,16 +1276,12 @@ weston_pointer_create(struct weston_seat *seat)
 	pointer->sprite_destroy_listener.notify = pointer_handle_sprite_destroy;
 
 	/* FIXME: Pick better co-ords. */
-	pointer->x = wl_fixed_from_int(100);
-	pointer->y = wl_fixed_from_int(100);
+	pointer->pos.c = weston_coord(100, 100);
 
 	pointer->output_destroy_listener.notify =
 		weston_pointer_handle_output_destroy;
 	wl_signal_add(&seat->compositor->output_destroyed_signal,
 		      &pointer->output_destroy_listener);
-
-	pointer->sx = wl_fixed_from_int(-1000000);
-	pointer->sy = wl_fixed_from_int(-1000000);
 
 	return pointer;
 }
@@ -1388,6 +1427,444 @@ weston_touch_destroy(struct weston_touch *touch)
 	free(touch);
 }
 
+WL_EXPORT struct weston_tablet *
+weston_tablet_create(void)
+{
+	struct weston_tablet *tablet;
+
+	tablet = zalloc(sizeof *tablet);
+	if (tablet == NULL)
+		return NULL;
+
+	wl_list_init(&tablet->resource_list);
+	wl_list_init(&tablet->tool_list);
+
+	return tablet;
+}
+
+WL_EXPORT void
+weston_tablet_destroy(struct weston_tablet *tablet)
+{
+	struct wl_resource *resource;
+	struct weston_tablet_tool *tool, *tmptool;
+
+	wl_resource_for_each(resource, &tablet->resource_list) {
+		zwp_tablet_v2_send_removed(resource);
+		wl_resource_set_user_data(resource, NULL);
+	}
+
+	/* Remove the tablet from the list */
+	wl_list_remove(&tablet->link);
+
+	/* Remove any local tools */
+	wl_list_for_each_safe(tool, tmptool, &tablet->tool_list, link)
+		weston_seat_release_tablet_tool(tool);
+
+	if (wl_list_empty(&tablet->resource_list)) {
+		free(tablet->name);
+		free(tablet);
+	}
+}
+
+WL_EXPORT void
+weston_tablet_tool_set_focus(struct weston_tablet_tool *tool,
+			     struct weston_view *view,
+			     const struct timespec *time)
+{
+	struct wl_list *focus_resource_list;
+	struct wl_resource *resource;
+	struct weston_seat *seat = tool->seat;
+	uint32_t msecs;
+
+	focus_resource_list = &tool->focus_resource_list;
+	/* FIXME: correct timestamp? */
+	msecs = time ? timespec_to_msec(time) : 0;
+	if (tool->focus && !wl_list_empty(focus_resource_list)) {
+		wl_resource_for_each(resource, focus_resource_list) {
+			if (tool->tip_is_down)
+				zwp_tablet_tool_v2_send_up(resource);
+
+			zwp_tablet_tool_v2_send_proximity_out(resource);
+			zwp_tablet_tool_v2_send_frame(resource, msecs);
+		}
+
+		move_resources(&tool->resource_list, focus_resource_list);
+	}
+
+	if (find_resource_for_view(&tool->resource_list, view)) {
+		struct wl_client *surface_client =
+			wl_resource_get_client(view->surface->resource);
+
+		move_resources_for_client(focus_resource_list,
+					  &tool->resource_list,
+					  surface_client);
+
+		tool->focus_serial = wl_display_next_serial(seat->compositor->wl_display);
+		wl_resource_for_each(resource, focus_resource_list) {
+			struct wl_resource *tr;
+
+			tr = wl_resource_find_for_client(&tool->current_tablet->resource_list,
+							 surface_client);
+
+			zwp_tablet_tool_v2_send_proximity_in(resource, tool->focus_serial,
+							   tr, view->surface->resource);
+
+			if (tool->tip_is_down)
+				zwp_tablet_tool_v2_send_down(resource,
+							   tool->focus_serial);
+
+			zwp_tablet_tool_v2_send_frame(resource, msecs);
+		}
+	}
+
+	wl_list_remove(&tool->focus_view_listener.link);
+	wl_list_init(&tool->focus_view_listener.link);
+	wl_list_remove(&tool->focus_resource_listener.link);
+	wl_list_init(&tool->focus_resource_listener.link);
+
+	if (view)
+		wl_signal_add(&view->destroy_signal,
+			      &tool->focus_view_listener);
+	if (view && view->surface->resource)
+		wl_resource_add_destroy_listener(view->surface->resource,
+						 &tool->focus_resource_listener);
+	tool->focus = view;
+	tool->focus_view_listener.notify = tablet_tool_focus_view_destroyed;
+
+	wl_signal_emit(&tool->focus_signal, tool);
+}
+
+WL_EXPORT void
+weston_tablet_tool_start_grab(struct weston_tablet_tool *tool,
+			      struct weston_tablet_tool_grab *grab)
+{
+	tool->grab = grab;
+	grab->tool = tool;
+}
+
+WL_EXPORT void
+weston_tablet_tool_end_grab(struct weston_tablet_tool *tool)
+{
+	tool->grab = &tool->default_grab;
+}
+
+static void
+default_grab_tablet_tool_proximity_in(struct weston_tablet_tool_grab *grab,
+				      const struct timespec *time,
+				      struct weston_tablet *tablet)
+{
+}
+
+WL_EXPORT void
+weston_tablet_tool_send_proximity_out(struct weston_tablet_tool *tool,
+				      const struct timespec *time)
+{
+	weston_tablet_tool_set_focus(tool, NULL, time);
+
+	/* Hide the cursor */
+	if (tool->sprite && weston_surface_is_mapped(tool->sprite->surface))
+		weston_surface_unmap(tool->sprite->surface);
+}
+
+static void
+default_grab_tablet_tool_proximity_out(struct weston_tablet_tool_grab *grab,
+				       const struct timespec *time)
+{
+	weston_tablet_tool_send_proximity_out(grab->tool, time);
+}
+
+WL_EXPORT void
+weston_tablet_tool_send_motion(struct weston_tablet_tool *tool,
+			       const struct timespec *time,
+			       struct weston_coord_global pos)
+{
+	struct weston_view *current_view;
+	struct wl_resource *resource;
+	struct weston_coord_surface surf_pos;
+
+	current_view = weston_compositor_pick_view(tool->seat->compositor, pos);
+	if (current_view != tool->focus)
+		weston_tablet_tool_set_focus(tool, current_view, time);
+	weston_tablet_tool_cursor_move(tool, pos);
+	surf_pos = weston_coord_global_to_surface(tool->focus, pos);
+
+	wl_resource_for_each(resource, &tool->focus_resource_list) {
+		zwp_tablet_tool_v2_send_motion(resource,
+					       wl_fixed_from_double(surf_pos.c.x),
+					       wl_fixed_from_double(surf_pos.c.y));
+	}
+}
+
+static void
+default_grab_tablet_tool_motion(struct weston_tablet_tool_grab *grab,
+				const struct timespec *time,
+				struct weston_coord_global pos)
+{
+	weston_tablet_tool_send_motion(grab->tool, time, pos);
+}
+
+WL_EXPORT void
+weston_tablet_tool_send_down(struct weston_tablet_tool *tool,
+			     const struct timespec *time)
+{
+	struct wl_resource *resource;
+	struct wl_list *resource_list = &tool->focus_resource_list;
+
+	if (!wl_list_empty(resource_list)) {
+		wl_resource_for_each(resource, resource_list)
+			zwp_tablet_tool_v2_send_down(resource, tool->grab_serial);
+	}
+}
+
+static void
+default_grab_tablet_tool_down(struct weston_tablet_tool_grab *grab,
+			      const struct timespec *time)
+{
+	weston_tablet_tool_send_down(grab->tool, time);
+}
+
+WL_EXPORT void
+weston_tablet_tool_send_up(struct weston_tablet_tool *tool,
+			    const struct timespec *time)
+{
+	struct wl_resource *resource;
+	struct wl_list *resource_list = &tool->focus_resource_list;
+
+	if (!wl_list_empty(resource_list)) {
+		wl_resource_for_each(resource, resource_list)
+			zwp_tablet_tool_v2_send_up(resource);
+	}
+}
+
+static void
+default_grab_tablet_tool_up(struct weston_tablet_tool_grab *grab,
+			      const struct timespec *time)
+{
+	weston_tablet_tool_send_up(grab->tool, time);
+}
+
+WL_EXPORT void
+weston_tablet_tool_send_pressure(struct weston_tablet_tool *tool,
+				  const struct timespec *time,
+				  uint32_t pressure)
+{
+	struct wl_resource *resource;
+	struct wl_list *resource_list = &tool->focus_resource_list;
+
+	if (!wl_list_empty(resource_list)) {
+		wl_resource_for_each(resource, resource_list)
+			zwp_tablet_tool_v2_send_pressure(resource, pressure);
+	}
+}
+
+static void
+default_grab_tablet_tool_pressure(struct weston_tablet_tool_grab *grab,
+				  const struct timespec *time,
+				  uint32_t pressure)
+{
+	weston_tablet_tool_send_pressure(grab->tool, time, pressure);
+}
+
+WL_EXPORT void
+weston_tablet_tool_send_distance(struct weston_tablet_tool *tool,
+				  const struct timespec *time,
+				  uint32_t distance)
+{
+	struct wl_resource *resource;
+	struct wl_list *resource_list = &tool->focus_resource_list;
+
+	if (!wl_list_empty(resource_list)) {
+		wl_resource_for_each(resource, resource_list)
+			zwp_tablet_tool_v2_send_distance(resource, distance);
+	}
+}
+
+static void
+default_grab_tablet_tool_distance(struct weston_tablet_tool_grab *grab,
+				  const struct timespec *time,
+				  uint32_t distance)
+{
+	weston_tablet_tool_send_distance(grab->tool, time, distance);
+}
+
+WL_EXPORT void
+weston_tablet_tool_send_tilt(struct weston_tablet_tool *tool,
+			      const struct timespec *time,
+			      wl_fixed_t tilt_x, wl_fixed_t tilt_y)
+{
+	struct wl_resource *resource;
+	struct wl_list *resource_list = &tool->focus_resource_list;
+
+	if (!wl_list_empty(resource_list)) {
+		wl_resource_for_each(resource, resource_list)
+			zwp_tablet_tool_v2_send_tilt(resource, tilt_x, tilt_y);
+	}
+}
+
+static void
+default_grab_tablet_tool_tilt(struct weston_tablet_tool_grab *grab,
+			      const struct timespec *time,
+			      wl_fixed_t tilt_x, wl_fixed_t tilt_y)
+{
+	weston_tablet_tool_send_tilt(grab->tool, time, tilt_x, tilt_y);
+}
+
+WL_EXPORT void
+weston_tablet_tool_send_button(struct weston_tablet_tool *tool,
+				const struct timespec *time,
+				uint32_t button, uint32_t state)
+{
+	struct wl_resource *resource;
+
+	wl_resource_for_each(resource, &tool->focus_resource_list) {
+		zwp_tablet_tool_v2_send_button(resource, tool->grab_serial,
+					   button, state);
+	}
+}
+
+static void
+default_grab_tablet_tool_button(struct weston_tablet_tool_grab *grab,
+				const struct timespec *time,
+				uint32_t button,
+				enum zwp_tablet_tool_v2_button_state state)
+{
+	weston_tablet_tool_send_button(grab->tool, time, button, state);
+}
+
+WL_EXPORT void
+weston_tablet_tool_send_frame(struct weston_tablet_tool *tool,
+			       const struct timespec *time)
+{
+	struct wl_resource *resource;
+	struct wl_list *resource_list = &tool->focus_resource_list;
+	uint32_t msecs;
+
+	msecs = timespec_to_msec(time);
+	if (!wl_list_empty(resource_list)) {
+		wl_resource_for_each(resource, resource_list)
+			zwp_tablet_tool_v2_send_frame(resource, msecs);
+	}
+}
+
+static void
+default_grab_tablet_tool_frame(struct weston_tablet_tool_grab *grab,
+			       const struct timespec *time)
+{
+	weston_tablet_tool_send_frame(grab->tool, time);
+}
+
+static void
+default_grab_tablet_tool_cancel(struct weston_tablet_tool_grab *grab)
+{
+}
+
+static struct weston_tablet_tool_grab_interface default_tablet_tool_grab_interface = {
+	default_grab_tablet_tool_proximity_in,
+	default_grab_tablet_tool_proximity_out,
+	default_grab_tablet_tool_motion,
+	default_grab_tablet_tool_down,
+	default_grab_tablet_tool_up,
+	default_grab_tablet_tool_pressure,
+	default_grab_tablet_tool_distance,
+	default_grab_tablet_tool_tilt,
+	default_grab_tablet_tool_button,
+	default_grab_tablet_tool_frame,
+	default_grab_tablet_tool_cancel,
+};
+
+static void
+tablet_tool_unmap_sprite(struct weston_tablet_tool *tool)
+{
+	if (weston_surface_is_mapped(tool->sprite->surface))
+		weston_surface_unmap(tool->sprite->surface);
+
+	wl_list_remove(&tool->sprite_destroy_listener.link);
+	tool->sprite->surface->committed = NULL;
+	tool->sprite->surface->committed_private = NULL;
+	weston_view_destroy(tool->sprite);
+	tool->sprite = NULL;
+}
+
+static void
+tablet_tool_handle_sprite_destroy(struct wl_listener *listener, void *data)
+{
+	struct weston_tablet_tool *tool =
+		container_of(listener, struct weston_tablet_tool,
+			     sprite_destroy_listener);
+
+	tool->sprite = NULL;
+}
+
+WL_EXPORT struct weston_tablet_tool *
+weston_tablet_tool_create(void)
+{
+	struct weston_tablet_tool *tool;
+
+	tool = zalloc(sizeof *tool);
+	if (tool == NULL)
+		return NULL;
+
+	wl_list_init(&tool->resource_list);
+	wl_list_init(&tool->focus_resource_list);
+
+	wl_list_init(&tool->sprite_destroy_listener.link);
+	tool->sprite_destroy_listener.notify = tablet_tool_handle_sprite_destroy;
+
+	wl_list_init(&tool->focus_view_listener.link);
+	tool->focus_view_listener.notify = tablet_tool_focus_view_destroyed;
+
+	wl_list_init(&tool->focus_resource_listener.link);
+	tool->focus_resource_listener.notify = tablet_tool_focus_resource_destroyed;
+
+	tool->default_grab.interface = &default_tablet_tool_grab_interface;
+	tool->default_grab.tool = tool;
+	tool->grab = &tool->default_grab;
+
+	wl_signal_init(&tool->focus_signal);
+	wl_signal_init(&tool->removed_signal);
+
+	return tool;
+}
+
+WL_EXPORT void
+weston_tablet_tool_destroy(struct weston_tablet_tool *tool)
+{
+	struct wl_resource *resource, *tmp;
+
+	if (tool->sprite)
+		tablet_tool_unmap_sprite(tool);
+
+	wl_resource_for_each_safe(resource, tmp, &tool->resource_list) {
+		zwp_tablet_tool_v2_send_removed(resource);
+		wl_resource_set_user_data(resource, NULL);
+	}
+	wl_resource_for_each(resource, &tool->focus_resource_list) {
+		wl_resource_set_user_data(resource, NULL);
+	}
+
+	wl_list_remove(&tool->link);
+	wl_list_remove(&tool->resource_list);
+	wl_list_remove(&tool->focus_resource_list);
+	wl_list_remove(&tool->focus_view_listener.link);
+	wl_list_remove(&tool->focus_resource_listener.link);
+	free(tool);
+}
+
+WL_EXPORT void
+weston_tablet_tool_cursor_move(struct weston_tablet_tool *tool,
+			       struct weston_coord_global pos)
+{
+	tool->pos = pos;
+
+	if (tool->sprite) {
+		struct weston_coord_surface hotspot_inv;
+
+		hotspot_inv = weston_coord_surface_invert(tool->hotspot);
+		weston_view_set_position_with_offset(tool->sprite,
+						     pos, hotspot_inv);
+	}
+}
+
 static void
 seat_send_updated_caps(struct weston_seat *seat)
 {
@@ -1415,22 +1892,18 @@ seat_send_updated_caps(struct weston_seat *seat)
  * This can be used to unset pointer focus and set the co-ordinates to the
  * arbitrary values we use for the no focus case.
  *
- * There's no requirement to use this function.  For example, passing the
- * results of a weston_compositor_pick_view() directly to
- * weston_pointer_set_focus() will do the right thing when no view is found.
+ * There's no requirement to use this function. Passing NULL directly to
+ * weston_pointer_set_focus() will do the right thing.
  */
 WL_EXPORT void
 weston_pointer_clear_focus(struct weston_pointer *pointer)
 {
-	weston_pointer_set_focus(pointer, NULL,
-				 wl_fixed_from_int(-1000000),
-				 wl_fixed_from_int(-1000000));
+	weston_pointer_set_focus(pointer, NULL);
 }
 
 WL_EXPORT void
 weston_pointer_set_focus(struct weston_pointer *pointer,
-			 struct weston_view *view,
-			 wl_fixed_t sx, wl_fixed_t sy)
+			 struct weston_view *view)
 {
 	struct weston_pointer_client *pointer_client;
 	struct weston_keyboard *kbd = weston_seat_get_keyboard(pointer->seat);
@@ -1440,11 +1913,24 @@ weston_pointer_set_focus(struct weston_pointer *pointer,
 	uint32_t serial;
 	struct wl_list *focus_resource_list;
 	int refocus = 0;
+	wl_fixed_t sx, sy;
+
+	if (view) {
+		struct weston_coord_surface surf_pos;
+
+		surf_pos = weston_coord_global_to_surface(view, pointer->pos);
+		sx = wl_fixed_from_double(surf_pos.c.x);
+		sy = wl_fixed_from_double(surf_pos.c.y);
+
+		if (!weston_view_takes_input_at_point(view, surf_pos))
+			weston_log("View focused with external coordinate %d, %d\n",
+				   (int)surf_pos.c.x, (int)surf_pos.c.y);
+	}
 
 	if ((!pointer->focus && view) ||
 	    (pointer->focus && !view) ||
 	    (pointer->focus && pointer->focus->surface != view->surface) ||
-	    pointer->sx != sx || pointer->sy != sy)
+	    (view && (pointer->sx != sx || pointer->sy != sy)))
 		refocus = 1;
 
 	if (pointer->focus_client && refocus) {
@@ -1500,11 +1986,10 @@ weston_pointer_set_focus(struct weston_pointer *pointer,
 
 	pointer->focus = view;
 	pointer->focus_view_listener.notify = pointer_focus_view_destroyed;
-	pointer->sx = sx;
-	pointer->sy = sy;
-
-	assert(view || sx == wl_fixed_from_int(-1000000));
-	assert(view || sy == wl_fixed_from_int(-1000000));
+	if (view) {
+		pointer->sx = sx;
+		pointer->sy = sy;
+	}
 
 	wl_signal_emit(&pointer->focus_signal, pointer);
 }
@@ -1651,48 +2136,27 @@ weston_touch_cancel_grab(struct weston_touch *touch)
 	touch->grab->interface->cancel(touch->grab);
 }
 
-static void
+static struct weston_coord_global
 weston_pointer_clamp_for_output(struct weston_pointer *pointer,
 				struct weston_output *output,
-				wl_fixed_t *fx, wl_fixed_t *fy)
+				struct weston_coord_global pos)
 {
-	int x, y;
-
-	x = wl_fixed_to_int(*fx);
-	y = wl_fixed_to_int(*fy);
-
-	if (x < output->x)
-		*fx = wl_fixed_from_int(output->x);
-	else if (x >= output->x + output->width)
-		*fx = wl_fixed_from_int(output->x +
-					output->width - 1);
-	if (y < output->y)
-		*fy = wl_fixed_from_int(output->y);
-	else if (y >= output->y + output->height)
-		*fy = wl_fixed_from_int(output->y +
-					output->height - 1);
+	return weston_coord_global_clamp_for_output(pos, output);
 }
 
-WL_EXPORT void
-weston_pointer_clamp(struct weston_pointer *pointer, wl_fixed_t *fx, wl_fixed_t *fy)
+WL_EXPORT struct weston_coord_global
+weston_pointer_clamp(struct weston_pointer *pointer, struct weston_coord_global pos)
 {
 	struct weston_compositor *ec = pointer->seat->compositor;
 	struct weston_output *output, *prev = NULL;
-	int x, y, old_x, old_y, valid = 0;
-
-	x = wl_fixed_to_int(*fx);
-	y = wl_fixed_to_int(*fy);
-	old_x = wl_fixed_to_int(pointer->x);
-	old_y = wl_fixed_to_int(pointer->y);
+	int valid = 0;
 
 	wl_list_for_each(output, &ec->output_list, link) {
 		if (pointer->seat->output && pointer->seat->output != output)
 			continue;
-		if (pixman_region32_contains_point(&output->region,
-						   x, y, NULL))
+		if (weston_output_contains_coord(output, pos))
 			valid = 1;
-		if (pixman_region32_contains_point(&output->region,
-						   old_x, old_y, NULL))
+		if (weston_output_contains_coord(output, pointer->pos))
 			prev = output;
 	}
 
@@ -1700,28 +2164,25 @@ weston_pointer_clamp(struct weston_pointer *pointer, wl_fixed_t *fx, wl_fixed_t 
 		prev = pointer->seat->output;
 
 	if (prev && !valid)
-		weston_pointer_clamp_for_output(pointer, prev, fx, fy);
+		pos = weston_pointer_clamp_for_output(pointer, prev, pos);
+
+	return pos;
 }
 
 static void
 weston_pointer_move_to(struct weston_pointer *pointer,
-		       wl_fixed_t x, wl_fixed_t y)
+		       struct weston_coord_global pos)
 {
-	int32_t ix, iy;
+	pos = weston_pointer_clamp(pointer, pos);
 
-	weston_pointer_clamp (pointer, &x, &y);
-
-	pointer->x = x;
-	pointer->y = y;
-
-	ix = wl_fixed_to_int(x);
-	iy = wl_fixed_to_int(y);
+	pointer->pos = pos;
 
 	if (pointer->sprite) {
-		weston_view_set_position(pointer->sprite,
-					 ix - pointer->hotspot_x,
-					 iy - pointer->hotspot_y);
-		weston_view_schedule_repaint(pointer->sprite);
+		struct weston_coord_surface hotspot_inv;
+
+		hotspot_inv = weston_coord_surface_invert(pointer->hotspot);
+		weston_view_set_position_with_offset(pointer->sprite,
+						     pos, hotspot_inv);
 	}
 
 	pointer->grab->interface->focus(pointer->grab);
@@ -1732,10 +2193,10 @@ WL_EXPORT void
 weston_pointer_move(struct weston_pointer *pointer,
 		    struct weston_pointer_motion_event *event)
 {
-	wl_fixed_t x, y;
+	struct weston_coord_global pos;
 
-	weston_pointer_motion_to_abs(pointer, event, &x, &y);
-	weston_pointer_move_to(pointer, x, y);
+	pos = weston_pointer_motion_to_abs(pointer, event);
+	weston_pointer_move_to(pointer, pos);
 }
 
 /** Verify if the pointer is in a valid position and move it if it isn't.
@@ -1747,24 +2208,27 @@ weston_pointer_handle_output_destroy(struct wl_listener *listener, void *data)
 	struct weston_compositor *ec;
 	struct weston_output *output, *closest = NULL;
 	int x, y, distance, min = INT_MAX;
-	wl_fixed_t fx, fy;
+	struct weston_coord_global pos;
 
 	pointer = container_of(listener, struct weston_pointer,
 			       output_destroy_listener);
 	ec = pointer->seat->compositor;
 
-	x = wl_fixed_to_int(pointer->x);
-	y = wl_fixed_to_int(pointer->y);
+	x = pointer->pos.c.x;
+	y = pointer->pos.c.y;
 
 	wl_list_for_each(output, &ec->output_list, link) {
-		if (pixman_region32_contains_point(&output->region,
-						   x, y, NULL))
+		int ox, oy;
+
+		if (weston_output_contains_coord(output, pointer->pos))
 			return;
 
+		ox = output->pos.c.x;
+		oy = output->pos.c.y;
 		/* Aproximante the distance from the pointer to the center of
 		 * the output. */
-		distance = abs(output->x + output->width / 2 - x) +
-			   abs(output->y + output->height / 2 - y);
+		distance = abs(ox + output->width / 2 - x) +
+			   abs(oy + output->height / 2 - y);
 		if (distance < min) {
 			min = distance;
 			closest = output;
@@ -1775,11 +2239,8 @@ weston_pointer_handle_output_destroy(struct wl_listener *listener, void *data)
 	if (!closest)
 		return;
 
-	fx = pointer->x;
-	fy = pointer->y;
-
-	weston_pointer_clamp_for_output(pointer, closest, &fx, &fy);
-	weston_pointer_move_to(pointer, fx, fy);
+	pos = weston_pointer_clamp_for_output(pointer, closest, pointer->pos);
+	weston_pointer_move_to(pointer, pos);
 }
 
 WL_EXPORT void
@@ -1832,7 +2293,7 @@ run_modifier_bindings(struct weston_seat *seat, uint32_t old, uint32_t new)
 
 WL_EXPORT void
 notify_motion_absolute(struct weston_seat *seat, const struct timespec *time,
-		       double x, double y)
+		       struct weston_coord_global pos)
 {
 	struct weston_compositor *ec = seat->compositor;
 	struct weston_pointer *pointer = weston_seat_get_pointer(seat);
@@ -1842,10 +2303,8 @@ notify_motion_absolute(struct weston_seat *seat, const struct timespec *time,
 
 	event = (struct weston_pointer_motion_event) {
 		.mask = WESTON_POINTER_MOTION_ABS,
-		.x = x,
-		.y = y,
+		.abs = pos,
 	};
-
 	pointer->grab->interface->motion(pointer->grab, time, &event);
 }
 
@@ -1869,6 +2328,7 @@ weston_view_activate_input(struct weston_view *view,
 		     uint32_t flags)
 {
 	struct weston_compositor *compositor = seat->compositor;
+	struct weston_surface_activation_data activation_data;
 
 	if (flags & WESTON_ACTIVATE_FLAG_CLICKED) {
 		view->click_to_activate_serial =
@@ -1876,6 +2336,15 @@ weston_view_activate_input(struct weston_view *view,
 	}
 
 	weston_seat_set_keyboard_focus(seat, view->surface);
+
+	inc_activate_serial(compositor);
+
+	activation_data = (struct weston_surface_activation_data) {
+		.view = view,
+		.seat = seat,
+		.flags = flags
+	};
+	wl_signal_emit(&compositor->activate_signal, &activation_data);
 }
 
 WL_EXPORT void
@@ -1890,8 +2359,7 @@ notify_button(struct weston_seat *seat, const struct timespec *time,
 		if (pointer->button_count == 0) {
 			pointer->grab_button = button;
 			pointer->grab_time = *time;
-			pointer->grab_x = pointer->x;
-			pointer->grab_y = pointer->y;
+			pointer->grab_pos = pointer->pos;
 		}
 		pointer->button_count++;
 	} else {
@@ -2197,12 +2665,6 @@ notify_key(struct weston_seat *seat, const struct timespec *time, uint32_t key,
 	struct weston_keyboard_grab *grab = keyboard->grab;
 	uint32_t *k, *end;
 
-	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-		weston_compositor_idle_inhibit(compositor);
-	} else {
-		weston_compositor_idle_release(compositor);
-	}
-
 	end = keyboard->keys.data + keyboard->keys.size;
 	for (k = keyboard->keys.data; k < end; k++) {
 		if (*k == key) {
@@ -2216,6 +2678,12 @@ notify_key(struct weston_seat *seat, const struct timespec *time, uint32_t key,
 	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		k = wl_array_add(&keyboard->keys, sizeof *k);
 		*k = key;
+	}
+
+	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+		weston_compositor_idle_inhibit(compositor);
+	} else {
+		weston_compositor_idle_release(compositor);
 	}
 
 	if (grab == &keyboard->default_grab ||
@@ -2246,19 +2714,21 @@ notify_key(struct weston_seat *seat, const struct timespec *time, uint32_t key,
 }
 
 WL_EXPORT void
+clear_pointer_focus(struct weston_seat *seat)
+{
+	/* FIXME: We should call weston_pointer_set_focus(seat, NULL) here,
+	 * but somehow that breaks re-entry... */
+}
+
+WL_EXPORT void
 notify_pointer_focus(struct weston_seat *seat, struct weston_output *output,
-		     double x, double y)
+		     struct weston_coord_global pos)
 {
 	struct weston_pointer *pointer = weston_seat_get_pointer(seat);
 
-	if (output) {
-		weston_pointer_move_to(pointer,
-				       wl_fixed_from_double(x),
-				       wl_fixed_from_double(y));
-	} else {
-		/* FIXME: We should call weston_pointer_set_focus(seat,
-		 * NULL) here, but somehow that breaks re-entry... */
-	}
+	assert(output);
+
+	weston_pointer_move_to(pointer, pos);
 }
 
 static void
@@ -2329,6 +2799,7 @@ notify_keyboard_focus_out(struct weston_seat *seat)
 	if (focus) {
 		seat->use_saved_kbd_focus = true;
 		seat->saved_kbd_focus = focus;
+		assert(seat->saved_kbd_focus_listener.notify == NULL);
 		seat->saved_kbd_focus_listener.notify =
 			destroy_device_saved_kbd_focus;
 		wl_signal_add(&focus->destroy_signal,
@@ -2381,21 +2852,19 @@ weston_touch_set_focus(struct weston_touch *touch, struct weston_view *view)
 static void
 process_touch_normal(struct weston_touch_device *device,
 		     const struct timespec *time, int touch_id,
-		     double double_x, double double_y, int touch_type)
+		     const struct weston_coord_global *pos, int touch_type)
 {
 	struct weston_touch *touch = device->aggregate;
 	struct weston_touch_grab *grab = device->aggregate->grab;
 	struct weston_compositor *ec = device->aggregate->seat->compositor;
 	struct weston_view *ev;
-	wl_fixed_t sx, sy;
-	wl_fixed_t x = wl_fixed_from_double(double_x);
-	wl_fixed_t y = wl_fixed_from_double(double_y);
+
+	if (touch_type != WL_TOUCH_UP)
+		assert(pos);
 
 	/* Update grab's global coordinates. */
-	if (touch_id == touch->grab_touch_id && touch_type != WL_TOUCH_UP) {
-		touch->grab_x = x;
-		touch->grab_y = y;
-	}
+	if (touch_id == touch->grab_touch_id && touch_type != WL_TOUCH_UP)
+		touch->grab_pos = *pos;
 
 	switch (touch_type) {
 	case WL_TOUCH_DOWN:
@@ -2403,7 +2872,7 @@ process_touch_normal(struct weston_touch_device *device,
 		 * to that view for the remainder of the touch session i.e.
 		 * until all touch points are up again. */
 		if (touch->num_tp == 1) {
-			ev = weston_compositor_pick_view(ec, x, y, &sx, &sy);
+			ev = weston_compositor_pick_view(ec, *pos);
 			weston_touch_set_focus(touch, ev);
 		} else if (!touch->focus) {
 			/* Unexpected condition: We have non-initial touch but
@@ -2417,14 +2886,13 @@ process_touch_normal(struct weston_touch_device *device,
 		weston_compositor_run_touch_binding(ec, touch,
 						    time, touch_type);
 
-		grab->interface->down(grab, time, touch_id, x, y);
+		grab->interface->down(grab, time, touch_id, *pos);
 		if (touch->num_tp == 1) {
 			touch->grab_serial =
 				wl_display_get_serial(ec->wl_display);
 			touch->grab_touch_id = touch_id;
 			touch->grab_time = *time;
-			touch->grab_x = x;
-			touch->grab_y = y;
+			touch->grab_pos = *pos;
 		}
 
 		break;
@@ -2433,12 +2901,11 @@ process_touch_normal(struct weston_touch_device *device,
 		if (!ev)
 			break;
 
-		grab->interface->motion(grab, time, touch_id, x, y);
+		grab->interface->motion(grab, time, touch_id, *pos);
 		break;
 	case WL_TOUCH_UP:
 		grab->interface->up(grab, time, touch_id);
-		if (touch->num_tp == 0)
-			weston_touch_set_focus(touch, NULL);
+		touch->pending_focus_reset = true;
 		break;
 	}
 }
@@ -2551,8 +3018,7 @@ weston_compositor_set_touch_mode_calib(struct weston_compositor *compositor)
  * \param device The physical device that generated the event.
  * \param time The event timestamp.
  * \param touch_id ID for the touch point of this event (multi-touch).
- * \param x X coordinate in compositor global space.
- * \param y Y coordinate in compositor global space.
+ * \param pos X,Y coordinate in compositor global space, or NULL for WL_TOUCH_UP.
  * \param norm Normalized device X, Y coordinates in calibration space, or NULL.
  * \param touch_type Either WL_TOUCH_DOWN, WL_TOUCH_UP, or WL_TOUCH_MOTION.
  *
@@ -2570,7 +3036,7 @@ WL_EXPORT void
 notify_touch_normalized(struct weston_touch_device *device,
 			const struct timespec *time,
 			int touch_id,
-			double x, double y,
+			const struct weston_coord_global *pos,
 			const struct weston_point2d_device_normalized *norm,
 			int touch_type)
 {
@@ -2578,10 +3044,14 @@ notify_touch_normalized(struct weston_touch_device *device,
 	struct weston_touch *touch = device->aggregate;
 
 	if (touch_type != WL_TOUCH_UP) {
+		assert(pos);
+
 		if (weston_touch_device_can_calibrate(device))
 			assert(norm != NULL);
 		else
 			assert(norm == NULL);
+	} else {
+		assert(!pos);
 	}
 
 	/* Update touchpoints count regardless of the current mode. */
@@ -2613,7 +3083,7 @@ notify_touch_normalized(struct weston_touch_device *device,
 	switch (weston_touch_device_get_mode(device)) {
 	case WESTON_TOUCH_MODE_NORMAL:
 	case WESTON_TOUCH_MODE_PREP_CALIB:
-		process_touch_normal(device, time, touch_id, x, y, touch_type);
+		process_touch_normal(device, time, touch_id, pos, touch_type);
 		break;
 	case WESTON_TOUCH_MODE_CALIB:
 	case WESTON_TOUCH_MODE_PREP_NORMAL:
@@ -2633,6 +3103,11 @@ notify_touch_frame(struct weston_touch_device *device)
 	case WESTON_TOUCH_MODE_PREP_CALIB:
 		grab = device->aggregate->grab;
 		grab->interface->frame(grab);
+		if (grab->touch->pending_focus_reset) {
+			if (grab->touch->num_tp == 0)
+				weston_touch_set_focus(grab->touch, NULL);
+			grab->touch->pending_focus_reset = false;
+		}
 		break;
 	case WESTON_TOUCH_MODE_CALIB:
 	case WESTON_TOUCH_MODE_PREP_NORMAL:
@@ -2671,24 +3146,375 @@ pointer_cursor_surface_get_label(struct weston_surface *surface,
 }
 
 static void
+tablet_destroy(struct wl_client *client, struct wl_resource *resource)
+{
+	wl_resource_destroy(resource);
+}
+
+static const struct zwp_tablet_v2_interface tablet_interface = {
+	tablet_destroy,
+};
+
+static void
+send_tablet_added(struct weston_tablet *tablet,
+		  struct wl_resource *tablet_seat_resource,
+		  struct wl_resource *tablet_resource)
+{
+	zwp_tablet_seat_v2_send_tablet_added(tablet_seat_resource, tablet_resource);
+	zwp_tablet_v2_send_name(tablet_resource, tablet->name);
+	zwp_tablet_v2_send_id(tablet_resource, tablet->vid, tablet->pid);
+	zwp_tablet_v2_send_path(tablet_resource, tablet->path);
+	zwp_tablet_v2_send_done(tablet_resource);
+}
+
+static void
+tablet_add_resource(struct weston_tablet *tablet,
+		    struct wl_client *client,
+		    struct wl_resource *tablet_seat_resource)
+{
+	struct wl_resource *tablet_resource;
+
+	tablet_resource = wl_resource_create(client,
+					     &zwp_tablet_v2_interface,
+					     1, 0);
+
+	wl_list_insert(&tablet->resource_list,
+		       wl_resource_get_link(tablet_resource));
+	wl_resource_set_implementation(tablet_resource,
+				       &tablet_interface,
+				       tablet,
+				       unbind_resource);
+
+	wl_resource_set_user_data(tablet_resource, tablet);
+	send_tablet_added(tablet, tablet_seat_resource, tablet_resource);
+}
+
+WL_EXPORT void
+notify_tablet_added(struct weston_tablet *tablet)
+{
+	struct wl_resource *tablet_seat_resource;
+	struct weston_seat *seat = tablet->seat;
+
+	wl_resource_for_each(tablet_seat_resource,
+			     &seat->tablet_seat_resource_list) {
+		tablet_add_resource(tablet,
+				    wl_resource_get_client(tablet_seat_resource),
+				    tablet_seat_resource);
+	}
+}
+
+static void
+tablet_tool_cursor_surface_committed(struct weston_surface *es,
+				     struct weston_coord_surface new_origin)
+{
+	struct weston_tablet_tool *tool = es->committed_private;
+	struct weston_coord_surface hotspot_inv;
+
+	if (es->width == 0)
+		return;
+
+	assert(es == tool->sprite->surface);
+
+	tool->hotspot = weston_coord_surface_sub(tool->hotspot, new_origin);
+	hotspot_inv = weston_coord_surface_invert(tool->hotspot);
+	weston_view_set_position_with_offset(tool->sprite,
+					     tool->pos, hotspot_inv);
+
+	empty_region(&es->pending.input);
+	empty_region(&es->input);
+
+	if (!weston_surface_is_mapped(es)) {
+		weston_layer_entry_insert(
+			&es->compositor->cursor_layer.view_list,
+			&tool->sprite->layer_link);
+		weston_view_update_transform(tool->sprite);
+		es->is_mapped = true;
+		tool->sprite->is_mapped = true;
+	}
+}
+
+static void
+tablet_tool_set_cursor(struct wl_client *client, struct wl_resource *resource,
+		       uint32_t serial, struct wl_resource *surface_resource,
+		       int32_t hotspot_x, int32_t hotspot_y)
+{
+	struct weston_tablet_tool *tool = wl_resource_get_user_data(resource);
+	struct weston_surface *surface = NULL;
+
+	if (!tool)
+		return;
+
+	if (surface_resource)
+		surface = wl_resource_get_user_data(surface_resource);
+
+	if (tool->focus == NULL)
+		return;
+
+	/* tablet->focus->surface->resource can be NULL. Surfaces like the
+	 * black_surface used in shell.c for fullscreen don't have
+	 * a resource, but can still have focus */
+	if (tool->focus->surface->resource == NULL)
+		return;
+
+	if (wl_resource_get_client(tool->focus->surface->resource) != client)
+		return;
+
+	if (tool->focus_serial - serial > UINT32_MAX / 2)
+		return;
+
+	if (surface && tool->sprite && surface != tool->sprite->surface &&
+	    surface->committed) {
+		wl_resource_post_error(surface->resource,
+				       WL_DISPLAY_ERROR_INVALID_OBJECT,
+				       "surface->configure already set");
+		return;
+	}
+
+	if (tool->sprite)
+		tablet_tool_unmap_sprite(tool);
+
+	if (!surface)
+		return;
+
+	wl_signal_add(&surface->destroy_signal,
+		      &tool->sprite_destroy_listener);
+	surface->committed = tablet_tool_cursor_surface_committed;
+	surface->committed_private = tool;
+	tool->sprite = weston_view_create(surface);
+	tool->hotspot = weston_coord_surface(hotspot_x, hotspot_y, surface);
+
+	if (surface->buffer_ref.buffer) {
+		struct weston_coord_surface delta =
+			weston_coord_surface(0, 0, surface);
+
+		tablet_tool_cursor_surface_committed(surface, delta);
+	}
+}
+
+static void
+tablet_tool_destroy(struct wl_client *client, struct wl_resource *resource)
+{
+	wl_resource_destroy(resource);
+}
+
+static const struct zwp_tablet_tool_v2_interface tablet_tool_interface = {
+	tablet_tool_set_cursor,
+	tablet_tool_destroy,
+};
+
+static void
+send_tool_added(struct weston_tablet_tool *tool,
+		struct wl_resource *tool_seat_resource,
+		struct wl_resource *tool_resource)
+{
+	uint32_t caps, cap;
+	zwp_tablet_seat_v2_send_tool_added(tool_seat_resource, tool_resource);
+	zwp_tablet_tool_v2_send_type(tool_resource, tool->type);
+	zwp_tablet_tool_v2_send_hardware_serial(tool_resource,
+						tool->serial >> 32,
+						tool->serial & 0xFFFFFFFF);
+	zwp_tablet_tool_v2_send_hardware_id_wacom(tool_resource,
+						  tool->hwid >> 32,
+						  tool->hwid & 0xFFFFFFFF);
+	caps = tool->capabilities;
+	while (caps != 0) {
+		cap = ffs(caps) - 1;
+		zwp_tablet_tool_v2_send_capability(tool_resource, cap);
+		caps &= ~(1 << cap);
+	}
+
+	zwp_tablet_tool_v2_send_done(tool_resource);
+}
+
+static void
+tablet_tool_add_resource(struct weston_tablet_tool *tool,
+			 struct wl_client *client,
+			 struct wl_resource *tablet_seat_resource)
+{
+	struct wl_resource *tool_resource;
+
+	tool_resource = wl_resource_create(client,
+					   &zwp_tablet_tool_v2_interface,
+					   1, 0);
+
+	wl_list_insert(&tool->resource_list,
+		       wl_resource_get_link(tool_resource));
+	wl_resource_set_implementation(tool_resource,
+				       &tablet_tool_interface,
+				       tool, unbind_resource);
+
+	wl_resource_set_user_data(tool_resource, tool);
+	send_tool_added(tool, tablet_seat_resource, tool_resource);
+}
+
+WL_EXPORT void
+notify_tablet_tool_added(struct weston_tablet_tool *tool)
+{
+	struct wl_resource *tablet_seat_resource;
+	struct weston_seat *seat = tool->seat;
+	struct wl_client *client;
+
+	wl_signal_emit(&seat->tablet_tool_added_signal, tool);
+
+	wl_resource_for_each(tablet_seat_resource,
+			     &seat->tablet_seat_resource_list) {
+		client = wl_resource_get_client(tablet_seat_resource);
+		tablet_tool_add_resource(tool, client,
+					 tablet_seat_resource);
+	}
+}
+
+WL_EXPORT void
+notify_tablet_tool_proximity_in(struct weston_tablet_tool *tool,
+				 const struct timespec *time,
+				 struct weston_tablet *tablet)
+{
+	struct weston_tablet_tool_grab *grab = tool->grab;
+
+	grab->tool->current_tablet = tablet;
+
+	grab->interface->proximity_in(grab, time, tablet);
+}
+
+WL_EXPORT void
+notify_tablet_tool_proximity_out(struct weston_tablet_tool *tool,
+				 const struct timespec *time)
+{
+	struct weston_tablet_tool_grab *grab = tool->grab;
+
+	grab->interface->proximity_out(grab, time);
+}
+
+WL_EXPORT void
+notify_tablet_tool_motion(struct weston_tablet_tool *tool,
+			  const struct timespec *time,
+			  struct weston_coord_global pos)
+{
+	struct weston_tablet_tool_grab *grab = tool->grab;
+
+	weston_compositor_wake(tool->seat->compositor);
+
+	grab->interface->motion(grab, time, pos);
+}
+
+WL_EXPORT void
+notify_tablet_tool_pressure(struct weston_tablet_tool *tool,
+			    const struct timespec *time, uint32_t pressure)
+{
+	struct weston_tablet_tool_grab *grab = tool->grab;
+
+	weston_compositor_wake(tool->seat->compositor);
+
+	grab->interface->pressure(grab, time, pressure);
+}
+
+WL_EXPORT void
+notify_tablet_tool_distance(struct weston_tablet_tool *tool,
+			    const struct timespec *time, uint32_t distance)
+{
+	struct weston_tablet_tool_grab *grab = tool->grab;
+
+	weston_compositor_wake(tool->seat->compositor);
+
+	grab->interface->distance(grab, time, distance);
+}
+
+WL_EXPORT void
+notify_tablet_tool_tilt(struct weston_tablet_tool *tool,
+			const struct timespec *time,
+			wl_fixed_t tilt_x, wl_fixed_t tilt_y)
+{
+	struct weston_tablet_tool_grab *grab = tool->grab;
+
+	weston_compositor_wake(tool->seat->compositor);
+
+	grab->interface->tilt(grab, time, tilt_x, tilt_y);
+}
+
+WL_EXPORT void
+notify_tablet_tool_button(struct weston_tablet_tool *tool,
+			  const struct timespec *time,
+			  uint32_t button, uint32_t state)
+{
+	struct weston_tablet_tool_grab *grab = tool->grab;
+	struct weston_compositor *compositor = tool->seat->compositor;
+
+	if (state == ZWP_TABLET_TOOL_V2_BUTTON_STATE_PRESSED) {
+		tool->button_count++;
+		if (tool->button_count == 1)
+			weston_compositor_idle_inhibit(compositor);
+	} else {
+		tool->button_count--;
+		if (tool->button_count == 1)
+			weston_compositor_idle_release(compositor);
+	}
+
+	tool->grab_serial = wl_display_next_serial(compositor->wl_display);
+
+	weston_compositor_run_tablet_tool_binding(compositor, tool, button, state);
+
+	grab->interface->button(grab, time, button, state);
+}
+
+WL_EXPORT void
+notify_tablet_tool_down(struct weston_tablet_tool *tool,
+			const struct timespec *time)
+{
+	 struct weston_tablet_tool_grab *grab = tool->grab;
+	 struct weston_compositor *compositor = tool->seat->compositor;
+
+	 weston_compositor_idle_inhibit(compositor);
+
+	 tool->tip_is_down = true;
+	 tool->grab_serial = wl_display_get_serial(compositor->wl_display);
+	 tool->grab_pos = tool->pos;
+
+	 weston_compositor_run_tablet_tool_binding(compositor, tool, BTN_TOUCH,
+						   ZWP_TABLET_TOOL_V2_BUTTON_STATE_PRESSED);
+	 grab->interface->down(grab, time);
+}
+
+WL_EXPORT void
+notify_tablet_tool_up(struct weston_tablet_tool *tool,
+		      const struct timespec *time)
+{
+	 struct weston_tablet_tool_grab *grab = tool->grab;
+	 struct weston_compositor *compositor = tool->seat->compositor;
+
+	 weston_compositor_idle_release(compositor);
+
+	 tool->tip_is_down = false;
+
+	 grab->interface->up(grab, time);
+}
+
+WL_EXPORT void
+notify_tablet_tool_frame(struct weston_tablet_tool *tool,
+			 const struct timespec *time)
+{
+	struct weston_tablet_tool_grab *grab = tool->grab;
+
+	grab->interface->frame(grab, time);
+}
+
+
+static void
 pointer_cursor_surface_committed(struct weston_surface *es,
-				 int32_t dx, int32_t dy)
+				 struct weston_coord_surface new_origin)
 {
 	struct weston_pointer *pointer = es->committed_private;
-	int x, y;
+	struct weston_coord_surface hotspot_inv;
 
 	if (es->width == 0)
 		return;
 
 	assert(es == pointer->sprite->surface);
 
-	pointer->hotspot_x -= dx;
-	pointer->hotspot_y -= dy;
-
-	x = wl_fixed_to_int(pointer->x) - pointer->hotspot_x;
-	y = wl_fixed_to_int(pointer->y) - pointer->hotspot_y;
-
-	weston_view_set_position(pointer->sprite, x, y);
+	pointer->hotspot = weston_coord_surface_sub(pointer->hotspot,
+						    new_origin);
+	hotspot_inv = weston_coord_surface_invert(pointer->hotspot);
+	weston_view_set_position_with_offset(pointer->sprite,
+					     pointer->pos, hotspot_inv);
 
 	empty_region(&es->pending.input);
 	empty_region(&es->input);
@@ -2697,7 +3523,7 @@ pointer_cursor_surface_committed(struct weston_surface *es,
 		weston_layer_entry_insert(&es->compositor->cursor_layer.view_list,
 					  &pointer->sprite->layer_link);
 		weston_view_update_transform(pointer->sprite);
-		es->is_mapped = true;
+		weston_surface_map(es);
 		pointer->sprite->is_mapped = true;
 	}
 }
@@ -2735,7 +3561,7 @@ pointer_set_cursor(struct wl_client *client, struct wl_resource *resource,
 	}
 
 	if (pointer->sprite && pointer->sprite->surface == surface &&
-	    pointer->hotspot_x == x && pointer->hotspot_y == y)
+	    pointer->hotspot.c.x == x && pointer->hotspot.c.y == y)
 		return;
 
 	if (!pointer->sprite || pointer->sprite->surface != surface) {
@@ -2757,11 +3583,13 @@ pointer_set_cursor(struct wl_client *client, struct wl_resource *resource,
 		pointer->sprite = weston_view_create(surface);
 	}
 
-	pointer->hotspot_x = x;
-	pointer->hotspot_y = y;
+	pointer->hotspot = weston_coord_surface(x, y, surface);
 
 	if (surface->width != 0) {
-		pointer_cursor_surface_committed(surface, 0, 0);
+		struct weston_coord_surface zero;
+
+		zero = weston_coord_surface(0, 0, surface);
+		pointer_cursor_surface_committed(surface, zero);
 		weston_view_schedule_repaint(pointer->sprite);
 	}
 }
@@ -2821,17 +3649,18 @@ seat_get_pointer(struct wl_client *client, struct wl_resource *resource,
 
 	if (pointer->focus && pointer->focus->surface->resource &&
 	    wl_resource_get_client(pointer->focus->surface->resource) == client) {
-		wl_fixed_t sx, sy;
+		struct weston_coord_surface surf_pos;
 
-		weston_view_from_global_fixed(pointer->focus,
-					      pointer->x,
-					      pointer->y,
-					      &sx, &sy);
+		weston_view_update_transform(pointer->focus);
+
+		surf_pos = weston_coord_global_to_surface(pointer->focus,
+							  pointer->pos);
 
 		wl_pointer_send_enter(cr,
 				      pointer->focus_serial,
 				      pointer->focus->surface->resource,
-				      sx, sy);
+				      wl_fixed_from_double(surf_pos.c.x),
+				      wl_fixed_from_double(surf_pos.c.y));
 		pointer_send_frame(cr);
 	}
 }
@@ -3390,6 +4219,20 @@ weston_seat_release_pointer(struct weston_seat *seat)
 	}
 }
 
+WL_EXPORT void
+weston_seat_release_tablet_tool(struct weston_tablet_tool *tool)
+{
+	wl_signal_emit(&tool->removed_signal, tool);
+
+	weston_tablet_tool_destroy(tool);
+}
+
+WL_EXPORT void
+weston_seat_release_tablet(struct weston_tablet *tablet)
+{
+	weston_tablet_destroy(tablet);
+}
+
 WL_EXPORT int
 weston_seat_init_touch(struct weston_seat *seat)
 {
@@ -3413,6 +4256,39 @@ weston_seat_init_touch(struct weston_seat *seat)
 	seat_send_updated_caps(seat);
 
 	return 0;
+}
+
+WL_EXPORT struct weston_tablet *
+weston_seat_add_tablet(struct weston_seat *seat)
+{
+	struct weston_tablet *tablet;
+
+	weston_tablet_manager_init(seat->compositor);
+
+	tablet = weston_tablet_create();
+	if (tablet == NULL)
+		return NULL;
+
+	tablet->seat = seat;
+
+	return tablet;
+}
+
+WL_EXPORT struct weston_tablet_tool *
+weston_seat_add_tablet_tool(struct weston_seat *seat)
+{
+	struct weston_tablet_tool *tool;
+
+	weston_tablet_manager_init(seat->compositor);
+
+	tool = weston_tablet_tool_create();
+	if (tool == NULL)
+		return NULL;
+
+	wl_list_init(&tool->resource_list);
+	tool->seat = seat;
+
+	return tool;
 }
 
 WL_EXPORT void
@@ -3439,6 +4315,10 @@ weston_seat_init(struct weston_seat *seat, struct weston_compositor *ec,
 	wl_list_init(&seat->drag_resource_list);
 	wl_signal_init(&seat->destroy_signal);
 	wl_signal_init(&seat->updated_caps_signal);
+	wl_list_init(&seat->tablet_seat_resource_list);
+	wl_list_init(&seat->tablet_list);
+	wl_list_init(&seat->tablet_tool_list);
+	wl_signal_init(&seat->tablet_tool_added_signal);
 
 	seat->global = wl_global_create(ec->wl_display, &wl_seat_interface,
 					MIN(wl_seat_interface.version, 7),
@@ -3459,6 +4339,8 @@ WL_EXPORT void
 weston_seat_release(struct weston_seat *seat)
 {
 	struct wl_resource *resource;
+	struct weston_tablet *tablet, *tmp;
+	struct weston_tablet_tool *tool, *tmp_tool;
 
 	wl_resource_for_each(resource, &seat->base_resource_list) {
 		wl_resource_set_user_data(resource, NULL);
@@ -3482,6 +4364,10 @@ weston_seat_release(struct weston_seat *seat)
 		weston_keyboard_destroy(seat->keyboard_state);
 	if (seat->touch_state)
 		weston_touch_destroy(seat->touch_state);
+	wl_list_for_each_safe(tablet, tmp, &seat->tablet_list, link)
+		weston_tablet_destroy(tablet);
+	wl_list_for_each_safe(tool, tmp_tool, &seat->tablet_tool_list, link)
+		weston_tablet_tool_destroy(tool);
 
 	free (seat->seat_name);
 
@@ -3620,6 +4506,87 @@ weston_seat_get_touch(struct weston_seat *seat)
 	return NULL;
 }
 
+static void
+tablet_seat_destroy(struct wl_client *client, struct wl_resource *resource)
+{
+}
+
+static const struct zwp_tablet_seat_v2_interface tablet_seat_interface = {
+	tablet_seat_destroy,
+};
+
+static void
+tablet_manager_get_tablet_seat(struct wl_client *client, struct wl_resource *resource,
+			       uint32_t id, struct wl_resource *seat_resource)
+{
+	struct weston_seat *seat = wl_resource_get_user_data(seat_resource);
+	struct wl_resource *cr;
+	struct weston_tablet *tablet;
+	struct weston_tablet_tool *tool;
+
+	cr = wl_resource_create(client, &zwp_tablet_seat_v2_interface,
+				wl_resource_get_version(resource), id);
+	if (cr == NULL) {
+		wl_client_post_no_memory(client);
+		return;
+	}
+
+	/* store the resource in the weston_seat */
+	wl_list_insert(&seat->tablet_seat_resource_list, wl_resource_get_link(cr));
+	wl_resource_set_implementation(cr, &tablet_seat_interface, seat,
+				       unbind_resource);
+
+	/* Notify client of any tablets already connected to the system */
+	wl_list_for_each(tablet, &seat->tablet_list, link) {
+		tablet_add_resource(tablet, client, cr);
+		/* Notify client of any local tools already known */
+		wl_list_for_each(tool, &tablet->tool_list, link)
+			tablet_tool_add_resource(tool, client, cr);
+	}
+
+	/* Notify client of any global tools already known */
+	wl_list_for_each(tool, &seat->tablet_tool_list, link)
+		tablet_tool_add_resource(tool, client, cr);
+}
+
+static void
+tablet_manager_destroy(struct wl_client *client, struct wl_resource *resource)
+{
+
+}
+
+static const struct zwp_tablet_manager_v2_interface tablet_manager_interface = {
+	tablet_manager_get_tablet_seat,
+	tablet_manager_destroy,
+};
+
+static void
+bind_tablet_manager(struct wl_client *client, void *data, uint32_t version,
+		    uint32_t id)
+{
+	struct weston_compositor *compositor = data;
+	struct wl_resource *resource;
+
+	resource = wl_resource_create(client, &zwp_tablet_manager_v2_interface,
+				      MIN(version, 1), id);
+	wl_resource_set_implementation(resource, &tablet_manager_interface,
+				       data, unbind_resource);
+	wl_list_insert(&compositor->tablet_manager_resource_list,
+		       wl_resource_get_link(resource));
+}
+
+WL_EXPORT void
+weston_tablet_manager_init(struct weston_compositor *compositor)
+{
+	if (compositor->tablet_manager)
+		return;
+
+	compositor->tablet_manager = wl_global_create(compositor->wl_display,
+						      &zwp_tablet_manager_v2_interface,
+						      1, compositor,
+						      bind_tablet_manager);
+}
+
 /** Sets the keyboard focus to the given surface
  *
  * \param surface the surface to focus on
@@ -3629,22 +4596,12 @@ WL_EXPORT void
 weston_seat_set_keyboard_focus(struct weston_seat *seat,
 			       struct weston_surface *surface)
 {
-	struct weston_compositor *compositor = seat->compositor;
 	struct weston_keyboard *keyboard = weston_seat_get_keyboard(seat);
-	struct weston_surface_activation_data activation_data;
 
 	if (keyboard && keyboard->focus != surface) {
 		weston_keyboard_set_focus(keyboard, surface);
 		wl_data_device_set_keyboard_focus(seat);
 	}
-
-	inc_activate_serial(compositor);
-
-	activation_data = (struct weston_surface_activation_data) {
-		.surface = surface,
-		.seat = seat,
-	};
-	wl_signal_emit(&compositor->activate_signal, &activation_data);
 }
 
 static void
@@ -3655,8 +4612,8 @@ enable_pointer_constraint(struct weston_pointer_constraint *constraint,
 	constraint->view = view;
 	pointer_constraint_notify_activated(constraint);
 	weston_pointer_start_grab(constraint->pointer, &constraint->grab);
-	wl_list_remove(&constraint->surface_destroy_listener.link);
-	wl_list_init(&constraint->surface_destroy_listener.link);
+	wl_signal_add(&constraint->view->unmap_signal,
+		      &constraint->view_unmap_listener);
 }
 
 static bool
@@ -3671,6 +4628,8 @@ weston_pointer_constraint_disable(struct weston_pointer_constraint *constraint)
 	constraint->view = NULL;
 	pointer_constraint_notify_deactivated(constraint);
 	weston_pointer_end_grab(constraint->grab.pointer);
+	wl_list_remove(&constraint->view_unmap_listener.link);
+	wl_list_init(&constraint->view_unmap_listener.link);
 }
 
 void
@@ -3680,7 +4639,6 @@ weston_pointer_constraint_destroy(struct weston_pointer_constraint *constraint)
 		weston_pointer_constraint_disable(constraint);
 
 	wl_list_remove(&constraint->pointer_destroy_listener.link);
-	wl_list_remove(&constraint->surface_destroy_listener.link);
 	wl_list_remove(&constraint->surface_commit_listener.link);
 	wl_list_remove(&constraint->surface_activate_listener.link);
 
@@ -3705,7 +4663,7 @@ disable_pointer_constraint(struct weston_pointer_constraint *constraint)
 
 static bool
 is_within_constraint_region(struct weston_pointer_constraint *constraint,
-			    wl_fixed_t sx, wl_fixed_t sy)
+			    struct weston_coord_surface c)
 {
 	struct weston_surface *surface = constraint->surface;
 	pixman_region32_t constraint_region;
@@ -3716,9 +4674,7 @@ is_within_constraint_region(struct weston_pointer_constraint *constraint,
 				  &surface->input,
 				  &constraint->region);
 	result = pixman_region32_contains_point(&constraint_region,
-						wl_fixed_to_int(sx),
-						wl_fixed_to_int(sy),
-						NULL);
+						c.c.x, c.c.y, NULL);
 	pixman_region32_fini(&constraint_region);
 
 	return result;
@@ -3733,7 +4689,7 @@ maybe_enable_pointer_constraint(struct weston_pointer_constraint *constraint)
 	struct weston_pointer *pointer = constraint->pointer;
 	struct weston_keyboard *keyboard;
 	struct weston_seat *seat = pointer->seat;
-	int32_t x, y;
+	struct weston_coord_surface c;
 
 	/* Postpone if no view of the surface was most recently clicked. */
 	wl_list_for_each(vit, &surface->views, surface_link) {
@@ -3750,16 +4706,12 @@ maybe_enable_pointer_constraint(struct weston_pointer_constraint *constraint)
 	if (!keyboard || keyboard->focus != surface)
 		return;
 
+	weston_view_update_transform(view);
 	/* Postpone constraint if the pointer is not within the
 	 * constraint region.
 	 */
-	weston_view_from_global(view,
-				wl_fixed_to_int(pointer->x),
-				wl_fixed_to_int(pointer->y),
-				&x, &y);
-	if (!is_within_constraint_region(constraint,
-					 wl_fixed_from_int(x),
-					 wl_fixed_from_int(y)))
+	c = weston_coord_global_to_surface(view, pointer->pos);
+	if (!is_within_constraint_region(constraint, c))
 		return;
 
 	enable_pointer_constraint(constraint, view);
@@ -3845,7 +4797,7 @@ pointer_constraint_surface_activate(struct wl_listener *listener, void *data)
 {
 	struct weston_surface_activation_data *activation = data;
 	struct weston_pointer *pointer;
-	struct weston_surface *focus = activation->surface;
+	struct weston_surface *focus = activation->view->surface;
 	struct weston_pointer_constraint *constraint =
 		container_of(listener, struct weston_pointer_constraint,
 			     surface_activate_listener);
@@ -3859,8 +4811,17 @@ pointer_constraint_surface_activate(struct wl_listener *listener, void *data)
 		get_pointer_constraint_for_pointer(focus, pointer) == constraint;
 
 	if (is_constraint_surface &&
-	    !is_pointer_constraint_enabled(constraint))
-		maybe_enable_pointer_constraint(constraint);
+	    !is_pointer_constraint_enabled(constraint)) {
+		if (activation->flags & WESTON_ACTIVATE_FLAG_FULLSCREEN) {
+			weston_view_update_transform(activation->view);
+			weston_pointer_set_focus(pointer, activation->view);
+			enable_pointer_constraint(constraint, activation->view);
+			maybe_warp_confined_pointer(constraint);
+		}
+		else {
+			maybe_enable_pointer_constraint(constraint);
+		}
+	}
 	else if (!is_constraint_surface &&
 		 is_pointer_constraint_enabled(constraint))
 		disable_pointer_constraint(constraint);
@@ -3877,13 +4838,13 @@ pointer_constraint_pointer_destroyed(struct wl_listener *listener, void *data)
 }
 
 static void
-pointer_constraint_surface_destroyed(struct wl_listener *listener, void *data)
+pointer_constraint_view_unmapped(struct wl_listener *listener, void *data)
 {
-	struct weston_pointer_constraint *constraint =
-		container_of(listener, struct weston_pointer_constraint,
-			     surface_destroy_listener);
+        struct weston_pointer_constraint *constraint =
+                container_of(listener, struct weston_pointer_constraint,
+                             view_unmap_listener);
 
-	weston_pointer_constraint_destroy(constraint);
+        disable_pointer_constraint(constraint);
 }
 
 static void
@@ -3892,6 +4853,9 @@ pointer_constraint_surface_committed(struct wl_listener *listener, void *data)
 	struct weston_pointer_constraint *constraint =
 		container_of(listener, struct weston_pointer_constraint,
 			     surface_commit_listener);
+
+	if (is_pointer_constraint_enabled(constraint))
+		weston_view_update_transform(constraint->view);
 
 	if (constraint->region_is_pending) {
 		constraint->region_is_pending = false;
@@ -3905,8 +4869,7 @@ pointer_constraint_surface_committed(struct wl_listener *listener, void *data)
 		constraint->hint_is_pending = false;
 
 		constraint->hint_is_pending = true;
-		constraint->hint_x = constraint->hint_x_pending;
-		constraint->hint_y = constraint->hint_y_pending;
+		constraint->hint = constraint->hint_pending;
 	}
 
 	if (pointer_constraint_get_type(constraint) ==
@@ -3947,8 +4910,8 @@ weston_pointer_constraint_create(struct weston_surface *surface,
 
 	constraint->surface_activate_listener.notify =
 		pointer_constraint_surface_activate;
-	constraint->surface_destroy_listener.notify =
-		pointer_constraint_surface_destroyed;
+	constraint->view_unmap_listener.notify =
+		pointer_constraint_view_unmapped;
 	constraint->surface_commit_listener.notify =
 		pointer_constraint_surface_committed;
 	constraint->pointer_destroy_listener.notify =
@@ -3958,8 +4921,6 @@ weston_pointer_constraint_create(struct weston_surface *surface,
 		      &constraint->surface_activate_listener);
 	wl_signal_add(&pointer->destroy_signal,
 		      &constraint->pointer_destroy_listener);
-	wl_signal_add(&surface->destroy_signal,
-		      &constraint->surface_destroy_listener);
 	wl_signal_add(&surface->commit_signal,
 		      &constraint->surface_commit_listener);
 
@@ -4029,17 +4990,14 @@ locked_pointer_destroy(struct wl_client *client,
 {
 	struct weston_pointer_constraint *constraint =
 		wl_resource_get_user_data(resource);
-	wl_fixed_t x, y;
 
 	if (constraint && constraint->view && constraint->hint_is_pending &&
-	    is_within_constraint_region(constraint,
-					constraint->hint_x,
-					constraint->hint_y)) {
-		weston_view_to_global_fixed(constraint->view,
-					    constraint->hint_x,
-					    constraint->hint_y,
-					    &x, &y);
-		weston_pointer_move_to(constraint->pointer, x, y);
+	    is_within_constraint_region(constraint, constraint->hint)) {
+		struct weston_coord_global pos;
+
+		pos = weston_coord_surface_to_global(constraint->view,
+						     constraint->hint);
+		weston_pointer_move_to(constraint->pointer, pos);
 	}
 	wl_resource_destroy(resource);
 }
@@ -4061,8 +5019,9 @@ locked_pointer_set_cursor_position_hint(struct wl_client *client,
 		return;
 
 	constraint->hint_is_pending = true;
-	constraint->hint_x_pending = surface_x;
-	constraint->hint_y_pending = surface_y;
+	constraint->hint_pending = weston_coord_surface_from_fixed(surface_x,
+								   surface_y,
+								   constraint->surface);
 }
 
 static void
@@ -4122,33 +5081,15 @@ confined_pointer_grab_pointer_focus(struct weston_pointer_grab *grab)
 }
 
 static double
-vec2d_cross_product(struct vec2d a, struct vec2d b)
+weston_coord_cross_product(struct weston_coord a, struct weston_coord b)
 {
 	return a.x * b.y - a.y * b.x;
 }
 
-static struct vec2d
-vec2d_add(struct vec2d a, struct vec2d b)
+static struct weston_coord
+weston_coord_multiply_constant(double c, struct weston_coord a)
 {
-	return (struct vec2d) {
-		.x = a.x + b.x,
-		.y = a.y + b.y,
-	};
-}
-
-static struct vec2d
-vec2d_subtract(struct vec2d a, struct vec2d b)
-{
-	return (struct vec2d) {
-		.x = a.x - b.x,
-		.y = a.y - b.y,
-	};
-}
-
-static struct vec2d
-vec2d_multiply_constant(double c, struct vec2d a)
-{
-	return (struct vec2d) {
+	return (struct weston_coord) {
 		.x = c * a.x,
 		.y = c * a.y,
 	};
@@ -4156,12 +5097,13 @@ vec2d_multiply_constant(double c, struct vec2d a)
 
 static bool
 lines_intersect(struct line *line1, struct line *line2,
-		struct vec2d *intersection)
+		struct weston_coord *intersection)
 {
-	struct vec2d p = line1->a;
-	struct vec2d r = vec2d_subtract(line1->b, line1->a);
-	struct vec2d q = line2->a;
-	struct vec2d s = vec2d_subtract(line2->b, line2->a);
+	struct weston_coord p = line1->a;
+	struct weston_coord r = weston_coord_sub(line1->b, line1->a);
+	struct weston_coord q = line2->a;
+	struct weston_coord s = weston_coord_sub(line2->b, line2->a);
+	struct weston_coord tmp;
 	double rxs;
 	double sxr;
 	double t;
@@ -4186,42 +5128,38 @@ lines_intersect(struct line *line1, struct line *line2,
 	 *   u = ((p - q) × r) / (s × r)
 	 */
 
-	rxs = vec2d_cross_product(r, s);
-	sxr = vec2d_cross_product(s, r);
+	rxs = weston_coord_cross_product(r, s);
+	sxr = weston_coord_cross_product(s, r);
 
 	/* If r × s = 0 then the lines are either parallel or collinear. */
 	if (fabs(rxs) < DBL_MIN)
 		return false;
 
-	t = vec2d_cross_product(vec2d_subtract(q, p), s) / rxs;
-	u = vec2d_cross_product(vec2d_subtract(p, q), r) / sxr;
+	tmp = weston_coord_sub(q, p);
+	t = weston_coord_cross_product(tmp, s) / rxs;
+	tmp = weston_coord_sub(p, q);
+	u = weston_coord_cross_product(tmp, r) / sxr;
 
 	/* The lines only intersect if 0 ≤ t ≤ 1 and 0 ≤ u ≤ 1. */
 	if (t < 0.0 || t > 1.0 || u < 0.0 || u > 1.0)
 		return false;
 
-	*intersection = vec2d_add(p, vec2d_multiply_constant(t, r));
+	*intersection = weston_coord_add(p, weston_coord_multiply_constant(t, r));
 	return true;
 }
 
 static struct border *
 add_border(struct wl_array *array,
-	   double x1, double y1,
-	   double x2, double y2,
+	   struct weston_coord pos1,
+	   struct weston_coord pos2,
 	   enum motion_direction blocking_dir)
 {
 	struct border *border = wl_array_add(array, sizeof *border);
 
 	*border = (struct border) {
 		.line = (struct line) {
-			.a = (struct vec2d) {
-				.x = x1,
-				.y = y1,
-			},
-			.b = (struct vec2d) {
-				.x = x2,
-				.y = y2,
-			},
+			.a = pos1,
+			.b = pos2
 		},
 		.blocking_dir = blocking_dir,
 	};
@@ -4262,14 +5200,20 @@ add_non_overlapping_edges(pixman_box32_t *boxes,
 	 * borders with the same left x coordinate, the wider one comes first.
 	 */
 	for (i = band_above_start; i < band_below_start; i++) {
+		struct weston_coord pos1, pos2;
 		pixman_box32_t *box = &boxes[i];
-		add_border(&band_merge, box->x1, box->y2, box->x2, box->y2,
-			   MOTION_DIRECTION_POSITIVE_Y);
+
+		pos1 = weston_coord(box->x1, box->y2);
+		pos2 = weston_coord(box->x2, box->y2);
+		add_border(&band_merge, pos1, pos2, MOTION_DIRECTION_POSITIVE_Y);
 	}
 	for (i = band_below_start; i < band_below_end; i++) {
+		struct weston_coord pos1, pos2;
 		pixman_box32_t *box= &boxes[i];
-		add_border(&band_merge, box->x1, box->y1, box->x2, box->y1,
-			   MOTION_DIRECTION_NEGATIVE_Y);
+
+		pos1 = weston_coord(box->x1, box->y1);
+		pos2 = weston_coord(box->x2, box->y1);
+		add_border(&band_merge, pos1, pos2, MOTION_DIRECTION_NEGATIVE_Y);
 	}
 	qsort(band_merge.data,
 	      band_merge.size / sizeof *border,
@@ -4321,10 +5265,8 @@ add_non_overlapping_edges(pixman_box32_t *boxes,
 			 * -----[    ]----
 			 */
 			new_border = add_border(borders,
-						border->line.b.x,
-						border->line.b.y,
-						prev_border->line.b.x,
-						prev_border->line.b.y,
+						border->line.b,
+						prev_border->line.b,
 						prev_border->blocking_dir);
 			prev_border->line.b.x = border->line.a.x;
 			prev_border = new_border;
@@ -4354,18 +5296,19 @@ add_band_bottom_edges(pixman_box32_t *boxes,
 		      struct wl_array *borders)
 {
 	int i;
+	struct weston_coord pos1, pos2;
 
 	for (i = band_start; i < band_end; i++) {
-		add_border(borders,
-			   boxes[i].x1, boxes[i].y2,
-			   boxes[i].x2, boxes[i].y2,
-			   MOTION_DIRECTION_POSITIVE_Y);
+		pos1 = weston_coord(boxes[i].x1, boxes[i].y2);
+		pos2 = weston_coord(boxes[i].x2, boxes[i].y2);
+		add_border(borders, pos1, pos2, MOTION_DIRECTION_POSITIVE_Y);
 	}
 }
 
 static void
 region_to_outline(pixman_region32_t *region, struct wl_array *borders)
 {
+	struct weston_coord pos1, pos2;
 	pixman_box32_t *boxes;
 	int num_boxes;
 	int i;
@@ -4449,31 +5392,27 @@ region_to_outline(pixman_region32_t *region, struct wl_array *borders)
 
 		/* Add the top border if the box is part of the current roof. */
 		if (boxes[i].y1 == current_roof) {
-			add_border(borders,
-				   boxes[i].x1, boxes[i].y1,
-				   boxes[i].x2, boxes[i].y1,
-				   MOTION_DIRECTION_NEGATIVE_Y);
+			pos1 = weston_coord(boxes[i].x1, boxes[i].y1);
+			pos2 = weston_coord(boxes[i].x2, boxes[i].y1);
+			add_border(borders, pos1, pos2, MOTION_DIRECTION_NEGATIVE_Y);
 		}
 
 		/* Add the bottom border of the last band. */
 		if (boxes[i].y2 == bottom_most) {
-			add_border(borders,
-				   boxes[i].x1, boxes[i].y2,
-				   boxes[i].x2, boxes[i].y2,
-				   MOTION_DIRECTION_POSITIVE_Y);
+			pos1 = weston_coord(boxes[i].x1, boxes[i].y2);
+			pos2 = weston_coord(boxes[i].x2, boxes[i].y2);
+			add_border(borders, pos1, pos2, MOTION_DIRECTION_POSITIVE_Y);
 		}
 
 		/* Always add the left border. */
-		add_border(borders,
-			   boxes[i].x1, boxes[i].y1,
-			   boxes[i].x1, boxes[i].y2,
-			   MOTION_DIRECTION_NEGATIVE_X);
+		pos1 = weston_coord(boxes[i].x1, boxes[i].y1);
+		pos2 = weston_coord(boxes[i].x1, boxes[i].y2);
+		add_border(borders, pos1, pos2, MOTION_DIRECTION_NEGATIVE_X);
 
 		/* Always add the right border. */
-		add_border(borders,
-			   boxes[i].x2, boxes[i].y1,
-			   boxes[i].x2, boxes[i].y2,
-			   MOTION_DIRECTION_POSITIVE_X);
+		pos1 = weston_coord(boxes[i].x2, boxes[i].y1);
+		pos2 = weston_coord(boxes[i].x2, boxes[i].y2);
+		add_border(borders, pos1, pos2, MOTION_DIRECTION_POSITIVE_X);
 
 		prev_top = boxes[i].y1;
 	}
@@ -4509,8 +5448,8 @@ get_closest_border(struct wl_array *borders,
 		   uint32_t directions)
 {
 	struct border *border;
-	struct vec2d intersection;
-	struct vec2d delta;
+	struct weston_coord intersection;
+	struct weston_coord delta;
 	double distance_2;
 	struct border *closest_border = NULL;
 	double closest_distance_2 = DBL_MAX;
@@ -4522,7 +5461,7 @@ get_closest_border(struct wl_array *borders,
 		if (!lines_intersect(&border->line, motion, &intersection))
 			continue;
 
-		delta = vec2d_subtract(intersection, motion->a);
+		delta = weston_coord_sub(intersection, motion->a);
 		distance_2 = delta.x*delta.x + delta.y*delta.y;
 		if (distance_2 < closest_distance_2) {
 			closest_border = border;
@@ -4579,25 +5518,26 @@ get_motion_directions(struct line *motion)
 	return directions;
 }
 
-static void
+static struct weston_coord_global
 weston_pointer_clamp_event_to_region(struct weston_pointer *pointer,
 				     struct weston_pointer_motion_event *event,
-				     pixman_region32_t *region,
-				     wl_fixed_t *clamped_x,
-				     wl_fixed_t *clamped_y)
+				     pixman_region32_t *region)
 {
-	wl_fixed_t x, y;
-	wl_fixed_t sx, sy;
 	wl_fixed_t old_sx = pointer->sx;
 	wl_fixed_t old_sy = pointer->sy;
 	struct wl_array borders;
 	struct line motion;
 	struct border *closest_border;
-	float new_x_f, new_y_f;
 	uint32_t directions;
+	struct weston_coord_global pos;
+	struct weston_coord_global clamped_pos;
+	struct weston_coord_surface clamped_surf_pos;
+	struct weston_coord_surface surf_pos;
 
-	weston_pointer_motion_to_abs(pointer, event, &x, &y);
-	weston_view_from_global_fixed(pointer->focus, x, y, &sx, &sy);
+	assert(pointer->focus);
+
+	pos = weston_pointer_motion_to_abs(pointer, event);
+	surf_pos = weston_coord_global_to_surface(pointer->focus, pos);
 
 	wl_array_init(&borders);
 
@@ -4611,14 +5551,11 @@ weston_pointer_clamp_event_to_region(struct weston_pointer *pointer,
 	region_to_outline(region, &borders);
 
 	motion = (struct line) {
-		.a = (struct vec2d) {
+		.a = (struct weston_coord) {
 			.x = wl_fixed_to_double(old_sx),
 			.y = wl_fixed_to_double(old_sy),
 		},
-		.b = (struct vec2d) {
-			.x = wl_fixed_to_double(sx),
-			.y = wl_fixed_to_double(sy),
-		},
+		.b = surf_pos.c,
 	};
 	directions = get_motion_directions(&motion);
 
@@ -4632,70 +5569,72 @@ weston_pointer_clamp_event_to_region(struct weston_pointer *pointer,
 			break;
 	}
 
-	weston_view_to_global_float(pointer->focus,
-				    (float) motion.b.x, (float) motion.b.y,
-				    &new_x_f, &new_y_f);
-	*clamped_x = wl_fixed_from_double(new_x_f);
-	*clamped_y = wl_fixed_from_double(new_y_f);
+	clamped_surf_pos = weston_coord_surface(motion.b.x, motion.b.y,
+						pointer->focus->surface);
+	clamped_pos = weston_coord_surface_to_global(pointer->focus,
+						     clamped_surf_pos);
 
 	wl_array_release(&borders);
+	return clamped_pos;
 }
 
 static double
-point_to_border_distance_2(struct border *border, double x, double y)
+point_to_border_distance_2(struct border *border, struct weston_coord_surface c)
 {
 	double orig_x, orig_y;
 	double dx, dy;
 
 	if (is_border_horizontal(border)) {
-		if (x < border->line.a.x)
+		if (c.c.x < border->line.a.x)
 			orig_x = border->line.a.x;
-		else if (x > border->line.b.x)
+		else if (c.c.x > border->line.b.x)
 			orig_x = border->line.b.x;
 		else
-			orig_x = x;
+			orig_x = c.c.x;
 		orig_y = border->line.a.y;
 	} else {
-		if (y < border->line.a.y)
+		if (c.c.y < border->line.a.y)
 			orig_y = border->line.a.y;
-		else if (y > border->line.b.y)
+		else if (c.c.y > border->line.b.y)
 			orig_y = border->line.b.y;
 		else
-			orig_y = y;
+			orig_y = c.c.y;
 		orig_x = border->line.a.x;
 	}
 
 
-	dx = fabs(orig_x - x);
-	dy = fabs(orig_y - y);
+	dx = fabs(orig_x - c.c.x);
+	dy = fabs(orig_y - c.c.y);
 	return dx*dx + dy*dy;
 }
 
 static void
-warp_to_behind_border(struct border *border, wl_fixed_t *sx, wl_fixed_t *sy)
+warp_to_behind_border(struct border *border, struct weston_coord_surface *c)
 {
+	double quantum = wl_fixed_to_double(1);
+
 	switch (border->blocking_dir) {
 	case MOTION_DIRECTION_POSITIVE_X:
 	case MOTION_DIRECTION_NEGATIVE_X:
 		if (border->blocking_dir == MOTION_DIRECTION_POSITIVE_X)
-			*sx = wl_fixed_from_double(border->line.a.x) - 1;
+			c->c.x = border->line.a.x - quantum;
 		else
-			*sx = wl_fixed_from_double(border->line.a.x) + 1;
-		if (*sy < wl_fixed_from_double(border->line.a.y))
-			*sy = wl_fixed_from_double(border->line.a.y) + 1;
-		else if (*sy > wl_fixed_from_double(border->line.b.y))
-			*sy = wl_fixed_from_double(border->line.b.y) - 1;
+			c->c.x = border->line.a.x + quantum;
+		if (c->c.y < border->line.a.y)
+			c->c.y = border->line.a.y + quantum;
+		else if (c->c.y > border->line.b.y)
+			c->c.y = border->line.b.y - quantum;
 		break;
 	case MOTION_DIRECTION_POSITIVE_Y:
 	case MOTION_DIRECTION_NEGATIVE_Y:
 		if (border->blocking_dir == MOTION_DIRECTION_POSITIVE_Y)
-			*sy = wl_fixed_from_double(border->line.a.y) - 1;
+			c->c.y = border->line.a.y - quantum;
 		else
-			*sy = wl_fixed_from_double(border->line.a.y) + 1;
-		if (*sx < wl_fixed_from_double(border->line.a.x))
-			*sx = wl_fixed_from_double(border->line.a.x) + 1;
-		else if (*sx > wl_fixed_from_double(border->line.b.x))
-			*sx = wl_fixed_from_double(border->line.b.x) - 1;
+			c->c.y = border->line.a.y + quantum;
+		if (c->c.x < border->line.a.x)
+			c->c.x = border->line.a.x + quantum;
+		else if (c->c.x > border->line.b.x)
+			c->c.x = border->line.b.x - quantum;
 		break;
 	}
 }
@@ -4703,20 +5642,13 @@ warp_to_behind_border(struct border *border, wl_fixed_t *sx, wl_fixed_t *sy)
 static void
 maybe_warp_confined_pointer(struct weston_pointer_constraint *constraint)
 {
-	wl_fixed_t x;
-	wl_fixed_t y;
-	wl_fixed_t sx;
-	wl_fixed_t sy;
+	struct weston_coord_global cg;
+	struct weston_coord_surface cs;
 
-	weston_view_from_global_fixed(constraint->view,
-				      constraint->pointer->x,
-				      constraint->pointer->y,
-				      &sx,
-				      &sy);
+	cs = weston_coord_global_to_surface(constraint->view,
+					    constraint->pointer->pos);
 
-	if (!is_within_constraint_region(constraint, sx, sy)) {
-		double xf = wl_fixed_to_double(sx);
-		double yf = wl_fixed_to_double(sy);
+	if (!is_within_constraint_region(constraint, cs)) {
 		pixman_region32_t confine_region;
 		struct wl_array borders;
 		struct border *border;
@@ -4727,15 +5659,16 @@ maybe_warp_confined_pointer(struct weston_pointer_constraint *constraint)
 
 		pixman_region32_init(&confine_region);
 		pixman_region32_intersect(&confine_region,
-					  &constraint->view->surface->input,
+					  &constraint->surface->input,
 					  &constraint->region);
+		assert(pixman_region32_not_empty(&confine_region));
 		region_to_outline(&confine_region, &borders);
 		pixman_region32_fini(&confine_region);
 
 		wl_array_for_each(border, &borders) {
 			double distance_2;
 
-			distance_2 = point_to_border_distance_2(border, xf, yf);
+			distance_2 = point_to_border_distance_2(border, cs);
 			if (distance_2 < closest_distance_2) {
 				closest_border = border;
 				closest_distance_2 = distance_2;
@@ -4743,12 +5676,12 @@ maybe_warp_confined_pointer(struct weston_pointer_constraint *constraint)
 		}
 		assert(closest_border);
 
-		warp_to_behind_border(closest_border, &sx, &sy);
+		warp_to_behind_border(closest_border, &cs);
 
 		wl_array_release(&borders);
 
-		weston_view_to_global_fixed(constraint->view, sx, sy, &x, &y);
-		weston_pointer_move_to(constraint->pointer, x, y);
+		cg = weston_coord_surface_to_global(constraint->view, cs);
+		weston_pointer_move_to(constraint->pointer, cg);
 	}
 }
 
@@ -4761,27 +5694,31 @@ confined_pointer_grab_pointer_motion(struct weston_pointer_grab *grab,
 		container_of(grab, struct weston_pointer_constraint, grab);
 	struct weston_pointer *pointer = grab->pointer;
 	struct weston_surface *surface;
-	wl_fixed_t x, y;
 	wl_fixed_t old_sx = pointer->sx;
 	wl_fixed_t old_sy = pointer->sy;
 	pixman_region32_t confine_region;
+	struct weston_coord_global pos;
+	struct weston_coord_surface surf_pos;
 
 	assert(pointer->focus);
 	assert(pointer->focus->surface == constraint->surface);
 
 	surface = pointer->focus->surface;
 
+	weston_view_update_transform(pointer->focus);
+
 	pixman_region32_init(&confine_region);
 	pixman_region32_intersect(&confine_region,
 				  &surface->input,
 				  &constraint->region);
-	weston_pointer_clamp_event_to_region(pointer, event,
-					     &confine_region, &x, &y);
-	weston_pointer_move_to(pointer, x, y);
+	pos = weston_pointer_clamp_event_to_region(pointer, event,
+						   &confine_region);
+	weston_pointer_move_to(pointer, pos);
 	pixman_region32_fini(&confine_region);
 
-	weston_view_from_global_fixed(pointer->focus, x, y,
-				      &pointer->sx, &pointer->sy);
+	surf_pos = weston_coord_global_to_surface(pointer->focus, pos);
+	pointer->sx = wl_fixed_from_double(surf_pos.c.x);
+	pointer->sy = wl_fixed_from_double(surf_pos.c.y);
 
 	if (old_sx != pointer->sx || old_sy != pointer->sy) {
 		pointer_send_motion(pointer, time,

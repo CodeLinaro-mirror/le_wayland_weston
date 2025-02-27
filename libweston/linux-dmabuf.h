@@ -26,8 +26,7 @@
 #ifndef WESTON_LINUX_DMABUF_H
 #define WESTON_LINUX_DMABUF_H
 
-#include <stdint.h>
-#include "linux-dmabuf-unstable-v1-server-protocol.h"
+#include <libweston/libweston.h>
 
 #define MAX_DMABUF_PLANES 4
 
@@ -152,7 +151,8 @@ int
 weston_direct_display_setup(struct weston_compositor *compositor);
 
 struct linux_dmabuf_buffer *
-linux_dmabuf_buffer_get(struct wl_resource *resource);
+linux_dmabuf_buffer_get(struct weston_compositor *compositor,
+			struct wl_resource *resource);
 
 void
 linux_dmabuf_buffer_set_user_data(struct linux_dmabuf_buffer *buffer,
@@ -172,7 +172,8 @@ void
 weston_dmabuf_feedback_destroy(struct weston_dmabuf_feedback *dmabuf_feedback);
 
 void
-weston_dmabuf_feedback_send_all(struct weston_dmabuf_feedback *dmabuf_feedback,
+weston_dmabuf_feedback_send_all(struct weston_compositor *compositor,
+				struct weston_dmabuf_feedback *dmabuf_feedback,
 				struct weston_dmabuf_feedback_format_table *format_table);
 
 struct weston_dmabuf_feedback_tranche *

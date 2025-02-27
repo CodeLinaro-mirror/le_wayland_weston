@@ -36,6 +36,7 @@
 #include <string.h>
 
 #include "drm-internal.h"
+#include "pixel-formats.h"
 #include "renderer-gl/gl-renderer.h"
 
 #define POISON_PTR ((void *)8)
@@ -47,7 +48,7 @@
  * CRTC's. Also, as this is a fake CRTC, it will not try to populate props.
  */
 static struct drm_crtc *
-drm_virtual_crtc_create(struct drm_backend *b, struct drm_output *output)
+drm_virtual_crtc_create(struct drm_device *device, struct drm_output *output)
 {
 	struct drm_crtc *crtc;
 
@@ -55,7 +56,7 @@ drm_virtual_crtc_create(struct drm_backend *b, struct drm_output *output)
 	if (!crtc)
 		return NULL;
 
-	crtc->backend = b;
+	crtc->device = device;
 	crtc->output = output;
 
 	crtc->crtc_id = 0;
@@ -81,17 +82,32 @@ drm_virtual_crtc_destroy(struct drm_crtc *crtc)
 	free(crtc);
 }
 
+static uint32_t
+get_drm_plane_index_maximum(struct drm_device *device)
+{
+	uint32_t max = 0;
+	struct drm_plane *p;
+
+	wl_list_for_each(p, &device->plane_list, link) {
+		if (p->plane_idx > max)
+			max = p->plane_idx;
+	}
+
+	return max;
+}
+
 /**
  * Create a drm_plane for virtual output
  *
  * Call drm_virtual_plane_destroy to clean up the plane.
  *
- * @param b DRM compositor backend
+ * @param device DRM device
  * @param output Output to create internal plane for
  */
 static struct drm_plane *
-drm_virtual_plane_create(struct drm_backend *b, struct drm_output *output)
+drm_virtual_plane_create(struct drm_device *device, struct drm_output *output)
 {
+	struct drm_backend *b = device->backend;
 	struct drm_plane *plane;
 	struct weston_drm_format *fmt;
 	uint64_t mod;
@@ -103,19 +119,20 @@ drm_virtual_plane_create(struct drm_backend *b, struct drm_output *output)
 	}
 
 	plane->type = WDRM_PLANE_TYPE_PRIMARY;
-	plane->backend = b;
+	plane->device = device;
 	plane->state_cur = drm_plane_state_alloc(NULL, plane);
 	plane->state_cur->complete = true;
 
 	weston_drm_format_array_init(&plane->formats);
-	fmt = weston_drm_format_array_add_format(&plane->formats, output->gbm_format);
+	fmt = weston_drm_format_array_add_format(&plane->formats,
+						 output->format->format);
 	if (!fmt)
 		goto err;
 
 	/* If output supports linear modifier, we add it to the plane.
 	 * Otherwise we add DRM_FORMAT_MOD_INVALID, as explicit modifiers
 	 * are not supported. */
-	if ((output->gbm_bo_flags & GBM_BO_USE_LINEAR) && b->fb_modifiers)
+	if ((output->gbm_bo_flags & GBM_BO_USE_LINEAR) && device->fb_modifiers)
 		mod = DRM_FORMAT_MOD_LINEAR;
 	else
 		mod = DRM_FORMAT_MOD_INVALID;
@@ -123,8 +140,10 @@ drm_virtual_plane_create(struct drm_backend *b, struct drm_output *output)
 	if (weston_drm_format_add_modifier(fmt, mod) < 0)
 		goto err;
 
-	weston_plane_init(&plane->base, b->compositor, 0, 0);
-	wl_list_insert(&b->plane_list, &plane->link);
+	weston_plane_init(&plane->base, b->compositor);
+
+	plane->plane_idx = get_drm_plane_index_maximum(device) + 1;
+	wl_list_insert(&device->plane_list, &plane->link);
 
 	return plane;
 
@@ -163,11 +182,10 @@ static int
 drm_virtual_output_submit_frame(struct drm_output *output,
 				struct drm_fb *fb)
 {
-	struct drm_backend *b = to_drm_backend(output->base.compositor);
 	int fd, ret;
 
 	assert(fb->num_planes == 1);
-	ret = drmPrimeHandleToFD(b->drm.fd, fb->handles[0], DRM_CLOEXEC, &fd);
+	ret = drmPrimeHandleToFD(fb->fd, fb->handles[0], DRM_CLOEXEC, &fd);
 	if (ret) {
 		weston_log("drmPrimeHandleFD failed, errno=%d\n", errno);
 		return -1;
@@ -184,17 +202,19 @@ drm_virtual_output_submit_frame(struct drm_output *output,
 }
 
 static int
-drm_virtual_output_repaint(struct weston_output *output_base,
-			   pixman_region32_t *damage,
-			   void *repaint_data)
+drm_virtual_output_repaint(struct weston_output *output_base)
 {
-	struct drm_pending_state *pending_state = repaint_data;
 	struct drm_output_state *state = NULL;
 	struct drm_output *output = to_drm_output(output_base);
 	struct drm_plane *scanout_plane = output->scanout_plane;
 	struct drm_plane_state *scanout_state;
+	struct drm_pending_state *pending_state;
+	struct drm_device *device;
 
 	assert(output->virtual);
+
+	device = output->device;
+	pending_state = device->repaint_data;
 
 	if (output->disable_pending || output->destroy_pending)
 		goto err;
@@ -216,7 +236,7 @@ drm_virtual_output_repaint(struct weston_output *output_base,
 						   pending_state,
 						   DRM_OUTPUT_STATE_CLEAR_PLANES);
 
-	drm_output_render(state, damage);
+	drm_output_render(state);
 	scanout_state = drm_output_state_get_plane(state, scanout_plane);
 	if (!scanout_state || !scanout_state->fb)
 		goto err;
@@ -242,7 +262,7 @@ drm_virtual_output_deinit(struct weston_output *base)
 	drm_virtual_crtc_destroy(output->crtc);
 }
 
-static void
+void
 drm_virtual_output_destroy(struct weston_output *base)
 {
 	struct drm_output *output = to_drm_output(base);
@@ -256,6 +276,9 @@ drm_virtual_output_destroy(struct weston_output *base)
 
 	drm_output_state_free(output->state_cur);
 
+	if (output->virtual_destroy)
+		output->virtual_destroy(base);
+
 	free(output);
 }
 
@@ -263,11 +286,12 @@ static int
 drm_virtual_output_enable(struct weston_output *output_base)
 {
 	struct drm_output *output = to_drm_output(output_base);
-	struct drm_backend *b = to_drm_backend(output_base->compositor);
+	struct drm_device *device = output->device;
+	struct drm_backend *b = device->backend;
 
 	assert(output->virtual);
 
-	if (b->use_pixman) {
+	if (output_base->compositor->renderer->type == WESTON_RENDERER_PIXMAN) {
 		weston_log("Not support pixman renderer on Virtual output\n");
 		goto err;
 	}
@@ -277,7 +301,7 @@ drm_virtual_output_enable(struct weston_output *output_base)
 		goto err;
 	}
 
-	output->scanout_plane = drm_virtual_plane_create(b, output);
+	output->scanout_plane = drm_virtual_plane_create(device, output);
 	if (!output->scanout_plane) {
 		weston_log("Failed to find primary plane for output %s\n",
 			   output->base.name);
@@ -299,7 +323,7 @@ drm_virtual_output_enable(struct weston_output *output_base)
 
 	weston_compositor_stack_plane(b->compositor,
 				      &output->scanout_plane->base,
-				      &b->compositor->primary_plane);
+				      &output->base.primary_plane);
 
 	return 0;
 err:
@@ -320,22 +344,27 @@ drm_virtual_output_disable(struct weston_output *base)
 }
 
 static struct weston_output *
-drm_virtual_output_create(struct weston_compositor *c, char *name)
+drm_virtual_output_create(struct weston_compositor *c, char *name,
+			  void (*destroy_func)(struct weston_output *))
 {
 	struct drm_output *output;
 	struct drm_backend *b = to_drm_backend(c);
+	/* Always use the main device for virtual outputs */
+	struct drm_device *device = b->drm;
 
 	output = zalloc(sizeof *output);
 	if (!output)
 		return NULL;
 
-	output->crtc = drm_virtual_crtc_create(b, output);
+	output->device = device;
+	output->crtc = drm_virtual_crtc_create(device, output);
 	if (!output->crtc) {
 		free(output);
 		return NULL;
 	}
 
 	output->virtual = true;
+	output->virtual_destroy = destroy_func;
 	output->gbm_bo_flags = GBM_BO_USE_LINEAR | GBM_BO_USE_RENDERING;
 
 	weston_output_init(&output->base, c, name);
@@ -345,6 +374,7 @@ drm_virtual_output_create(struct weston_compositor *c, char *name)
 	output->base.disable = drm_virtual_output_disable;
 	output->base.attach_head = NULL;
 
+	output->backend = b;
 	output->state_cur = drm_output_state_alloc(output, NULL);
 
 	weston_compositor_add_pending_output(&output->base, c);
@@ -357,12 +387,13 @@ drm_virtual_output_set_gbm_format(struct weston_output *base,
 				  const char *gbm_format)
 {
 	struct drm_output *output = to_drm_output(base);
-	struct drm_backend *b = to_drm_backend(base->compositor);
+	struct drm_device *device = output->device;
+	struct drm_backend *b = device->backend;
 
-	if (parse_gbm_format(gbm_format, b->gbm_format, &output->gbm_format) == -1)
-		output->gbm_format = b->gbm_format;
+	if (parse_gbm_format(gbm_format, b->format, &output->format) == -1)
+		output->format = b->format;
 
-	return output->gbm_format;
+	return output->format->format;
 }
 
 static void
@@ -377,7 +408,10 @@ drm_virtual_output_set_submit_frame_cb(struct weston_output *output_base,
 static int
 drm_virtual_output_get_fence_fd(struct weston_output *output_base)
 {
-	return gl_renderer->create_fence_fd(output_base);
+	struct weston_compositor *compositor = output_base->compositor;
+	const struct weston_renderer *renderer = compositor->renderer;
+
+	return renderer->gl->create_fence_fd(output_base);
 }
 
 static void

@@ -45,11 +45,13 @@
 #include <linux/input.h>
 
 #include <wayland-client.h>
+#include <wayland-cursor.h>
 #include <libweston/zalloc.h>
 #include "xdg-shell-client-protocol.h"
 #include "fullscreen-shell-unstable-v1-client-protocol.h"
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
 #include "weston-direct-display-client-protocol.h"
+#include "viewporter-client-protocol.h"
 
 #include "shared/helpers.h"
 #include "shared/weston-drm-fourcc.h"
@@ -57,6 +59,10 @@
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 #define OPT_FLAG_INVERT (1 << 0)
 #define OPT_FLAG_DIRECT_DISPLAY (1 << 1)
+#define WIN_FLAG_FULLSCREEN (1 << 0)
+#define WIN_FLAG_FULLSCREEN_CURSOR (1 << 1)
+
+struct window;
 
 static void
 redraw(void *data, struct wl_callback *callback, uint32_t time);
@@ -104,17 +110,24 @@ struct display {
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
 	struct wl_seat *seat;
+	struct wl_pointer *pointer;
 	struct wl_keyboard *keyboard;
+	struct wl_shm *shm;
+	struct wl_cursor_theme *cursor_theme;
+	struct wl_cursor *default_cursor;
+	struct wl_surface *cursor_surface;
 	struct xdg_wm_base *wm_base;
 	struct zwp_fullscreen_shell_v1 *fshell;
 	struct zwp_linux_dmabuf_v1 *dmabuf;
 	struct weston_direct_display_v1 *direct_display;
+	struct wp_viewporter *viewporter;
 	bool requested_format_found;
 	uint32_t opts;
 
 	int v4l_fd;
 	struct buffer_format format;
 	uint32_t drm_format;
+	struct window *window;
 };
 
 struct buffer {
@@ -127,7 +140,7 @@ struct buffer {
 	int data_offsets[VIDEO_MAX_PLANES];
 };
 
-#define NUM_BUFFERS 3
+#define NUM_BUFFERS 4
 
 struct window {
 	struct display *display;
@@ -136,8 +149,11 @@ struct window {
 	struct xdg_toplevel *xdg_toplevel;
 	struct buffer buffers[NUM_BUFFERS];
 	struct wl_callback *callback;
+	struct wp_viewport *viewport;
 	bool wait_for_configure;
 	bool initialized;
+	bool fullscreen;
+	bool fullscreen_cursor;
 };
 
 static bool running = true;
@@ -203,7 +219,6 @@ static unsigned int
 set_format(struct display *display, uint32_t format)
 {
 	struct v4l2_format fmt;
-	char buf[4];
 
 	CLEAR(fmt);
 
@@ -214,30 +229,33 @@ set_format(struct display *display, uint32_t format)
 		return 0;
 	}
 
+	/* NOTE: pix and pix_mp are in a union, pixelformat member maps between them. */
+	const int format_matches = fmt.fmt.pix.pixelformat == format;
+
 	/* No need to set the format if it already is the one we want */
 	if (display->format.type == V4L2_BUF_TYPE_VIDEO_CAPTURE &&
-	    fmt.fmt.pix.pixelformat == format)
+            format_matches)
 		return 1;
 	if (display->format.type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE &&
-	    fmt.fmt.pix_mp.pixelformat == format)
+            format_matches)
 		return fmt.fmt.pix_mp.num_planes;
 
-	if (display->format.type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
-		fmt.fmt.pix.pixelformat = format;
-	else
-		fmt.fmt.pix_mp.pixelformat = format;
+	fmt.fmt.pix.pixelformat = format;
 
 	if (xioctl(display->v4l_fd, VIDIOC_S_FMT, &fmt) == -1) {
 		perror("VIDIOC_S_FMT");
 		return 0;
 	}
 
-	if ((display->format.type == V4L2_BUF_TYPE_VIDEO_CAPTURE &&
-	     fmt.fmt.pix.pixelformat != format) ||
-	    (display->format.type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE &&
-	     fmt.fmt.pix_mp.pixelformat != format)) {
-		fprintf(stderr, "Failed to set format to %.4s\n",
-		        dump_format(format, buf));
+	const int format_was_set = fmt.fmt.pix.pixelformat == format;
+	if (!format_was_set) {
+		char want_name[4];
+		char have_name[4];
+
+		dump_format(format, want_name);
+		dump_format(fmt.fmt.pix.pixelformat, have_name);
+		fprintf(stderr, "Tried to set format: %.4s but have: %.4s\n",
+				 want_name, have_name);
 		return 0;
 	}
 
@@ -379,7 +397,7 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer)
 	struct zwp_linux_buffer_params_v1 *params;
 	uint64_t modifier;
 	uint32_t flags;
-	unsigned i;
+	int i;
 
 	modifier = 0;
 	flags = 0;
@@ -399,7 +417,13 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer)
 		}
 	}
 
-	for (i = 0; i < display->format.num_planes; ++i)
+	const int num_planes = (int) display->format.num_planes;
+
+	for (i = 0; i < num_planes; ++i) {
+		fprintf(stderr, "buffer %d, plane %d has dma fd %d and stride "
+				"%d and modifier %" PRIu64 "\n",
+				buffer->index, i, buffer->dmabuf_fds[i],
+				display->format.strides[i], modifier);
 		zwp_linux_buffer_params_v1_add(params,
 		                               buffer->dmabuf_fds[i],
 		                               i, /* plane_idx */
@@ -407,8 +431,124 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer)
 		                               display->format.strides[i],
 		                               modifier >> 32,
 		                               modifier & 0xffffffff);
-	zwp_linux_buffer_params_v1_add_listener(params, &params_listener,
-	                                        buffer);
+	}
+
+	/* Some v4l2 devices can output NV12, but will do so without the MPLANE
+	 * api. Instead, it outputs both the luminance and chrominance planes
+	 * in the same dma buffer. Here we account for that, and add an extra
+	 * plane from the same buffer if necessary. If it needs an extra plane,
+	 * set the stride of the chrominance plane. NOTE: Also handles cases
+	 * where 3 planes are expected in 1 dma buffer (untested)
+	 */
+	enum plane_layout_t {
+		DISJOINT = 0,
+		CONTIGUOUS,
+	};
+	enum chrom_packing_t {
+		CHROM_SEPARATE = 0, /* Cr/Cb are in their own planes. */
+		CHROM_COMBINED,     /* Cr/Cb are interleaved. */
+	};
+
+	/* This table contains some planar formats we could fix-up and support. */
+	const struct planar_layout_t {
+		/* Format identification. */
+		uint32_t v4l_fourcc;
+		/* Disjoint or contigious planes? */
+		enum plane_layout_t plane_layout;
+		/* Zero if Cb/Cr in separate planes. */
+		enum chrom_packing_t chrom_packing;
+		/* Expected plane count. */
+		int num_planes;
+		/* Horizontal sub-sampling for chroma. */
+		int chroma_subsample_hori;
+		/* Vertical sub-sampling for chroma. */
+		int chroma_subsample_vert;
+	} planar_layouts[] = {
+		{ V4L2_PIX_FMT_NV12M,	DISJOINT,	CHROM_COMBINED,	2, 2,2 },
+		{ V4L2_PIX_FMT_NV21M,	DISJOINT,	CHROM_COMBINED,	2, 2,2 },
+		{ V4L2_PIX_FMT_NV16M,	DISJOINT,	CHROM_COMBINED,	2, 2,1 },
+		{ V4L2_PIX_FMT_NV61M,	DISJOINT,	CHROM_COMBINED,	2, 2,1 },
+		{ V4L2_PIX_FMT_NV12,	CONTIGUOUS,	CHROM_COMBINED,	2, 2,2 },
+		{ V4L2_PIX_FMT_NV21,	CONTIGUOUS,	CHROM_COMBINED,	2, 2,2 },
+		{ V4L2_PIX_FMT_NV16,	CONTIGUOUS,	CHROM_COMBINED,	2, 2,1 },
+		{ V4L2_PIX_FMT_NV61,	CONTIGUOUS,	CHROM_COMBINED,	2, 2,1 },
+		{ V4L2_PIX_FMT_NV24,	CONTIGUOUS,	CHROM_COMBINED,	2, 1,1 },
+		{ V4L2_PIX_FMT_NV42,	CONTIGUOUS,	CHROM_COMBINED,	2, 1,1 },
+		{ V4L2_PIX_FMT_YUV420,	CONTIGUOUS,	CHROM_SEPARATE,	3, 2,2 },
+		{ V4L2_PIX_FMT_YVU420,	CONTIGUOUS,    	CHROM_SEPARATE,	3, 2,2 },
+		{ V4L2_PIX_FMT_YUV420M,	DISJOINT,	CHROM_SEPARATE,	3, 2,2 },
+		{ V4L2_PIX_FMT_YVU420M,	DISJOINT,	CHROM_SEPARATE,	3, 2,2 },
+		{ 0, 0, 0, 0, 0 },
+	};
+
+	int layoutnr = 0;
+	int num_missing_planes = 0;	/* Non-zero if format needs more planes in dma buf. */
+	int stride_extra_plane = 0;
+	int vrtres_extra_plane = 0;
+	const uint32_t stride0 = display->format.strides[0];
+
+	/* Search the table. */
+	while (planar_layouts[layoutnr].v4l_fourcc) {
+		const struct planar_layout_t *layout =
+			planar_layouts + layoutnr;
+
+		if (layout->v4l_fourcc == display->format.format) {
+			/* If disjoint planes are missing, there is nothing to
+			 * salvage. */
+			if (layout->plane_layout == DISJOINT)
+				assert(num_planes == layout->num_planes);
+
+			/* Is this a case where we need to add 1 or 2 missing
+			 * planes? */
+			num_missing_planes = layout->num_planes - num_planes;
+			if (num_missing_planes > 0) {
+				/* With this knowledge:
+				 * - Stride for Y
+				 * - Packing of chrominance
+				 * - Horizontal subsampling ...we can compute
+				 *   the stride for Cr and Cb.
+				 */
+				const uint32_t num_chrom_parts =
+                                        layout->chrom_packing == CHROM_COMBINED ? 2 : 1;
+				stride_extra_plane =
+					stride0 * num_chrom_parts /
+					layout->chroma_subsample_hori;
+				vrtres_extra_plane =
+                                        display->format.height /
+					layout->chroma_subsample_vert;
+				break;
+			}
+		}
+		layoutnr += 1;
+	}
+	/* If we determined we need additional planes, add them. */
+	int offset_in_buffer = buffer->data_offsets[0] +
+			       display->format.height * stride0;
+
+	for (i = 0; i < num_missing_planes; ++i) {
+		/* Add same dma buffer, but with offset for chromimance plane. */
+		fprintf(stderr,"Adding additional chrominance plane.\n");
+		zwp_linux_buffer_params_v1_add(params,
+					       buffer->dmabuf_fds[0],
+					       1 + i, /* plane_idx */
+					       offset_in_buffer,
+					       stride_extra_plane,
+					       modifier >> 32,
+					       modifier & 0xffffffff);
+		offset_in_buffer += vrtres_extra_plane * stride_extra_plane;
+	}
+
+	zwp_linux_buffer_params_v1_add_listener(params, &params_listener, buffer);
+
+	fprintf(stderr,"creating buffer of size %dx%d format %c%c%c%c flags %d\n",
+		display->format.width,
+		display->format.height,
+		(display->drm_format >>  0) & 0xff,
+		(display->drm_format >>  8) & 0xff,
+		(display->drm_format >> 16) & 0xff,
+		(display->drm_format >> 24) & 0xff,
+		flags
+	);
 	zwp_linux_buffer_params_v1_create(params,
 	                                  display->format.width,
 	                                  display->format.height,
@@ -585,6 +725,41 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *toplevel,
 			      int32_t width, int32_t height,
 			      struct wl_array *states)
 {
+	struct window *window = data;
+	uint32_t *p;
+
+	window->fullscreen = 0;
+	wl_array_for_each(p, states) {
+		uint32_t state = *p;
+		switch (state) {
+		case XDG_TOPLEVEL_STATE_FULLSCREEN:
+			window->fullscreen = 1;
+			break;
+		}
+	}
+
+	if (!window->viewport)
+		return;
+
+	if (window->fullscreen) {
+		float ratio_w = (float)width / window->display->format.width;
+		float ratio_h = (float)height / window->display->format.height;
+		int32_t viewport_w;
+		int32_t viewport_h;
+
+		if (ratio_w > ratio_h) {
+			viewport_w = width / ratio_w * ratio_h;
+			viewport_h = height;
+		} else {
+			viewport_w = width;
+			viewport_h = height / ratio_h * ratio_w;
+		}
+
+		wp_viewport_set_destination(window->viewport, viewport_w,
+					    viewport_h);
+	} else {
+		wp_viewport_set_destination(window->viewport, -1, -1);
+	}
 }
 
 static void
@@ -599,7 +774,7 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 };
 
 static struct window *
-create_window(struct display *display)
+create_window(struct display *display, uint32_t win_flags)
 {
 	struct window *window;
 
@@ -612,6 +787,12 @@ create_window(struct display *display)
 	window->surface = wl_compositor_create_surface(display->compositor);
 
 	if (display->wm_base) {
+		if (display->viewporter) {
+			window->viewport =
+				wp_viewporter_get_viewport(display->viewporter,
+							   window->surface);
+		}
+
 		window->xdg_surface =
 			xdg_wm_base_get_xdg_surface(display->wm_base,
 						    window->surface);
@@ -632,6 +813,11 @@ create_window(struct display *display)
 		xdg_toplevel_set_title(window->xdg_toplevel, "simple-dmabuf-v4l");
 		xdg_toplevel_set_app_id(window->xdg_toplevel,
 				"org.freedesktop.weston.simple-dmabuf-v4l");
+
+		if (win_flags & WIN_FLAG_FULLSCREEN)
+			xdg_toplevel_set_fullscreen(window->xdg_toplevel, NULL);
+		if (win_flags & WIN_FLAG_FULLSCREEN_CURSOR)
+			window->fullscreen_cursor = true;
 
 		window->wait_for_configure = true;
 		wl_surface_commit(window->surface);
@@ -655,6 +841,9 @@ destroy_window(struct window *window)
 
 	if (window->callback)
 		wl_callback_destroy(window->callback);
+
+	if (window->viewport)
+		wp_viewport_destroy(window->viewport);
 
 	if (window->xdg_toplevel)
 		xdg_toplevel_destroy(window->xdg_toplevel);
@@ -708,9 +897,7 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 	assert(!buffer->busy);
 
 	wl_surface_attach(window->surface, buffer->buffer, 0, 0);
-	wl_surface_damage(window->surface, 0, 0,
-	                  window->display->format.width,
-	                  window->display->format.height);
+	wl_surface_damage(window->surface, 0, 0, INT32_MAX, INT32_MAX);
 
 	if (callback)
 		wl_callback_destroy(callback);
@@ -730,7 +917,7 @@ dmabuf_modifier(void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf,
 		 uint32_t format, uint32_t modifier_hi, uint32_t modifier_lo)
 {
 	struct display *d = data;
-	uint64_t modifier = ((uint64_t) modifier_hi << 32 ) | modifier_lo;
+	uint64_t modifier = u64_from_u32s(modifier_hi, modifier_lo);
 
 	if (format == d->drm_format && modifier == DRM_FORMAT_MOD_LINEAR)
 		d->requested_format_found = true;
@@ -747,6 +934,75 @@ dmabuf_format(void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf,
 static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
 	dmabuf_format,
 	dmabuf_modifier
+};
+
+static void
+pointer_handle_enter(void *data, struct wl_pointer *pointer,
+		     uint32_t serial, struct wl_surface *surface,
+		     wl_fixed_t sx, wl_fixed_t sy)
+{
+	struct display *display = data;
+	struct wl_buffer *buffer;
+	struct wl_cursor *cursor = display->default_cursor;
+	struct wl_cursor_image *image;
+
+	if (display->window->fullscreen && !display->window->fullscreen_cursor)
+		wl_pointer_set_cursor(pointer, serial, NULL, 0, 0);
+	else if (cursor) {
+		image = cursor->images[0];
+		buffer = wl_cursor_image_get_buffer(image);
+		if (!buffer)
+			return;
+		wl_pointer_set_cursor(pointer, serial,
+				      display->cursor_surface,
+				      image->hotspot_x,
+				      image->hotspot_y);
+		wl_surface_attach(display->cursor_surface, buffer, 0, 0);
+		wl_surface_damage(display->cursor_surface, 0, 0,
+				  image->width, image->height);
+		wl_surface_commit(display->cursor_surface);
+	}
+}
+
+static void
+pointer_handle_leave(void *data, struct wl_pointer *pointer,
+		     uint32_t serial, struct wl_surface *surface)
+{
+}
+
+static void
+pointer_handle_motion(void *data, struct wl_pointer *pointer,
+		      uint32_t time, wl_fixed_t sx, wl_fixed_t sy)
+{
+}
+
+static void
+pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
+		      uint32_t serial, uint32_t time, uint32_t button,
+		      uint32_t state)
+{
+	struct display *display = data;
+
+	if (!display->window->xdg_toplevel)
+		return;
+
+	if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_PRESSED)
+		xdg_toplevel_move(display->window->xdg_toplevel,
+				  display->seat, serial);
+}
+
+static void
+pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
+		    uint32_t time, uint32_t axis, wl_fixed_t value)
+{
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+	pointer_handle_enter,
+	pointer_handle_leave,
+	pointer_handle_motion,
+	pointer_handle_button,
+	pointer_handle_axis,
 };
 
 static void
@@ -780,7 +1036,12 @@ keyboard_handle_key(void *data, struct wl_keyboard *keyboard,
 	if (!d->wm_base)
 		return;
 
-	if (key == KEY_ESC && state)
+	if (key == KEY_F11 && state) {
+		if (d->window->fullscreen)
+			xdg_toplevel_unset_fullscreen(d->window->xdg_toplevel);
+		else
+			xdg_toplevel_set_fullscreen(d->window->xdg_toplevel, NULL);
+	} else if (key == KEY_ESC && state)
 		running = false;
 }
 
@@ -805,6 +1066,14 @@ seat_handle_capabilities(void *data, struct wl_seat *seat,
                          enum wl_seat_capability caps)
 {
 	struct display *d = data;
+
+	if ((caps & WL_SEAT_CAPABILITY_POINTER) && !d->pointer) {
+		d->pointer = wl_seat_get_pointer(seat);
+		wl_pointer_add_listener(d->pointer, &pointer_listener, d);
+	} else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && d->pointer) {
+		wl_pointer_destroy(d->pointer);
+		d->pointer = NULL;
+	}
 
 	if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !d->keyboard) {
 		d->keyboard = wl_seat_get_keyboard(seat);
@@ -835,30 +1104,48 @@ registry_handle_global(void *data, struct wl_registry *registry,
 {
 	struct display *d = data;
 
-	if (strcmp(interface, "wl_compositor") == 0) {
+	if (strcmp(interface, wl_compositor_interface.name) == 0) {
 		d->compositor =
 			wl_registry_bind(registry,
 			                 id, &wl_compositor_interface, 1);
-	} else if (strcmp(interface, "wl_seat") == 0) {
+	} else if (strcmp(interface, wl_seat_interface.name) == 0) {
 		d->seat = wl_registry_bind(registry,
 		                           id, &wl_seat_interface, 1);
 		wl_seat_add_listener(d->seat, &seat_listener, d);
-	} else if (strcmp(interface, "xdg_wm_base") == 0) {
+	} else if (strcmp(interface, wl_shm_interface.name) == 0) {
+		d->shm = wl_registry_bind(registry, id,
+					  &wl_shm_interface, 1);
+		d->cursor_theme = wl_cursor_theme_load(NULL, 32, d->shm);
+		if (!d->cursor_theme) {
+			fprintf(stderr, "unable to load default theme\n");
+			return;
+		}
+		d->default_cursor =
+			wl_cursor_theme_get_cursor(d->cursor_theme, "left_ptr");
+		if (!d->default_cursor) {
+			fprintf(stderr, "unable to load default left pointer\n");
+			// TODO: abort ?
+		}
+	} else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
 		d->wm_base = wl_registry_bind(registry,
 					      id, &xdg_wm_base_interface, 1);
 		xdg_wm_base_add_listener(d->wm_base, &wm_base_listener, d);
-	} else if (strcmp(interface, "zwp_fullscreen_shell_v1") == 0) {
+	} else if (strcmp(interface, zwp_fullscreen_shell_v1_interface.name) == 0) {
 		d->fshell = wl_registry_bind(registry,
 		                             id, &zwp_fullscreen_shell_v1_interface,
 		                             1);
-	} else if (strcmp(interface, "zwp_linux_dmabuf_v1") == 0) {
+	} else if (strcmp(interface, zwp_linux_dmabuf_v1_interface.name) == 0) {
 		d->dmabuf = wl_registry_bind(registry,
 		                             id, &zwp_linux_dmabuf_v1_interface, 3);
 		zwp_linux_dmabuf_v1_add_listener(d->dmabuf, &dmabuf_listener,
 		                                 d);
-	} else if (strcmp(interface, "weston_direct_display_v1") == 0) {
+	} else if (strcmp(interface, weston_direct_display_v1_interface.name) == 0) {
 		d->direct_display = wl_registry_bind(registry,
 						     id, &weston_direct_display_v1_interface, 1);
+	} else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
+		d->viewporter = wl_registry_bind(registry, id,
+						 &wp_viewporter_interface,
+						 1);
 	}
 }
 
@@ -900,21 +1187,32 @@ create_display(uint32_t requested_format, uint32_t opt_flags)
 	wl_display_roundtrip(display->display);
 
 	if (!display->requested_format_found) {
-		fprintf(stderr, "0x%lx requested DRM format not available\n",
-				(unsigned long) requested_format);
+		char want_name[4];
+
+		dump_format(requested_format, want_name);
+		fprintf(stderr, "Requested DRM format %4s not available\n", want_name);
 		exit(1);
 	}
 
 	if (opt_flags)
 		display->opts = opt_flags;
+
+	display->cursor_surface =
+		wl_compositor_create_surface(display->compositor);
+
 	return display;
 }
 
 static void
 destroy_display(struct display *display)
 {
+	wl_surface_destroy(display->cursor_surface);
+
 	if (display->dmabuf)
 		zwp_linux_dmabuf_v1_destroy(display->dmabuf);
+
+	if (display->viewporter)
+		wp_viewporter_destroy(display->viewporter);
 
 	if (display->wm_base)
 		xdg_wm_base_destroy(display->wm_base);
@@ -934,7 +1232,7 @@ destroy_display(struct display *display)
 static void
 usage(const char *argv0)
 {
-	printf("Usage: %s [-v v4l2_device] [-f v4l2_format] [-d drm_format] [-i|--y-invert] [-g|--d-display]\n"
+	printf("Usage: %s [-v v4l2_device] [-f v4l2_format] [-d drm_format] [-i|--y-invert] [-g|--d-display] [-s|--fullscreen]\n"
 	       "\n"
 	       "The default V4L2 device is /dev/video0\n"
 	       "\n"
@@ -949,7 +1247,9 @@ usage(const char *argv0)
 	       "automatically added if we detect if the camera sensor is "
 	       "y-flipped\n"
 	       "- d-display skip importing dmabuf-based buffer into the GPU\n  "
-	       "and attempt pass the buffer straight to the display controller\n",
+	       "and attempt pass the buffer straight to the display controller\n"
+	       "- fullscreen make the window fullscreen and scale up the image\n"
+	       "- fs-cursor show the cursor in fullscreen mode\n",
 	       argv0);
 
 	printf("\n"
@@ -990,6 +1290,7 @@ main(int argc, char **argv)
 	uint32_t v4l_format = 0x0;
 	uint32_t drm_format = 0x0;
 	uint32_t opts_flags = 0x0;
+	uint32_t win_flags = 0x0;
 	int c, opt_index, ret = 0;
 
 	static struct option long_options[] = {
@@ -998,11 +1299,13 @@ main(int argc, char **argv)
 		{ "drm-format",	 required_argument, NULL, 'd' },
 		{ "y-invert",    no_argument, 	    NULL, 'i' },
 		{ "d-display",   no_argument, 	    NULL, 'g' },
+		{ "fullscreen",  no_argument, 	    NULL, 's' },
+		{ "fs-cursor",   no_argument, 	    NULL, 'c' },
 		{ "help",        no_argument,       NULL, 'h' },
 		{ 0,             0,                 NULL,  0  }
 	};
 
-	while ((c = getopt_long(argc, argv, "hiv:d:f:g", long_options,
+	while ((c = getopt_long(argc, argv, "hiv:d:f:gsc", long_options,
 				&opt_index)) != -1) {
 		switch (c) {
 		case 'v':
@@ -1019,6 +1322,12 @@ main(int argc, char **argv)
 			break;
 		case 'g':
 			opts_flags |= OPT_FLAG_DIRECT_DISPLAY;
+			break;
+		case 's':
+			win_flags |= WIN_FLAG_FULLSCREEN;
+			break;
+		case 'c':
+			win_flags |= WIN_FLAG_FULLSCREEN_CURSOR;
 			break;
 		default:
 		case 'h':
@@ -1039,7 +1348,7 @@ main(int argc, char **argv)
 	display = create_display(drm_format, opts_flags);
 	display->format.format = v4l_format;
 
-	window = create_window(display);
+	display->window = window = create_window(display, win_flags);
 	if (!window)
 		return 1;
 

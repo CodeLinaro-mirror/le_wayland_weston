@@ -1,5 +1,5 @@
 #!/bin/bash
-# 
+#
 # Constructs the base container image used to build Weston within CI. Per the
 # comment at the top of .gitlab-ci.yml, any changes in this file must bump the
 # $FDO_DISTRIBUTION_TAG variable so we know the container has to be rebuilt.
@@ -22,13 +22,13 @@ MESA_DEV_PKGS="
 	libxrandr-dev
 	libxshmfence-dev
 	libxrandr-dev
-	llvm-11-dev
+	llvm-${LLVM_VERSION}-dev
 	python3-mako
 "
 
 # Needed for running the custom-built mesa
 MESA_RUNTIME_PKGS="
-	libllvm11
+	libllvm${LLVM_VERSION}
 "
 
 apt-get update
@@ -36,12 +36,14 @@ apt-get -y --no-install-recommends install \
 	autoconf \
 	automake \
 	build-essential \
-	clang-11 \
+	clang-${LLVM_VERSION} \
 	curl \
 	doxygen \
+	graphviz \
 	freerdp2-dev \
 	gcovr \
 	git \
+	hwdata \
 	lcov \
 	libasound2-dev \
 	libbluetooth-dev \
@@ -68,6 +70,7 @@ apt-get -y --no-install-recommends install \
 	libmtdev-dev \
 	libpam0g-dev \
 	libpango1.0-dev \
+	libpciaccess-dev \
 	libpixman-1-dev \
 	libpng-dev \
 	libpulse-dev \
@@ -93,15 +96,16 @@ apt-get -y --no-install-recommends install \
 	libxcb-xfixes0-dev \
 	libxcb-xkb-dev \
 	libxcursor-dev \
+	libxcb-cursor-dev \
 	libxdamage-dev \
 	libxext-dev \
 	libxfixes-dev \
 	libxkbcommon-dev \
 	libxml2-dev \
 	libxxf86vm-dev \
-	lld-11 \
-	llvm-11 \
-	llvm-11-dev \
+	lld-${LLVM_VERSION} \
+	llvm-${LLVM_VERSION} \
+	llvm-${LLVM_VERSION}-dev \
 	mesa-common-dev \
 	ninja-build \
 	pkg-config \

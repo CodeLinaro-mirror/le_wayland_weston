@@ -41,21 +41,23 @@
 #include <assert.h>
 
 #include <wayland-client.h>
-#include "window.h"
-#include "shared/cairo-util.h"
+
 #include <libweston/config-parser.h>
+#include <libweston/zalloc.h>
 #include "shared/helpers.h"
 #include "shared/xalloc.h"
-#include <libweston/zalloc.h>
+#include "shared/cairo-util.h"
 #include "shared/file-util.h"
+#include "shared/process-util.h"
 #include "shared/timespec-util.h"
 
+#include "window.h"
+
+#include "tablet-unstable-v2-client-protocol.h"
 #include "weston-desktop-shell-client-protocol.h"
 
 #define DEFAULT_CLOCK_FORMAT CLOCK_FORMAT_MINUTES
 #define DEFAULT_SPACING 10
-
-extern char **environ; /* defined by libc */
 
 enum clock_format {
 	CLOCK_FORMAT_MINUTES,
@@ -142,9 +144,11 @@ struct panel_launcher {
 	cairo_surface_t *icon;
 	int focused, pressed;
 	char *path;
+	char *displayname;
 	struct wl_list link;
-	struct wl_array envp;
-	struct wl_array argv;
+	struct custom_env env;
+	char * const *argp;
+	char * const *envp;
 };
 
 struct panel_clock {
@@ -211,7 +215,6 @@ check_desktop_ready(struct window *window)
 static void
 panel_launcher_activate(struct panel_launcher *widget)
 {
-	char **argv;
 	pid_t pid;
 
 	pid = fork();
@@ -223,13 +226,11 @@ panel_launcher_activate(struct panel_launcher *widget)
 	if (pid)
 		return;
 
-	argv = widget->argv.data;
-
 	if (setsid() == -1)
 		exit(EXIT_FAILURE);
 
-	if (execve(argv[0], argv, widget->envp.data) < 0) {
-		fprintf(stderr, "execl '%s' failed: %s\n", argv[0],
+	if (execve(widget->argp[0], widget->argp, widget->envp) < 0) {
+		fprintf(stderr, "execl '%s' failed: %s\n", widget->argp[0],
 			strerror(errno));
 		exit(1);
 	}
@@ -277,7 +278,7 @@ panel_launcher_motion_handler(struct widget *widget, struct input *input,
 {
 	struct panel_launcher *launcher = data;
 
-	widget_set_tooltip(widget, basename((char *)launcher->path), x, y);
+	widget_set_tooltip(widget, launcher->displayname, x, y);
 
 	return CURSOR_LEFT_PTR;
 }
@@ -372,6 +373,56 @@ panel_launcher_touch_up_handler(struct widget *widget, struct input *input,
 	launcher->focused = 0;
 	widget_schedule_redraw(widget);
 	panel_launcher_activate(launcher);
+}
+
+static void
+panel_launcher_tablet_tool_proximity_in_handler(struct widget *widget,
+						struct tablet_tool *tool,
+						struct tablet *tablet, void *data)
+{
+	struct panel_launcher *launcher;
+
+	launcher = widget_get_user_data(widget);
+	launcher->focused = 1;
+	widget_schedule_redraw(widget);
+}
+
+static void
+panel_launcher_tablet_tool_proximity_out_handler(struct widget *widget,
+						 struct tablet_tool *tool, void *data)
+{
+	struct panel_launcher *launcher;
+
+	launcher = widget_get_user_data(widget);
+	launcher->focused = 0;
+	widget_schedule_redraw(widget);
+}
+
+static void
+panel_launcher_tablet_tool_up_handler(struct widget *widget,
+				      struct tablet_tool *tool,
+				      void *data)
+{
+	struct panel_launcher *launcher;
+
+	launcher = widget_get_user_data(widget);
+	panel_launcher_activate(launcher);
+}
+
+static void
+panel_launcher_tablet_tool_button_handler(struct widget *widget,
+					  struct tablet_tool *tool,
+					  uint32_t button,
+					  uint32_t state_w,
+					  void *data)
+{
+	struct panel_launcher *launcher;
+	enum zwp_tablet_tool_v2_button_state state = state_w;
+
+	launcher = widget_get_user_data(widget);
+
+	if (state == ZWP_TABLET_TOOL_V2_BUTTON_STATE_RELEASED)
+		panel_launcher_activate(launcher);
 }
 
 static void
@@ -575,10 +626,10 @@ panel_configure(void *data,
 static void
 panel_destroy_launcher(struct panel_launcher *launcher)
 {
-	wl_array_release(&launcher->argv);
-	wl_array_release(&launcher->envp);
+	custom_env_fini(&launcher->env);
 
 	free(launcher->path);
+	free(launcher->displayname);
 
 	cairo_surface_destroy(launcher->icon);
 
@@ -678,58 +729,19 @@ load_icon_or_fallback(const char *icon)
 }
 
 static void
-panel_add_launcher(struct panel *panel, const char *icon, const char *path)
+panel_add_launcher(struct panel *panel, const char *icon, const char *path, const char *displayname)
 {
 	struct panel_launcher *launcher;
-	char *start, *p, *eq, **ps;
-	int i, j, k;
 
 	launcher = xzalloc(sizeof *launcher);
 	launcher->icon = load_icon_or_fallback(icon);
 	launcher->path = xstrdup(path);
+	launcher->displayname = xstrdup(displayname);
 
-	wl_array_init(&launcher->envp);
-	wl_array_init(&launcher->argv);
-	for (i = 0; environ[i]; i++) {
-		ps = wl_array_add(&launcher->envp, sizeof *ps);
-		*ps = environ[i];
-	}
-	j = 0;
-
-	start = launcher->path;
-	while (*start) {
-		for (p = start, eq = NULL; *p && !isspace(*p); p++)
-			if (*p == '=')
-				eq = p;
-
-		if (eq && j == 0) {
-			ps = launcher->envp.data;
-			for (k = 0; k < i; k++)
-				if (strncmp(ps[k], start, eq - start) == 0) {
-					ps[k] = start;
-					break;
-				}
-			if (k == i) {
-				ps = wl_array_add(&launcher->envp, sizeof *ps);
-				*ps = start;
-				i++;
-			}
-		} else {
-			ps = wl_array_add(&launcher->argv, sizeof *ps);
-			*ps = start;
-			j++;
-		}
-
-		while (*p && isspace(*p))
-			*p++ = '\0';
-
-		start = p;
-	}
-
-	ps = wl_array_add(&launcher->envp, sizeof *ps);
-	*ps = NULL;
-	ps = wl_array_add(&launcher->argv, sizeof *ps);
-	*ps = NULL;
+	custom_env_init_from_environ(&launcher->env);
+	custom_env_add_from_exec_string(&launcher->env, launcher->path);
+	launcher->envp = custom_env_get_envp(&launcher->env);
+	launcher->argp = custom_env_get_argp(&launcher->env);
 
 	launcher->panel = panel;
 	wl_list_insert(panel->launcher_list.prev, &launcher->link);
@@ -745,6 +757,13 @@ panel_add_launcher(struct panel *panel, const char *icon, const char *path)
 				      panel_launcher_touch_down_handler);
 	widget_set_touch_up_handler(launcher->widget,
 				    panel_launcher_touch_up_handler);
+	widget_set_tablet_tool_up_handler(launcher->widget,
+				panel_launcher_tablet_tool_up_handler);
+	widget_set_tablet_tool_proximity_handlers(launcher->widget,
+				panel_launcher_tablet_tool_proximity_in_handler,
+				panel_launcher_tablet_tool_proximity_out_handler);
+	widget_set_tablet_tool_button_handler(launcher->widget,
+				panel_launcher_tablet_tool_button_handler);
 	widget_set_redraw_handler(launcher->widget,
 				  panel_launcher_redraw_handler);
 	widget_set_motion_handler(launcher->widget,
@@ -1447,7 +1466,7 @@ static void
 panel_add_launchers(struct panel *panel, struct desktop *desktop)
 {
 	struct weston_config_section *s;
-	char *icon, *path;
+	char *icon, *path, *displayname;
 	const char *name;
 	int count;
 
@@ -1459,9 +1478,12 @@ panel_add_launchers(struct panel *panel, struct desktop *desktop)
 
 		weston_config_section_get_string(s, "icon", &icon, NULL);
 		weston_config_section_get_string(s, "path", &path, NULL);
+		weston_config_section_get_string(s, "displayname", &displayname, NULL);
+		if (displayname == NULL)
+			displayname = xstrdup(basename(path));
 
 		if (icon != NULL && path != NULL) {
-			panel_add_launcher(panel, icon, path);
+			panel_add_launcher(panel, icon, path, displayname);
 			count++;
 		} else {
 			fprintf(stderr, "invalid launcher section\n");
@@ -1469,6 +1491,7 @@ panel_add_launchers(struct panel *panel, struct desktop *desktop)
 
 		free(icon);
 		free(path);
+		free(displayname);
 	}
 
 	if (count == 0) {
@@ -1477,7 +1500,8 @@ panel_add_launchers(struct panel *panel, struct desktop *desktop)
 		/* add default launcher */
 		panel_add_launcher(panel,
 				   name,
-				   BINDIR "/weston-terminal");
+				   BINDIR "/weston-terminal",
+				   "Terminal");
 		free(name);
 	}
 }
@@ -1562,7 +1586,7 @@ int main(int argc, char *argv[])
 	if (desktop.want_panel)
 		weston_desktop_shell_set_panel_position(desktop.shell, desktop.panel_position);
 	wl_list_for_each(output, &desktop.outputs, link)
-		if (!output->panel)
+		if (!output->background)
 			output_init(output, &desktop);
 
 	grab_surface_create(&desktop);

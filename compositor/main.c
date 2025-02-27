@@ -1,7 +1,7 @@
 /*
  * Copyright © 2010-2011 Intel Corporation
  * Copyright © 2008-2011 Kristian Høgsberg
- * Copyright © 2012-2018 Collabora, Ltd.
+ * Copyright © 2012-2018,2022 Collabora, Ltd.
  * Copyright © 2010-2011 Benjamin Franzke
  * Copyright © 2013 Jason Ekstrand
  * Copyright © 2017, 2018 General Electric Company
@@ -36,6 +36,7 @@
 #include <dlfcn.h>
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/utsname.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -50,15 +51,19 @@
 #include <libweston/libweston.h>
 #include "shared/os-compatibility.h"
 #include "shared/helpers.h"
+#include "shared/process-util.h"
 #include "shared/string-helpers.h"
+#include "shared/xalloc.h"
 #include "git-version.h"
 #include <libweston/version.h>
 #include "weston.h"
+#include "weston-private.h"
 
 #include <libweston/backend-drm.h>
 #include <libweston/backend-headless.h>
+#include <libweston/backend-pipewire.h>
 #include <libweston/backend-rdp.h>
-#include <libweston/backend-fbdev.h>
+#include <libweston/backend-vnc.h>
 #include <libweston/backend-x11.h>
 #include <libweston/backend-wayland.h>
 #include <libweston/windowed-output-api.h>
@@ -114,19 +119,39 @@ struct wet_layoutput {
 	struct wet_head_array add;	/**< tmp: heads to add as clones */
 };
 
+/** Per-backend listeners and callbacks
+ *
+ * Contains the backend specific head change listener and
+ * output configure callback.
+ */
+struct wet_backend {
+	struct weston_backend *backend;
+	struct wl_listener heads_changed_listener;
+	int (*simple_output_configure)(struct weston_output *output);
+	struct wl_list compositor_link; /**< in wet_compositor::backend_list */
+};
+
+enum require_outputs {
+        REQUIRE_OUTPUTS_ALL_FOUND,
+        REQUIRE_OUTPUTS_ANY,
+        REQUIRE_OUTPUTS_NONE,
+};
+
 struct wet_compositor {
 	struct weston_compositor *compositor;
 	struct weston_config *config;
 	struct wet_output_config *parsed_options;
 	bool drm_use_current_mode;
-	struct wl_listener heads_changed_listener;
-	int (*simple_output_configure)(struct weston_output *output);
 	bool init_failed;
+	struct wl_list backend_list;	/**< wet_backend::compositor_link */
 	struct wl_list layoutput_list;	/**< wet_layoutput::compositor_link */
 	struct wl_list child_process_list;
 	pid_t autolaunch_pid;
 	bool autolaunch_watch;
 	bool use_color_manager;
+	bool drm_backend_loaded;
+	struct wl_listener screenshot_auth;
+	enum require_outputs require_outputs;
 };
 
 static FILE *weston_logfile = NULL;
@@ -134,36 +159,11 @@ static struct weston_log_scope *log_scope;
 static struct weston_log_scope *protocol_scope;
 static int cached_tm_mday = -1;
 
-static char *
-weston_log_timestamp(char *buf, size_t len)
-{
-	struct timeval tv;
-	struct tm *brokendown_time;
-	char datestr[128];
-	char timestr[128];
+static void
+load_remoting(struct weston_compositor *c, struct weston_config *wc);
 
-	gettimeofday(&tv, NULL);
-
-	brokendown_time = localtime(&tv.tv_sec);
-	if (brokendown_time == NULL) {
-		snprintf(buf, len, "%s", "[(NULL)localtime] ");
-		return buf;
-	}
-
-	memset(datestr, 0, sizeof(datestr));
-	if (brokendown_time->tm_mday != cached_tm_mday) {
-		strftime(datestr, sizeof(datestr), "Date: %Y-%m-%d %Z\n",
-			 brokendown_time);
-		cached_tm_mday = brokendown_time->tm_mday;
-	}
-
-	strftime(timestr, sizeof(timestr), "%H:%M:%S", brokendown_time);
-	/* if datestr is empty it prints only timestr*/
-	snprintf(buf, len, "%s[%s.%03li]", datestr,
-		 timestr, (tv.tv_usec / 1000));
-
-	return buf;
-}
+static void
+load_pipewire(struct weston_compositor *c, struct weston_config *wc);
 
 static void
 custom_handler(const char *fmt, va_list arg)
@@ -172,7 +172,7 @@ custom_handler(const char *fmt, va_list arg)
 
 	weston_log_scope_printf(log_scope, "%s libwayland: ",
 				weston_log_timestamp(timestr,
-				sizeof(timestr)));
+				sizeof(timestr), &cached_tm_mday));
 	weston_log_scope_vprintf(log_scope, fmt, arg);
 }
 
@@ -218,7 +218,8 @@ vlog(const char *fmt, va_list ap)
 	if (weston_log_scope_is_enabled(log_scope)) {
 		int len_va;
 		char *log_timestamp = weston_log_timestamp(timestr,
-							   sizeof(timestr));
+							   sizeof(timestr),
+							   &cached_tm_mday);
 		len_va = vasprintf(&str, fmt, ap);
 		if (len_va >= 0) {
 			len = weston_log_scope_printf(log_scope, "%s %s",
@@ -270,6 +271,8 @@ protocol_log_fn(void *user_data,
 	size_t logsize;
 	char timestr[128];
 	struct wl_resource *res = message->resource;
+	struct wl_client *client = wl_resource_get_client(res);
+	pid_t pid = 0;
 	const char *signature = message->message->signature;
 	int i;
 	char type;
@@ -281,10 +284,12 @@ protocol_log_fn(void *user_data,
 	if (!fp)
 		return;
 
+	wl_client_get_credentials(client, &pid, NULL, NULL);
+
 	weston_log_scope_timestamp(protocol_scope,
 			timestr, sizeof timestr);
 	fprintf(fp, "%s ", timestr);
-	fprintf(fp, "client %p %s ", wl_resource_get_client(res),
+	fprintf(fp, "client %p (PID %d) %s ", client, pid,
 		direction == WL_PROTOCOL_LOGGER_REQUEST ? "rq" : "ev");
 	fprintf(fp, "%s@%u.%s(",
 		wl_resource_get_class(res),
@@ -355,10 +360,20 @@ to_wet_compositor(struct weston_compositor *compositor)
 	return weston_compositor_get_user_data(compositor);
 }
 
+WL_EXPORT void
+wet_process_destroy(struct wet_process *process, int status, bool call_cleanup)
+{
+	wl_list_remove(&process->link);
+	if (call_cleanup && process->cleanup)
+		process->cleanup(process, status, process->cleanup_data);
+	free(process->path);
+	free(process);
+}
+
 static int
 sigchld_handler(int signal_number, void *data)
 {
-	struct weston_process *p;
+	struct wet_process *p;
 	struct wet_compositor *wet = data;
 	int status;
 	pid_t pid;
@@ -376,13 +391,21 @@ sigchld_handler(int signal_number, void *data)
 				break;
 		}
 
-		if (&p->link == &wet->child_process_list) {
-			weston_log("unknown child process exited\n");
+		/* An unknown child process exited. Oh well. */
+		if (&p->link == &wet->child_process_list)
 			continue;
+
+		if (WIFEXITED(status)) {
+			weston_log("%s exited with status %d\n", p->path,
+				   WEXITSTATUS(status));
+		} else if (WIFSIGNALED(status)) {
+			weston_log("%s died on signal %d\n", p->path,
+				   WTERMSIG(status));
+		} else {
+			weston_log("%s disappeared\n", p->path);
 		}
 
-		wl_list_remove(&p->link);
-		p->cleanup(p, status);
+		wet_process_destroy(p, status, true);
 	}
 
 	if (pid < 0 && errno != ECHILD)
@@ -392,154 +415,150 @@ sigchld_handler(int signal_number, void *data)
 }
 
 static void
-child_client_exec(int sockfd, const char *path)
-{
-	int clientfd;
-	char s[32];
+cleanup_for_child_process() {
 	sigset_t allsigs;
+
+	/* Put the client in a new session so it won't catch signals
+	* intended for the parent. Sharing a session can be
+	* confusing when launching weston under gdb, as the ctrl-c
+	* intended for gdb will pass to the child, and weston
+	* will cleanly shut down when the child exits.
+	*/
+	setsid();
 
 	/* do not give our signal mask to the new process */
 	sigfillset(&allsigs);
 	sigprocmask(SIG_UNBLOCK, &allsigs, NULL);
+}
 
-	/* Launch clients as the user. Do not launch clients with wrong euid. */
-	if (seteuid(getuid()) == -1) {
-		weston_log("compositor: failed seteuid\n");
-		return;
+WL_EXPORT struct wet_process *
+wet_client_launch(struct weston_compositor *compositor,
+		  struct custom_env *child_env,
+		  int *no_cloexec_fds,
+		  size_t num_no_cloexec_fds,
+		  wet_process_cleanup_func_t cleanup,
+		  void *cleanup_data)
+{
+	struct wet_compositor *wet = to_wet_compositor(compositor);
+	struct wet_process *proc = NULL;
+	const char *fail_cloexec = "Couldn't unset CLOEXEC on child FDs";
+	const char *fail_seteuid = "Couldn't call seteuid";
+	char *fail_exec;
+	char * const *argp;
+	char * const *envp;
+	pid_t pid;
+	int err;
+	size_t i;
+	size_t written __attribute__((unused));
+
+	argp = custom_env_get_argp(child_env);
+	envp = custom_env_get_envp(child_env);
+
+	weston_log("launching '%s'\n", argp[0]);
+	str_printf(&fail_exec, "Error: Couldn't launch client '%s'\n", argp[0]);
+
+	pid = fork();
+	switch (pid) {
+	case 0:
+		cleanup_for_child_process();
+
+		/* Launch clients as the user. Do not launch clients with wrong euid. */
+		if (seteuid(getuid()) == -1) {
+			written = write(STDERR_FILENO, fail_seteuid,
+					strlen(fail_seteuid));
+			_exit(EXIT_FAILURE);
+		}
+
+		for (i = 0; i < num_no_cloexec_fds; i++) {
+			err = os_fd_clear_cloexec(no_cloexec_fds[i]);
+			if (err < 0) {
+				written = write(STDERR_FILENO, fail_cloexec,
+						strlen(fail_cloexec));
+				_exit(EXIT_FAILURE);
+			}
+		}
+
+		execve(argp[0], argp, envp);
+
+		if (fail_exec)
+			written = write(STDERR_FILENO, fail_exec,
+					strlen(fail_exec));
+		_exit(EXIT_FAILURE);
+
+	default:
+		proc = xzalloc(sizeof(*proc));
+		proc->pid = pid;
+		proc->cleanup = cleanup;
+		proc->cleanup_data = cleanup_data;
+		proc->path = strdup(argp[0]);
+		wl_list_insert(&wet->child_process_list, &proc->link);
+		break;
+
+	case -1:
+		weston_log("weston_client_launch: "
+			   "fork failed while launching '%s': %s\n", argp[0],
+			   strerror(errno));
+		break;
 	}
 
-	/* SOCK_CLOEXEC closes both ends, so we dup the fd to get a
-	 * non-CLOEXEC fd to pass through exec. */
-	clientfd = dup(sockfd);
-	if (clientfd == -1) {
-		weston_log("compositor: dup failed: %s\n", strerror(errno));
-		return;
-	}
-
-	snprintf(s, sizeof s, "%d", clientfd);
-	setenv("WAYLAND_SOCKET", s, 1);
-
-	if (execl(path, path, NULL) < 0)
-		weston_log("compositor: executing '%s' failed: %s\n",
-			   path, strerror(errno));
+	custom_env_fini(child_env);
+	free(fail_exec);
+	return proc;
 }
 
 WL_EXPORT struct wl_client *
-weston_client_launch(struct weston_compositor *compositor,
-		     struct weston_process *proc,
-		     const char *path,
-		     weston_process_cleanup_func_t cleanup)
+wet_client_start(struct weston_compositor *compositor, const char *path)
 {
-	int sv[2];
-	pid_t pid;
+	struct wet_process *proc;
 	struct wl_client *client;
+	struct custom_env child_env;
+	struct fdstr wayland_socket = FDSTR_INIT;
+	int no_cloexec_fds[1];
+	size_t num_no_cloexec_fds = 0;
 
-	weston_log("launching '%s'\n", path);
-
-	if (os_socketpair_cloexec(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
-		weston_log("weston_client_launch: "
+	if (os_socketpair_cloexec(AF_UNIX, SOCK_STREAM, 0,
+				  wayland_socket.fds) < 0) {
+		weston_log("wet_client_start: "
 			   "socketpair failed while launching '%s': %s\n",
 			   path, strerror(errno));
 		return NULL;
 	}
 
-	pid = fork();
-	if (pid == -1) {
-		close(sv[0]);
-		close(sv[1]);
-		weston_log("weston_client_launch: "
-			   "fork failed while launching '%s': %s\n", path,
-			   strerror(errno));
+	custom_env_init_from_environ(&child_env);
+	custom_env_add_from_exec_string(&child_env, path);
+
+	fdstr_update_str1(&wayland_socket);
+	no_cloexec_fds[num_no_cloexec_fds++] = wayland_socket.fds[1];
+	custom_env_set_env_var(&child_env, "WAYLAND_SOCKET",
+			       wayland_socket.str1);
+
+	assert(num_no_cloexec_fds <= ARRAY_LENGTH(no_cloexec_fds));
+
+	proc = wet_client_launch(compositor, &child_env,
+				 no_cloexec_fds, num_no_cloexec_fds,
+				 NULL, NULL);
+	if (!proc)
 		return NULL;
-	}
 
-	if (pid == 0) {
-		child_client_exec(sv[1], path);
-		_exit(-1);
-	}
-
-	close(sv[1]);
-
-	client = wl_client_create(compositor->wl_display, sv[0]);
+	client = wl_client_create(compositor->wl_display,
+				  wayland_socket.fds[0]);
 	if (!client) {
-		close(sv[0]);
-		weston_log("weston_client_launch: "
-			"wl_client_create failed while launching '%s'.\n",
-			path);
-		return NULL;
+		weston_log("wet_client_start: "
+			   "wl_client_create failed while launching '%s'.\n",
+			   path);
+		/* We have no way of killing the process, so leave it hanging */
+		goto out_sock;
 	}
 
-	proc->pid = pid;
-	proc->cleanup = cleanup;
-	wet_watch_process(compositor, proc);
+	/* Close the child end of our socket which we no longer need */
+	close(wayland_socket.fds[1]);
 
-	return client;
-}
-
-WL_EXPORT void
-wet_watch_process(struct weston_compositor *compositor,
-		  struct weston_process *process)
-{
-	struct wet_compositor *wet = to_wet_compositor(compositor);
-	wl_list_insert(&wet->child_process_list, &process->link);
-}
-
-struct process_info {
-	struct weston_process proc;
-	char *path;
-};
-
-static void
-process_handle_sigchld(struct weston_process *process, int status)
-{
-	struct process_info *pinfo =
-		container_of(process, struct process_info, proc);
-
-	/*
-	 * There are no guarantees whether this runs before or after
-	 * the wl_client destructor.
-	 */
-
-	if (WIFEXITED(status)) {
-		weston_log("%s exited with status %d\n", pinfo->path,
-			   WEXITSTATUS(status));
-	} else if (WIFSIGNALED(status)) {
-		weston_log("%s died on signal %d\n", pinfo->path,
-			   WTERMSIG(status));
-	} else {
-		weston_log("%s disappeared\n", pinfo->path);
-	}
-
-	free(pinfo->path);
-	free(pinfo);
-}
-
-WL_EXPORT struct wl_client *
-weston_client_start(struct weston_compositor *compositor, const char *path)
-{
-	struct process_info *pinfo;
-	struct wl_client *client;
-
-	pinfo = zalloc(sizeof *pinfo);
-	if (!pinfo)
-		return NULL;
-
-	pinfo->path = strdup(path);
-	if (!pinfo->path)
-		goto out_free;
-
-	client = weston_client_launch(compositor, &pinfo->proc, path,
-				      process_handle_sigchld);
-	if (!client)
-		goto out_str;
+	/* proc is now owned by the compositor's process list */
 
 	return client;
 
-out_str:
-	free(pinfo->path);
-
-out_free:
-	free(pinfo);
+out_sock:
+	fdstr_close_all(&wayland_socket);
 
 	return NULL;
 }
@@ -642,26 +661,37 @@ usage(int error_code)
 
 		"Core options:\n\n"
 		"  --version\t\tPrint weston version\n"
-		"  -B, --backend=MODULE\tBackend module, one of\n"
+		"  -B, --backend=BACKEND\tBackend module, one of\n"
 #if defined(BUILD_DRM_COMPOSITOR)
-			"\t\t\t\tdrm-backend.so\n"
-#endif
-#if defined(BUILD_FBDEV_COMPOSITOR)
-			"\t\t\t\tfbdev-backend.so\n"
+			"\t\t\t\tdrm\n"
 #endif
 #if defined(BUILD_HEADLESS_COMPOSITOR)
-			"\t\t\t\theadless-backend.so\n"
+			"\t\t\t\theadless\n"
+#endif
+#if defined(BUILD_PIPEWIRE_COMPOSITOR)
+			"\t\t\t\tpipewire\n"
 #endif
 #if defined(BUILD_RDP_COMPOSITOR)
-			"\t\t\t\trdp-backend.so\n"
+			"\t\t\t\trdp\n"
+#endif
+#if defined(BUILD_VNC_COMPOSITOR)
+			"\t\t\t\tvnc\n"
 #endif
 #if defined(BUILD_WAYLAND_COMPOSITOR)
-			"\t\t\t\twayland-backend.so\n"
+			"\t\t\t\twayland\n"
 #endif
 #if defined(BUILD_X11_COMPOSITOR)
-			"\t\t\t\tx11-backend.so\n"
+			"\t\t\t\tx11\n"
 #endif
-		"  --shell=MODULE\tShell module, defaults to desktop-shell.so\n"
+		"  --backends\t\tLoad the comma-separated list of backends\n"
+		"  --renderer=NAME\tRenderer to use, one of\n"
+			"\t\t\t\tauto\tAutomatic selection of one of the below renderers\n"
+#if defined(ENABLE_EGL)
+			"\t\t\t\tgl\tOpenGL ES\n"
+#endif
+			"\t\t\t\tnoop\tNo-op renderer for testing only\n"
+			"\t\t\t\tpixman\tPixman software renderer\n"
+		"  --shell=NAME\tShell to load, defaults to desktop\n"
 		"  -S, --socket=NAME\tName of socket to listen on\n"
 		"  -i, --idle-time=SECS\tIdle time in seconds\n"
 #if defined(BUILD_XWAYLAND)
@@ -683,44 +713,44 @@ usage(int error_code)
 
 #if defined(BUILD_DRM_COMPOSITOR)
 	fprintf(out,
-		"Options for drm-backend.so:\n\n"
+		"Options for drm:\n\n"
 		"  --seat=SEAT\t\tThe seat that weston should run on, instead of the seat defined in XDG_SEAT\n"
-		"  --tty=TTY\t\tThe tty to use\n"
-		"  --drm-device=CARD\tThe DRM device to use, e.g. \"card0\".\n"
-		"  --use-pixman\t\tUse the pixman (CPU) renderer\n"
+		"  --drm-device=CARD\tThe DRM device to use for rendering and output, e.g. \"card0\".\n"
+		"  --additional-devices=CARD\tSecondary DRM devices to use for output only, e.g. \"card1,card2\".\n"
+		"  --use-pixman\t\tUse the pixman (CPU) renderer (deprecated alias for --renderer=pixman)\n"
 		"  --current-mode\tPrefer current KMS mode over EDID preferred mode\n"
 		"  --continue-without-input\tAllow the compositor to start without input devices\n\n");
 #endif
 
-#if defined(BUILD_FBDEV_COMPOSITOR)
-	fprintf(out,
-		"Options for fbdev-backend.so:\n\n"
-		"  --tty=TTY\t\tThe tty to use\n"
-		"  --device=DEVICE\tThe framebuffer device to use\n"
-		"  --seat=SEAT\t\tThe seat that weston should run on, instead of the seat defined in XDG_SEAT\n"
-		"\n");
-#endif
-
 #if defined(BUILD_HEADLESS_COMPOSITOR)
 	fprintf(out,
-		"Options for headless-backend.so:\n\n"
+		"Options for headless:\n\n"
 		"  --width=WIDTH\t\tWidth of memory surface\n"
 		"  --height=HEIGHT\tHeight of memory surface\n"
 		"  --scale=SCALE\t\tScale factor of output\n"
 		"  --transform=TR\tThe output transformation, TR is one of:\n"
 		"\tnormal 90 180 270 flipped flipped-90 flipped-180 flipped-270\n"
-		"  --use-pixman\t\tUse the pixman (CPU) renderer (default: no rendering)\n"
-		"  --use-gl\t\tUse the GL renderer (default: no rendering)\n"
+		"  --use-pixman\t\tUse the pixman (CPU) renderer (deprecated alias for --renderer=pixman)\n"
+		"  --use-gl\t\tUse the GL renderer (deprecated alias for --renderer=gl)\n"
 		"  --no-outputs\t\tDo not create any virtual outputs\n"
+		"\n");
+#endif
+
+#if defined(BUILD_PIPEWIRE_COMPOSITOR)
+	fprintf(out,
+		"Options for pipewire\n\n"
+		"  --width=WIDTH\t\tWidth of desktop\n"
+		"  --height=HEIGHT\tHeight of desktop\n"
 		"\n");
 #endif
 
 #if defined(BUILD_RDP_COMPOSITOR)
 	fprintf(out,
-		"Options for rdp-backend.so:\n\n"
+		"Options for rdp:\n\n"
 		"  --width=WIDTH\t\tWidth of desktop\n"
 		"  --height=HEIGHT\tHeight of desktop\n"
 		"  --env-socket\t\tUse socket defined in RDP_FD env variable as peer connection\n"
+		"  --external-listener-fd=FD\tUse socket as listener connection\n"
 		"  --address=ADDR\tThe address to bind\n"
 		"  --port=PORT\t\tThe port to listen on\n"
 		"  --no-clients-resize\tThe RDP peers will be forced to the size of the desktop\n"
@@ -730,14 +760,25 @@ usage(int error_code)
 		"\n");
 #endif
 
+#if defined(BUILD_VNC_COMPOSITOR)
+	fprintf(out,
+		"Options for vnc:\n\n"
+		"  --width=WIDTH\t\tWidth of desktop\n"
+		"  --height=HEIGHT\tHeight of desktop\n"
+		"  --port=PORT\t\tThe port to listen on\n"
+		"  --vnc-tls-cert=FILE\tThe file containing the certificate for TLS encryption\n"
+		"  --vnc-tls-key=FILE\tThe file containing the private key for TLS encryption\n"
+		"\n");
+#endif
+
 #if defined(BUILD_WAYLAND_COMPOSITOR)
 	fprintf(out,
-		"Options for wayland-backend.so:\n\n"
+		"Options for wayland:\n\n"
 		"  --width=WIDTH\t\tWidth of Wayland surface\n"
 		"  --height=HEIGHT\tHeight of Wayland surface\n"
 		"  --scale=SCALE\t\tScale factor of output\n"
 		"  --fullscreen\t\tRun in fullscreen mode\n"
-		"  --use-pixman\t\tUse the pixman (CPU) renderer\n"
+		"  --use-pixman\t\tUse the pixman (CPU) renderer (deprecated alias for --renderer=pixman)\n"
 		"  --output-count=COUNT\tCreate multiple outputs\n"
 		"  --sprawl\t\tCreate one fullscreen output for every parent output\n"
 		"  --display=DISPLAY\tWayland display to connect to\n\n");
@@ -745,12 +786,12 @@ usage(int error_code)
 
 #if defined(BUILD_X11_COMPOSITOR)
 	fprintf(out,
-		"Options for x11-backend.so:\n\n"
+		"Options for x11:\n\n"
 		"  --width=WIDTH\t\tWidth of X window\n"
 		"  --height=HEIGHT\tHeight of X window\n"
 		"  --scale=SCALE\t\tScale factor of output\n"
 		"  --fullscreen\t\tRun in fullscreen mode\n"
-		"  --use-pixman\t\tUse the pixman (CPU) renderer\n"
+		"  --use-pixman\t\tUse the pixman (CPU) renderer (deprecated alias for --renderer=pixman)\n"
 		"  --output-count=COUNT\tCreate multiple outputs\n"
 		"  --no-input\t\tDont create input devices\n\n");
 #endif
@@ -869,7 +910,7 @@ handle_primary_client_destroyed(struct wl_listener *listener, void *data)
 static int
 weston_create_listening_socket(struct wl_display *display, const char *socket_name)
 {
-	char name_candidate[16];
+	char name_candidate[32];
 
 	if (socket_name) {
 		if (wl_display_add_socket(display, socket_name)) {
@@ -894,53 +935,6 @@ weston_create_listening_socket(struct wl_display *display, const char *socket_na
 	}
 }
 
-WL_EXPORT void *
-wet_load_module_entrypoint(const char *name, const char *entrypoint)
-{
-	char path[PATH_MAX];
-	void *module, *init;
-	size_t len;
-
-	if (name == NULL)
-		return NULL;
-
-	if (name[0] != '/') {
-		len = weston_module_path_from_env(name, path, sizeof path);
-		if (len == 0)
-			len = snprintf(path, sizeof path, "%s/%s", MODULEDIR,
-				       name);
-	} else {
-		len = snprintf(path, sizeof path, "%s", name);
-	}
-
-	/* snprintf returns the length of the string it would've written,
-	 * _excluding_ the NUL byte. So even being equal to the size of
-	 * our buffer is an error here. */
-	if (len >= sizeof path)
-		return NULL;
-
-	module = dlopen(path, RTLD_NOW | RTLD_NOLOAD);
-	if (module) {
-		weston_log("Module '%s' already loaded\n", path);
-	} else {
-		weston_log("Loading module '%s'\n", path);
-		module = dlopen(path, RTLD_NOW);
-		if (!module) {
-			weston_log("Failed to load module: %s\n", dlerror());
-			return NULL;
-		}
-	}
-
-	init = dlsym(module, entrypoint);
-	if (!init) {
-		weston_log("Failed to lookup init function: %s\n", dlerror());
-		dlclose(module);
-		return NULL;
-	}
-
-	return init;
-}
-
 WL_EXPORT int
 wet_load_module(struct weston_compositor *compositor,
 	        const char *name, int *argc, char *argv[])
@@ -948,7 +942,7 @@ wet_load_module(struct weston_compositor *compositor,
 	int (*module_init)(struct weston_compositor *ec,
 			   int *argc, char *argv[]);
 
-	module_init = wet_load_module_entrypoint(name, "wet_module_init");
+	module_init = weston_load_module(name, "wet_module_init", MODULEDIR);
 	if (!module_init)
 		return -1;
 	if (module_init(compositor, argc, argv) < 0)
@@ -958,12 +952,21 @@ wet_load_module(struct weston_compositor *compositor,
 
 static int
 wet_load_shell(struct weston_compositor *compositor,
-	       const char *name, int *argc, char *argv[])
+	       const char *_name, int *argc, char *argv[])
 {
+	char *name;
 	int (*shell_init)(struct weston_compositor *ec,
 			  int *argc, char *argv[]);
 
-	shell_init = wet_load_module_entrypoint(name, "wet_shell_init");
+	if (strstr(_name, "-shell.so"))
+		name = strdup(_name);
+	else
+		str_printf(&name, "%s-shell.so", _name);
+	assert(name);
+
+	shell_init = weston_load_module(name, "wet_shell_init", MODULEDIR);
+	free(name);
+
 	if (!shell_init)
 		return -1;
 	if (shell_init(compositor, argc, argv) < 0)
@@ -1002,7 +1005,7 @@ wet_get_bindir_path(const char *name)
 
 static int
 load_modules(struct weston_compositor *ec, const char *modules,
-	     int *argc, char *argv[], bool *xwayland)
+	     int *argc, char *argv[])
 {
 	const char *p, *end;
 	char buffer[256];
@@ -1016,11 +1019,11 @@ load_modules(struct weston_compositor *ec, const char *modules,
 		snprintf(buffer, sizeof buffer, "%.*s", (int) (end - p), p);
 
 		if (strstr(buffer, "xwayland.so")) {
-			weston_log("Old Xwayland module loading detected: "
+			weston_log("fatal: Old Xwayland module loading detected: "
 				   "Please use --xwayland command line option "
 				   "or set xwayland=true in the [core] section "
 				   "in weston.ini\n");
-			*xwayland = true;
+			return -1;
 		} else {
 			if (wet_load_module(ec, buffer, argc, argv) < 0)
 				return -1;
@@ -1032,6 +1035,15 @@ load_modules(struct weston_compositor *ec, const char *modules,
 	}
 
 	return 0;
+}
+
+static void
+load_additional_modules(struct wet_compositor wet)
+{
+	if (wet.drm_backend_loaded) {
+		load_remoting(wet.compositor, wet.config);
+		load_pipewire(wet.compositor, wet.config);
+	}
 }
 
 static int
@@ -1090,6 +1102,29 @@ out:
 	free(helper);
 
 	return ret;
+}
+
+static const struct {
+	const char *name;
+	enum require_outputs mode;
+} require_outputs_modes [] = {
+	{ "all-found",	REQUIRE_OUTPUTS_ALL_FOUND },
+	{ "any",	REQUIRE_OUTPUTS_ANY },
+	{ "none",	REQUIRE_OUTPUTS_NONE },
+};
+
+static int
+weston_parse_require_outputs(const char *name, enum require_outputs *mode)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_LENGTH(require_outputs_modes); i++)
+		if (strcmp(require_outputs_modes[i].name, name) == 0) {
+			*mode = require_outputs_modes[i].mode;
+			return 0;
+		}
+
+	return -1;
 }
 
 static int
@@ -1165,9 +1200,9 @@ weston_choose_default_backend(void)
 	char *backend = NULL;
 
 	if (getenv("WAYLAND_DISPLAY") || getenv("WAYLAND_SOCKET"))
-		backend = strdup("wayland-backend.so");
+		backend = strdup("wayland");
 	else if (getenv("DISPLAY"))
-		backend = strdup("x11-backend.so");
+		backend = strdup("x11");
 	else
 		backend = strdup(WESTON_NATIVE_BACKEND);
 
@@ -1348,6 +1383,227 @@ wet_output_set_color_profile(struct weston_output *output,
 	return ok ? 0 : -1;
 }
 
+static int
+wet_output_set_eotf_mode(struct weston_output *output,
+			 struct weston_config_section *section)
+{
+	static const struct {
+		const char *name;
+		enum weston_eotf_mode eotf_mode;
+	} modes[] = {
+		{ "sdr",	WESTON_EOTF_MODE_SDR },
+		{ "hdr-gamma",	WESTON_EOTF_MODE_TRADITIONAL_HDR },
+		{ "st2084",	WESTON_EOTF_MODE_ST2084 },
+		{ "hlg",	WESTON_EOTF_MODE_HLG },
+	};
+	struct wet_compositor *compositor;
+	enum weston_eotf_mode eotf_mode = WESTON_EOTF_MODE_SDR;
+	char *str = NULL;
+	unsigned i;
+
+	compositor = to_wet_compositor(output->compositor);
+
+	if (section) {
+		weston_config_section_get_string(section, "eotf-mode",
+						 &str, NULL);
+	}
+
+	if (!str) {
+		/* The default SDR mode is always supported. */
+		assert(weston_output_get_supported_eotf_modes(output) & eotf_mode);
+		weston_output_set_eotf_mode(output, eotf_mode);
+		return 0;
+	}
+
+	for (i = 0; i < ARRAY_LENGTH(modes); i++)
+		if (strcmp(str, modes[i].name) == 0)
+			break;
+
+	if (i == ARRAY_LENGTH(modes)) {
+		weston_log("Error in config for output '%s': '%s' is not a valid EOTF mode. Try one of:",
+			   output->name, str);
+		for (i = 0; i < ARRAY_LENGTH(modes); i++)
+			weston_log_continue(" %s", modes[i].name);
+		weston_log_continue("\n");
+		return -1;
+	}
+	eotf_mode = modes[i].eotf_mode;
+
+	if ((weston_output_get_supported_eotf_modes(output) & eotf_mode) == 0) {
+		weston_log("Error: output '%s' does not support EOTF mode %s.\n",
+			   output->name, str);
+#if !HAVE_LIBDISPLAY_INFO
+		weston_log_continue(STAMP_SPACE "Weston was built without libdisplay-info, "
+				    "so HDR capabilities cannot be detected.\n");
+#endif
+		free(str);
+		return -1;
+	}
+
+	if (eotf_mode != WESTON_EOTF_MODE_SDR &&
+	    !compositor->use_color_manager) {
+		weston_log("Error: EOTF mode %s on output '%s' requires color-management=true in weston.ini\n",
+			   str, output->name);
+		free(str);
+		return -1;
+	}
+
+	weston_output_set_eotf_mode(output, eotf_mode);
+
+	free(str);
+	return 0;
+}
+
+struct wet_color_characteristics_keys {
+	const char *name;
+	enum weston_color_characteristics_groups group;
+	float minval;
+	float maxval;
+};
+
+#define COLOR_CHARAC_NAME "color_characteristics"
+
+static int
+parse_color_characteristics(struct weston_color_characteristics *cc_out,
+			      struct weston_config_section *section)
+{
+	static const struct wet_color_characteristics_keys keys[] = {
+		{ "red_x",   WESTON_COLOR_CHARACTERISTICS_GROUP_PRIMARIES, 0.0f, 1.0f },
+		{ "red_y",   WESTON_COLOR_CHARACTERISTICS_GROUP_PRIMARIES, 0.0f, 1.0f },
+		{ "green_x", WESTON_COLOR_CHARACTERISTICS_GROUP_PRIMARIES, 0.0f, 1.0f },
+		{ "green_y", WESTON_COLOR_CHARACTERISTICS_GROUP_PRIMARIES, 0.0f, 1.0f },
+		{ "blue_x",  WESTON_COLOR_CHARACTERISTICS_GROUP_PRIMARIES, 0.0f, 1.0f },
+		{ "blue_y",  WESTON_COLOR_CHARACTERISTICS_GROUP_PRIMARIES, 0.0f, 1.0f },
+		{ "white_x", WESTON_COLOR_CHARACTERISTICS_GROUP_WHITE,     0.0f, 1.0f },
+		{ "white_y", WESTON_COLOR_CHARACTERISTICS_GROUP_WHITE,     0.0f, 1.0f },
+		{ "max_L",   WESTON_COLOR_CHARACTERISTICS_GROUP_MAXL,      0.0f, 1e5f },
+		{ "min_L",   WESTON_COLOR_CHARACTERISTICS_GROUP_MINL,      0.0f, 1e5f },
+		{ "maxFALL", WESTON_COLOR_CHARACTERISTICS_GROUP_MAXFALL,   0.0f, 1e5f },
+	};
+	static const char *msgpfx = "Config error in weston.ini [" COLOR_CHARAC_NAME "]";
+	struct weston_color_characteristics cc = {};
+	float *const keyvalp[ARRAY_LENGTH(keys)] = {
+		/* These must be in the same order as keys[]. */
+		&cc.primary[0].x, &cc.primary[0].y,
+		&cc.primary[1].x, &cc.primary[1].y,
+		&cc.primary[2].x, &cc.primary[2].y,
+		&cc.white.x, &cc.white.y,
+		&cc.max_luminance,
+		&cc.min_luminance,
+		&cc.maxFALL,
+	};
+	bool found[ARRAY_LENGTH(keys)] = {};
+	uint32_t missing_group_mask = 0;
+	unsigned i;
+	char *section_name;
+	int ret = 0;
+
+	weston_config_section_get_string(section, "name",
+					 &section_name, "<unnamed>");
+	if (strchr(section_name, ':') != NULL) {
+		ret = -1;
+		weston_log("%s name=%s: reserved name. Do not use ':' character in the name.\n",
+			   msgpfx, section_name);
+	}
+
+	/* Parse keys if they exist */
+	for (i = 0; i < ARRAY_LENGTH(keys); i++) {
+		double value;
+
+		if (weston_config_section_get_double(section, keys[i].name,
+						     &value, NAN) == 0) {
+			float f = value;
+
+			found[i] = true;
+
+			/* Range check, NaN shall not pass. */
+			if (f >= keys[i].minval && f <= keys[i].maxval) {
+				/* Key found, parsed, and good value. */
+				*keyvalp[i] = f;
+				continue;
+			}
+
+			ret = -1;
+			weston_log("%s name=%s: %s value %f is outside of the range %f - %f.\n",
+				   msgpfx, section_name, keys[i].name, value,
+				   keys[i].minval, keys[i].maxval);
+			continue;
+		}
+
+		if (errno == EINVAL) {
+			found[i] = true;
+			ret = -1;
+			weston_log("%s name=%s: failed to parse the value of key %s.\n",
+				   msgpfx, section_name, keys[i].name);
+		}
+	}
+
+	/* Collect set and unset groups */
+	for (i = 0; i < ARRAY_LENGTH(keys); i++) {
+		uint32_t group = keys[i].group;
+
+		if (found[i])
+			cc.group_mask |= group;
+		else
+			missing_group_mask |= group;
+	}
+
+	/* Ensure groups are given fully or not at all. */
+	for (i = 0; i < ARRAY_LENGTH(keys); i++) {
+		uint32_t group = keys[i].group;
+
+		if ((cc.group_mask & group) && (missing_group_mask & group)) {
+			ret = -1;
+			weston_log("%s name=%s: group %d key %s is %s. "
+				   "You must set either none or all keys of a group.\n",
+				   msgpfx, section_name, ffs(group), keys[i].name,
+				   found[i] ? "set" : "missing");
+		}
+	}
+
+	free(section_name);
+
+	if (ret == 0)
+		*cc_out = cc;
+
+	return ret;
+}
+
+WESTON_EXPORT_FOR_TESTS int
+wet_output_set_color_characteristics(struct weston_output *output,
+				     struct weston_config *wc,
+				     struct weston_config_section *section)
+{
+	char *cc_name = NULL;
+	struct weston_config_section *cc_section;
+	struct weston_color_characteristics cc;
+
+	weston_config_section_get_string(section, COLOR_CHARAC_NAME,
+					 &cc_name, NULL);
+	if (!cc_name)
+		return 0;
+
+	cc_section = weston_config_get_section(wc, COLOR_CHARAC_NAME,
+					       "name", cc_name);
+	if (!cc_section) {
+		weston_log("Config error in weston.ini, output %s: "
+			   "no [" COLOR_CHARAC_NAME "] section with 'name=%s' found.\n",
+			   output->name, cc_name);
+		goto out_error;
+	}
+
+	if (parse_color_characteristics(&cc, cc_section) < 0)
+		goto out_error;
+
+	weston_output_set_color_characteristics(output, &cc);
+	free(cc_name);
+	return 0;
+
+out_error:
+	free(cc_name);
+	return -1;
+}
+
 static void
 allow_content_protection(struct weston_output *output,
 			struct weston_config_section *section)
@@ -1361,6 +1617,35 @@ allow_content_protection(struct weston_output *output,
 	weston_output_allow_protection(output, allow_hdcp);
 }
 
+static void
+parse_simple_mode(struct weston_output *output,
+		  struct weston_config_section *section, int *width,
+		  int *height, struct wet_output_config *defaults,
+		  struct wet_output_config *parsed_options)
+{
+	*width = defaults->width;
+	*height = defaults->height;
+
+	if (section) {
+		char *mode;
+
+		weston_config_section_get_string(section, "mode", &mode, NULL);
+		if (!mode || sscanf(mode, "%dx%d", width, height) != 2) {
+			weston_log("Invalid mode for output %s. Using defaults.\n",
+				   output->name);
+			*width = defaults->width;
+			*height = defaults->height;
+		}
+		free(mode);
+	}
+
+	if (parsed_options->width)
+		*width = parsed_options->width;
+
+	if (parsed_options->height)
+		*height = parsed_options->height;
+}
+
 static int
 wet_configure_windowed_output_from_config(struct weston_output *output,
 					  struct wet_output_config *defaults)
@@ -1372,8 +1657,8 @@ wet_configure_windowed_output_from_config(struct weston_output *output,
 	struct weston_config_section *section = NULL;
 	struct wet_compositor *compositor = to_wet_compositor(output->compositor);
 	struct wet_output_config *parsed_options = compositor->parsed_options;
-	int width = defaults->width;
-	int height = defaults->height;
+	int width;
+	int height;
 
 	assert(parsed_options);
 
@@ -1384,27 +1669,10 @@ wet_configure_windowed_output_from_config(struct weston_output *output,
 
 	section = weston_config_get_section(wc, "output", "name", output->name);
 
-	if (section) {
-		char *mode;
-
-		weston_config_section_get_string(section, "mode", &mode, NULL);
-		if (!mode || sscanf(mode, "%dx%d", &width,
-				    &height) != 2) {
-			weston_log("Invalid mode for output %s. Using defaults.\n",
-				   output->name);
-			width = defaults->width;
-			height = defaults->height;
-		}
-		free(mode);
-	}
+	parse_simple_mode(output, section, &width, &height, defaults,
+			  parsed_options);
 
 	allow_content_protection(output, section);
-
-	if (parsed_options->width)
-		width = parsed_options->width;
-
-	if (parsed_options->height)
-		height = parsed_options->height;
 
 	wet_output_set_scale(output, section, defaults->scale, parsed_options->scale);
 	if (wet_output_set_transform(output, section, defaults->transform,
@@ -1503,14 +1771,46 @@ wet_head_tracker_create(struct wet_compositor *compositor,
 	weston_head_add_destroy_listener(head, &track->head_destroy_listener);
 }
 
+/* Place output exactly to the right of the most recently enabled output.
+ *
+ * Historically, we haven't given much thought to output placement,
+ * simply adding outputs in a horizontal line as they're enabled. This
+ * function simply sets an output's x coordinate to the right of the
+ * most recently enabled output, and its y to zero.
+ *
+ * If you're adding new calls to this function, you're also not giving
+ * much thought to output placement, so please consider carefully if
+ * it's really doing what you want.
+ *
+ * You especially don't want to use this for any code that won't
+ * immediately enable the passed output.
+ */
 static void
-simple_head_enable(struct wet_compositor *wet, struct weston_head *head)
+weston_output_lazy_align(struct weston_output *output)
+{
+	struct weston_compositor *c;
+	struct weston_output *peer;
+	int next_x = 0;
+
+	/* Put this output to the right of the most recently enabled output */
+	c = output->compositor;
+	if (!wl_list_empty(&c->output_list)) {
+		peer = container_of(c->output_list.prev,
+				    struct weston_output, link);
+		next_x = peer->pos.c.x + peer->width;
+	}
+	output->pos.c = weston_coord(next_x, 0);
+}
+
+static void
+simple_head_enable(struct wet_compositor *wet, struct wet_backend *wb,
+		   struct weston_head *head)
 {
 	struct weston_output *output;
 	int ret = 0;
 
-	output = weston_compositor_create_output_with_head(wet->compositor,
-							   head);
+	output = weston_compositor_create_output(wet->compositor, head,
+						 head->name);
 	if (!output) {
 		weston_log("Could not create an output for head \"%s\".\n",
 			   weston_head_get_name(head));
@@ -1519,8 +1819,10 @@ simple_head_enable(struct wet_compositor *wet, struct weston_head *head)
 		return;
 	}
 
-	if (wet->simple_output_configure)
-		ret = wet->simple_output_configure(output);
+	weston_output_lazy_align(output);
+
+	if (wb->simple_output_configure)
+		ret = wb->simple_output_configure(output);
 	if (ret < 0) {
 		weston_log("Cannot configure output \"%s\".\n",
 			   weston_head_get_name(head));
@@ -1559,25 +1861,39 @@ simple_head_disable(struct weston_head *head)
 	weston_output_destroy(output);
 }
 
+static struct weston_head *
+wet_backend_iterate_heads(struct wet_compositor *wet, struct wet_backend *wb,
+                          struct weston_head *iter)
+{
+       while ((iter = weston_compositor_iterate_heads(wet->compositor, iter))) {
+               if (iter->backend == wb->backend)
+                       break;
+       }
+
+       return iter;
+}
+
 static void
 simple_heads_changed(struct wl_listener *listener, void *arg)
 {
 	struct weston_compositor *compositor = arg;
 	struct wet_compositor *wet = to_wet_compositor(compositor);
+	struct wet_backend *wb = container_of(listener, struct wet_backend,
+					      heads_changed_listener);
 	struct weston_head *head = NULL;
 	bool connected;
 	bool enabled;
 	bool changed;
 	bool non_desktop;
 
-	while ((head = weston_compositor_iterate_heads(wet->compositor, head))) {
+	while ((head = wet_backend_iterate_heads(wet, wb, head))) {
 		connected = weston_head_is_connected(head);
 		enabled = weston_head_is_enabled(head);
 		changed = weston_head_is_device_changed(head);
 		non_desktop = weston_head_is_non_desktop(head);
 
 		if (connected && !enabled && !non_desktop) {
-			simple_head_enable(wet, head);
+			simple_head_enable(wet, wb, head);
 		} else if (!connected && enabled) {
 			simple_head_disable(head);
 		} else if (enabled && changed) {
@@ -1587,19 +1903,6 @@ simple_heads_changed(struct wl_listener *listener, void *arg)
 		}
 		weston_head_reset_device_changed(head);
 	}
-}
-
-static void
-wet_set_simple_head_configurator(struct weston_compositor *compositor,
-				 int (*fn)(struct weston_output *))
-{
-	struct wet_compositor *wet = to_wet_compositor(compositor);
-
-	wet->simple_output_configure = fn;
-
-	wet->heads_changed_listener.notify = simple_heads_changed;
-	weston_compositor_add_heads_changed_listener(compositor,
-						&wet->heads_changed_listener);
 }
 
 static void
@@ -1813,9 +2116,12 @@ drm_backend_output_configure(struct weston_output *output,
 	enum weston_drm_backend_output_mode mode =
 		WESTON_DRM_BACKEND_OUTPUT_PREFERRED;
 	uint32_t transform = WL_OUTPUT_TRANSFORM_NORMAL;
+	uint32_t max_bpc = 0;
+	bool max_bpc_specified = false;
 	char *s;
 	char *modeline = NULL;
 	char *gbm_format = NULL;
+	char *content_type = NULL;
 	char *seat = NULL;
 
 	api = weston_drm_output_get_api(output->compositor);
@@ -1825,12 +2131,18 @@ drm_backend_output_configure(struct weston_output *output,
 	}
 
 	weston_config_section_get_string(section, "mode", &s, "preferred");
+	if (weston_config_section_get_uint(section, "max-bpc", &max_bpc, 16) == 0)
+		max_bpc_specified = true;
 
 	if (strcmp(s, "off") == 0) {
 		assert(0 && "off was supposed to be pruned");
 		return -1;
 	} else if (wet->drm_use_current_mode || strcmp(s, "current") == 0) {
 		mode = WESTON_DRM_BACKEND_OUTPUT_CURRENT;
+		/* If mode=current and no max-bpc was specfied on the .ini file,
+		   use current max_bpc so full modeset is not done. */
+		if (!max_bpc_specified)
+			max_bpc = 0;
 	} else if (strcmp(s, "preferred") != 0) {
 		modeline = s;
 		s = NULL;
@@ -1838,11 +2150,14 @@ drm_backend_output_configure(struct weston_output *output,
 	free(s);
 
 	if (api->set_mode(output, mode, modeline) < 0) {
-		weston_log("Cannot configure an output using weston_drm_output_api.\n");
+		weston_log("Cannot configure output \"%s\" using weston_drm_output_api.\n",
+			   output->name);
 		free(modeline);
 		return -1;
 	}
 	free(modeline);
+
+	api->set_max_bpc(output, max_bpc);
 
 	if (count_remaining_heads(output, NULL) == 1) {
 		struct weston_head *head = weston_output_get_first_head(output);
@@ -1864,12 +2179,25 @@ drm_backend_output_configure(struct weston_output *output,
 	api->set_gbm_format(output, gbm_format);
 	free(gbm_format);
 
+	weston_config_section_get_string(section,
+					 "content-type", &content_type, NULL);
+	if (api->set_content_type(output, content_type) < 0)
+		return -1;
+	free(content_type);
+
 	weston_config_section_get_string(section, "seat", &seat, "");
 
 	api->set_seat(output, seat);
 	free(seat);
 
 	allow_content_protection(output, section);
+
+	if (wet_output_set_eotf_mode(output, section) < 0)
+		return -1;
+
+	if (wet_output_set_color_characteristics(output,
+						 wet->config, section) < 0)
+		return -1;
 
 	return 0;
 }
@@ -1946,6 +2274,14 @@ wet_layoutput_destroy(struct wet_layoutput *lo)
 }
 
 static void
+wet_backend_destroy(struct wet_backend *b)
+{
+	wl_list_remove(&b->compositor_link);
+	wl_list_remove(&b->heads_changed_listener.link);
+	free(b);
+}
+
+static void
 wet_output_handle_destroy(struct wl_listener *listener, void *data)
 {
 	struct wet_output *output;
@@ -1958,7 +2294,9 @@ wet_output_handle_destroy(struct wl_listener *listener, void *data)
 }
 
 static struct wet_output *
-wet_layoutput_create_output(struct wet_layoutput *lo, const char *name)
+wet_layoutput_create_output_with_head(struct wet_layoutput *lo,
+				      const char *name,
+				      struct weston_head *head)
 {
 	struct wet_output *output;
 
@@ -1968,7 +2306,7 @@ wet_layoutput_create_output(struct wet_layoutput *lo, const char *name)
 
 	output->output =
 		weston_compositor_create_output(lo->compositor->compositor,
-						name);
+						head, name);
 	if (!output->output) {
 		free(output);
 		return NULL;
@@ -2064,6 +2402,15 @@ wet_compositor_destroy_layout(struct wet_compositor *wet)
 }
 
 static void
+wet_compositor_destroy_backend_callbacks(struct wet_compositor *wet)
+{
+	struct wet_backend *b, *tmp;
+
+	wl_list_for_each_safe(b, tmp, &wet->backend_list, compositor_link)
+		wet_backend_destroy(b);
+}
+
+static void
 drm_head_prepare_enable(struct wet_compositor *wet,
 			struct weston_head *head)
 {
@@ -2121,8 +2468,8 @@ drm_try_attach(struct weston_output *output,
 {
 	unsigned i;
 
-	/* try to attach all heads, this probably succeeds */
-	for (i = 0; i < add->n; i++) {
+	/* try to attach remaining heads, this probably succeeds */
+	for (i = 1; i < add->n; i++) {
 		if (!add->heads[i])
 			continue;
 
@@ -2142,6 +2489,8 @@ drm_try_enable(struct weston_output *output,
 {
 	/* Try to enable, and detach heads one by one until it succeeds. */
 	while (!output->enabled) {
+		weston_output_lazy_align(output);
+
 		if (weston_output_enable(output) == 0)
 			return 0;
 
@@ -2238,7 +2587,8 @@ drm_process_layoutput(struct wet_compositor *wet, struct wet_layoutput *lo)
 			if (ret < 0)
 				return -1;
 		}
-		output = wet_layoutput_create_output(lo, name);
+		output = wet_layoutput_create_output_with_head(lo, name,
+							       lo->add.heads[0]);
 		free(name);
 		name = NULL;
 
@@ -2258,7 +2608,7 @@ static int
 drm_process_layoutputs(struct wet_compositor *wet)
 {
 	struct wet_layoutput *lo;
-	int ret = 0;
+	int failed_layoutputs = 0;
 
 	wl_list_for_each(lo, &wet->layoutput_list, compositor_link) {
 		if (lo->add.n == 0)
@@ -2266,11 +2616,19 @@ drm_process_layoutputs(struct wet_compositor *wet)
 
 		if (drm_process_layoutput(wet, lo) < 0) {
 			lo->add = (struct wet_head_array){};
-			ret = -1;
+			failed_layoutputs += 1;
+			continue;
 		}
 	}
 
-	return ret;
+	if (wet->require_outputs == REQUIRE_OUTPUTS_ALL_FOUND &&
+	    failed_layoutputs > 0)
+		return -1;
+	if (wet->require_outputs == REQUIRE_OUTPUTS_ANY &&
+	    failed_layoutputs == wl_list_length(&wet->layoutput_list))
+		return -1;
+
+	return 0;
 }
 
 static void
@@ -2299,6 +2657,8 @@ drm_heads_changed(struct wl_listener *listener, void *arg)
 {
 	struct weston_compositor *compositor = arg;
 	struct wet_compositor *wet = to_wet_compositor(compositor);
+	struct wet_backend *wb = container_of(listener, struct wet_backend,
+					      heads_changed_listener);
 	struct weston_head *head = NULL;
 	bool connected;
 	bool enabled;
@@ -2308,7 +2668,7 @@ drm_heads_changed(struct wl_listener *listener, void *arg)
 	/* We need to collect all cloned heads into outputs before enabling the
 	 * output.
 	 */
-	while ((head = weston_compositor_iterate_heads(compositor, head))) {
+	while ((head = wet_backend_iterate_heads(wet, wb, head))) {
 		connected = weston_head_is_connected(head);
 		enabled = weston_head_is_enabled(head);
 		changed = weston_head_is_device_changed(head);
@@ -2425,6 +2785,8 @@ remoted_output_init(struct weston_compositor *c,
 		goto err;
 	}
 
+	weston_output_lazy_align(output);
+
 	if (weston_output_enable(output) < 0) {
 		weston_log("Enabling remoted output \"%s\" failed.\n",
 			   output_name);
@@ -2467,7 +2829,8 @@ load_remoting(struct weston_compositor *c, struct weston_config *wc)
 							 &module_name,
 							 "remoting-plugin.so");
 			module_init = weston_load_module(module_name,
-							 "weston_module_init");
+							 "weston_module_init",
+							 LIBWESTON_MODULEDIR);
 			free(module_name);
 			if (!module_init) {
 				weston_log("Can't load remoting-plugin\n");
@@ -2555,6 +2918,8 @@ pipewire_output_init(struct weston_compositor *c,
 		goto err;
 	}
 
+	weston_output_lazy_align(output);
+
 	if (weston_output_enable(output) < 0) {
 		weston_log("Enabling pipewire output \"%s\" failed.\n",
 			   output_name);
@@ -2597,7 +2962,8 @@ load_pipewire(struct weston_compositor *c, struct weston_config *wc)
 							 &module_name,
 							 "pipewire-plugin.so");
 			module_init = weston_load_module(module_name,
-							 "weston_module_init");
+							 "weston_module_init",
+							 LIBWESTON_MODULEDIR);
 			free(module_name);
 			if (!module_init) {
 				weston_log("Can't load pipewire-plugin\n");
@@ -2617,32 +2983,75 @@ load_pipewire(struct weston_compositor *c, struct weston_config *wc)
 	}
 }
 
+static struct wet_backend *
+wet_compositor_load_backend(struct weston_compositor *compositor,
+			    enum weston_compositor_backend backend,
+			    struct weston_backend_config *config_base,
+			    void (*heads_changed)(struct wl_listener *, void *),
+			    int (*simple_output_configure)(struct weston_output *))
+{
+	struct wet_compositor *wet = to_wet_compositor(compositor);
+	struct wet_backend *wb;
+
+	wb = xzalloc(sizeof *wb);
+
+	if (heads_changed) {
+		wb->simple_output_configure = simple_output_configure;
+
+		wb->heads_changed_listener.notify = heads_changed;
+		weston_compositor_add_heads_changed_listener(compositor,
+							     &wb->heads_changed_listener);
+	}
+
+	wb->backend = weston_compositor_load_backend(compositor, backend,
+						     config_base);
+	if (!wb->backend) {
+		free(wb);
+		return NULL;
+	}
+
+	wl_list_insert(wet->backend_list.prev, &wb->compositor_link);
+
+	return wb;
+}
+
 static int
-load_drm_backend(struct weston_compositor *c,
-		 int *argc, char **argv, struct weston_config *wc)
+load_drm_backend(struct weston_compositor *c, int *argc, char **argv,
+		 struct weston_config *wc, enum weston_renderer_type renderer)
 {
 	struct weston_drm_backend_config config = {{ 0, }};
 	struct weston_config_section *section;
 	struct wet_compositor *wet = to_wet_compositor(c);
+	struct wet_backend *wb;
 	bool without_input = false;
-	int ret = 0;
+	bool force_pixman = false;
 
 	wet->drm_use_current_mode = false;
 
 	section = weston_config_get_section(wc, "core", NULL, NULL);
-	weston_config_section_get_bool(section, "use-pixman", &config.use_pixman,
+
+	weston_config_section_get_bool(section, "use-pixman", &force_pixman,
 				       false);
 
 	const struct weston_option options[] = {
 		{ WESTON_OPTION_STRING, "seat", 0, &config.seat_id },
-		{ WESTON_OPTION_INTEGER, "tty", 0, &config.tty },
 		{ WESTON_OPTION_STRING, "drm-device", 0, &config.specific_device },
+		{ WESTON_OPTION_STRING, "additional-devices", 0, &config.additional_devices},
 		{ WESTON_OPTION_BOOLEAN, "current-mode", 0, &wet->drm_use_current_mode },
-		{ WESTON_OPTION_BOOLEAN, "use-pixman", 0, &config.use_pixman },
+		{ WESTON_OPTION_BOOLEAN, "use-pixman", 0, &force_pixman },
 		{ WESTON_OPTION_BOOLEAN, "continue-without-input", false, &without_input }
 	};
 
 	parse_options(options, ARRAY_LENGTH(options), argc, argv);
+
+	if (force_pixman && renderer != WESTON_RENDERER_AUTO) {
+		weston_log("error: conflicting renderer specification\n");
+		return -1;
+	} else if (force_pixman) {
+		config.renderer = WESTON_RENDERER_PIXMAN;
+	} else {
+		config.renderer = renderer;
+	}
 
 	section = weston_config_get_section(wc, "core", NULL, NULL);
 	weston_config_section_get_string(section,
@@ -2659,24 +3068,20 @@ load_drm_backend(struct weston_compositor *c,
 	config.base.struct_size = sizeof(struct weston_drm_backend_config);
 	config.configure_device = configure_input_device;
 
-	wet->heads_changed_listener.notify = drm_heads_changed;
-	weston_compositor_add_heads_changed_listener(c,
-						&wet->heads_changed_listener);
+	wb = wet_compositor_load_backend(c, WESTON_BACKEND_DRM, &config.base,
+					 drm_heads_changed, NULL);
 
-	ret = weston_compositor_load_backend(c, WESTON_BACKEND_DRM,
-					     &config.base);
+	if (!wb)
+		return -1;
 
-	/* remoting */
-	load_remoting(c, wc);
 
-	/* pipewire */
-	load_pipewire(c, wc);
+	wet->drm_backend_loaded = true;
 
 	free(config.gbm_format);
 	free(config.seat_id);
 	free(config.specific_device);
 
-	return ret;
+	return 0;
 }
 
 static int
@@ -2688,19 +3093,31 @@ headless_backend_output_configure(struct weston_output *output)
 		.scale = 1,
 		.transform = WL_OUTPUT_TRANSFORM_NORMAL
 	};
+	struct weston_config *wc = wet_get_config(output->compositor);
+	struct weston_config_section *section;
+
+	section = weston_config_get_section(wc, "output", "name", output->name);
+	if (wet_output_set_eotf_mode(output, section) < 0)
+		return -1;
+
+	if (wet_output_set_color_characteristics(output, wc, section) < 0)
+		return -1;
 
 	return wet_configure_windowed_output_from_config(output, &defaults);
 }
 
 static int
 load_headless_backend(struct weston_compositor *c,
-		      int *argc, char **argv, struct weston_config *wc)
+		      int *argc, char **argv, struct weston_config *wc,
+		      enum weston_renderer_type renderer)
 {
 	const struct weston_windowed_output_api *api;
 	struct weston_headless_backend_config config = {{ 0, }};
 	struct weston_config_section *section;
+	struct wet_backend *wb;
+	bool force_pixman;
+	bool force_gl;
 	bool no_outputs = false;
-	int ret = 0;
 	char *transform = NULL;
 
 	struct wet_output_config *parsed_options = wet_init_parsed_options(c);
@@ -2708,22 +3125,36 @@ load_headless_backend(struct weston_compositor *c,
 		return -1;
 
 	section = weston_config_get_section(wc, "core", NULL, NULL);
-	weston_config_section_get_bool(section, "use-pixman", &config.use_pixman,
+	weston_config_section_get_bool(section, "use-pixman", &force_pixman,
 				       false);
-	weston_config_section_get_bool(section, "use-gl", &config.use_gl,
+	weston_config_section_get_bool(section, "use-gl", &force_gl,
+				       false);
+	weston_config_section_get_bool(section, "output-decorations", &config.decorate,
 				       false);
 
 	const struct weston_option options[] = {
 		{ WESTON_OPTION_INTEGER, "width", 0, &parsed_options->width },
 		{ WESTON_OPTION_INTEGER, "height", 0, &parsed_options->height },
 		{ WESTON_OPTION_INTEGER, "scale", 0, &parsed_options->scale },
-		{ WESTON_OPTION_BOOLEAN, "use-pixman", 0, &config.use_pixman },
-		{ WESTON_OPTION_BOOLEAN, "use-gl", 0, &config.use_gl },
+		{ WESTON_OPTION_BOOLEAN, "use-pixman", 0, &force_pixman },
+		{ WESTON_OPTION_BOOLEAN, "use-gl", 0, &force_gl },
 		{ WESTON_OPTION_STRING, "transform", 0, &transform },
 		{ WESTON_OPTION_BOOLEAN, "no-outputs", 0, &no_outputs },
 	};
 
 	parse_options(options, ARRAY_LENGTH(options), argc, argv);
+
+	if ((force_pixman && force_gl) ||
+	    (renderer != WESTON_RENDERER_AUTO && (force_pixman || force_gl))) {
+		weston_log("Conflicting renderer specifications\n");
+		return -1;
+	} else if (force_pixman) {
+		config.renderer = WESTON_RENDERER_PIXMAN;
+	} else if (force_gl) {
+		config.renderer = WESTON_RENDERER_GL;
+	} else {
+		config.renderer = renderer;
+	}
 
 	if (transform) {
 		if (weston_parse_transform(transform, &parsed_options->transform) < 0) {
@@ -2736,14 +3167,13 @@ load_headless_backend(struct weston_compositor *c,
 	config.base.struct_version = WESTON_HEADLESS_BACKEND_CONFIG_VERSION;
 	config.base.struct_size = sizeof(struct weston_headless_backend_config);
 
-	wet_set_simple_head_configurator(c, headless_backend_output_configure);
-
 	/* load the actual wayland backend and configure it */
-	ret = weston_compositor_load_backend(c, WESTON_BACKEND_HEADLESS,
-					     &config.base);
+	wb = wet_compositor_load_backend(c, WESTON_BACKEND_HEADLESS,
+					 &config.base, simple_heads_changed,
+					 headless_backend_output_configure);
 
-	if (ret < 0)
-		return ret;
+	if (!wb)
+		return -1;
 
 	if (!no_outputs) {
 		api = weston_windowed_output_get_api(c);
@@ -2753,7 +3183,7 @@ load_headless_backend(struct weston_compositor *c,
 			return -1;
 		}
 
-		if (api->create_head(c, "headless") < 0)
+		if (api->create_head(wb->backend, "headless") < 0)
 			return -1;
 	}
 
@@ -2761,35 +3191,97 @@ load_headless_backend(struct weston_compositor *c,
 }
 
 static int
-rdp_backend_output_configure(struct weston_output *output)
+pipewire_backend_output_configure(struct weston_output *output)
 {
+	struct wet_output_config defaults = {
+		.width = 640,
+		.height = 480,
+	};
 	struct wet_compositor *compositor = to_wet_compositor(output->compositor);
 	struct wet_output_config *parsed_options = compositor->parsed_options;
-	const struct weston_rdp_output_api *api = weston_rdp_output_get_api(output->compositor);
-	int width = 640;
-	int height = 480;
+	const struct weston_pipewire_output_api *api = weston_pipewire_output_get_api(output->compositor);
+	struct weston_config *wc = wet_get_config(output->compositor);
+	struct weston_config_section *section;
+	char *gbm_format = NULL;
+	int width;
+	int height;
 
 	assert(parsed_options);
 
 	if (!api) {
-		weston_log("Cannot use weston_rdp_output_api.\n");
+		weston_log("Cannot use weston_pipewire_output_api.\n");
 		return -1;
 	}
 
-	if (parsed_options->width)
-		width = parsed_options->width;
+	section = weston_config_get_section(wc, "output", "name", output->name);
 
-	if (parsed_options->height)
-		height = parsed_options->height;
+	parse_simple_mode(output, section, &width, &height, &defaults,
+			  parsed_options);
+
+	if (section)
+		weston_config_section_get_string(section, "gbm-format",
+						 &gbm_format, NULL);
 
 	weston_output_set_scale(output, 1);
 	weston_output_set_transform(output, WL_OUTPUT_TRANSFORM_NORMAL);
 
+	api->set_gbm_format(output, gbm_format);
+	free(gbm_format);
+
 	if (api->output_set_size(output, width, height) < 0) {
-		weston_log("Cannot configure output \"%s\" using weston_rdp_output_api.\n",
+		weston_log("Cannot configure output \"%s\" using weston_pipewire_output_api.\n",
 			   output->name);
 		return -1;
 	}
+	weston_log("pipewire_backend_output_configure.. Done\n");
+
+	return 0;
+}
+
+static void
+weston_pipewire_backend_config_init(struct weston_pipewire_backend_config *config)
+{
+	config->base.struct_version = WESTON_PIPEWIRE_BACKEND_CONFIG_VERSION;
+	config->base.struct_size = sizeof(struct weston_pipewire_backend_config);
+}
+
+static int
+load_pipewire_backend(struct weston_compositor *c,
+		      int *argc, char *argv[], struct weston_config *wc,
+		      enum weston_renderer_type renderer)
+{
+	struct weston_pipewire_backend_config config = {{ 0, }};
+	struct weston_config_section *section;
+	struct wet_output_config *parsed_options = wet_init_parsed_options(c);
+	struct wet_backend *wb;
+
+	if (!parsed_options)
+		return -1;
+
+	weston_pipewire_backend_config_init(&config);
+
+	const struct weston_option pipewire_options[] = {
+		{ WESTON_OPTION_INTEGER, "width", 0, &parsed_options->width },
+		{ WESTON_OPTION_INTEGER, "height", 0, &parsed_options->height },
+	};
+
+	parse_options(pipewire_options, ARRAY_LENGTH(pipewire_options), argc, argv);
+
+	config.renderer = renderer;
+
+	section = weston_config_get_section(wc, "core", NULL, NULL);
+	weston_config_section_get_string(section, "gbm-format",
+					 &config.gbm_format, NULL);
+
+	section = weston_config_get_section(wc, "pipewire", NULL, NULL);
+	weston_config_section_get_int(section, "num-outputs",
+				      &config.num_outputs, 1);
+
+	wb = wet_compositor_load_backend(c, WESTON_BACKEND_PIPEWIRE,
+					 &config.base, simple_heads_changed,
+					 pipewire_backend_output_configure);
+	if (!wb)
+		return -1;
 
 	return 0;
 }
@@ -2800,24 +3292,112 @@ weston_rdp_backend_config_init(struct weston_rdp_backend_config *config)
 	config->base.struct_version = WESTON_RDP_BACKEND_CONFIG_VERSION;
 	config->base.struct_size = sizeof(struct weston_rdp_backend_config);
 
+	config->renderer = WESTON_RENDERER_AUTO;
 	config->bind_address = NULL;
 	config->port = 3389;
 	config->rdp_key = NULL;
 	config->server_cert = NULL;
 	config->server_key = NULL;
 	config->env_socket = 0;
+	config->external_listener_fd = -1;
 	config->no_clients_resize = 0;
 	config->force_no_compression = 0;
+	config->remotefx_codec = true;
+	config->refresh_rate = RDP_DEFAULT_FREQ;
+}
+
+static void
+rdp_handle_layout(struct weston_compositor *ec, struct wet_backend *wb)
+{
+	struct wet_compositor *wc = to_wet_compositor(ec);
+	struct wet_output_config *parsed_options = wc->parsed_options;
+	const struct weston_rdp_output_api *api = weston_rdp_output_get_api(ec);
+	struct weston_rdp_monitor config;
+	struct weston_head *head = NULL;
+	int width;
+	int height;
+	int scale = 1;
+
+	while ((head = wet_backend_iterate_heads(wc, wb, head))) {
+		struct weston_coord_global pos;
+		struct weston_output *output = head->output;
+		struct weston_mode new_mode = {};
+
+		assert(output);
+
+		api->head_get_monitor(head, &config);
+
+		width = config.width;
+		height = config.height;
+		scale = config.desktop_scale / 100;
+
+		/* If these are invalid, the backend is expecting
+		 * us to provide defaults.
+		 */
+		width = width ? width : parsed_options->width;
+		height = height ? height : parsed_options->height;
+		scale = scale ? scale : parsed_options->scale;
+
+		/* Fallback to 640 x 480 if we have nothing to use */
+		width = width ? width : 640;
+		height = height ? height : 480;
+		scale = scale ? scale : 1;
+
+		new_mode.width = width;
+		new_mode.height = height;
+		api->output_set_mode(output, &new_mode);
+
+		weston_output_set_scale(output, scale);
+		weston_output_set_transform(output,
+					    WL_OUTPUT_TRANSFORM_NORMAL);
+		pos.c = weston_coord(config.x, config.y);
+		weston_output_move(output, pos);
+	}
+}
+
+static void
+rdp_heads_changed(struct wl_listener *listener, void *arg)
+{
+	struct weston_compositor *compositor = arg;
+	struct wet_compositor *wet = to_wet_compositor(compositor);
+	struct wet_backend *wb = container_of(listener, struct wet_backend,
+					      heads_changed_listener);
+	struct weston_head *head = NULL;
+
+	while ((head = wet_backend_iterate_heads(wet, wb, head))) {
+		if (head->output)
+			continue;
+
+		struct weston_output *out;
+
+		out = weston_compositor_create_output(compositor,
+						      head, head->name);
+
+		wet_head_tracker_create(wet, head);
+		weston_output_attach_head(out, head);
+	}
+
+	rdp_handle_layout(compositor, wb);
+
+	while ((head = wet_backend_iterate_heads(wet, wb, head))) {
+		if (!head->output->enabled)
+			weston_output_enable(head->output);
+
+		weston_head_reset_device_changed(head);
+	}
 }
 
 static int
 load_rdp_backend(struct weston_compositor *c,
-		int *argc, char *argv[], struct weston_config *wc)
+		int *argc, char *argv[], struct weston_config *wc,
+		enum weston_renderer_type renderer)
 {
 	struct weston_rdp_backend_config config  = {{ 0, }};
-	int ret = 0;
-
+	struct weston_config_section *section;
+	struct wet_backend *wb;
+	bool no_remotefx_codec = false;
 	struct wet_output_config *parsed_options = wet_init_parsed_options(c);
+
 	if (!parsed_options)
 		return -1;
 
@@ -2825,6 +3405,7 @@ load_rdp_backend(struct weston_compositor *c,
 
 	const struct weston_option rdp_options[] = {
 		{ WESTON_OPTION_BOOLEAN, "env-socket", 0, &config.env_socket },
+		{ WESTON_OPTION_INTEGER, "external-listener-fd", 0, &config.external_listener_fd },
 		{ WESTON_OPTION_INTEGER, "width", 0, &parsed_options->width },
 		{ WESTON_OPTION_INTEGER, "height", 0, &parsed_options->height },
 		{ WESTON_OPTION_STRING,  "address", 0, &config.bind_address },
@@ -2833,70 +3414,145 @@ load_rdp_backend(struct weston_compositor *c,
 		{ WESTON_OPTION_STRING,  "rdp4-key", 0, &config.rdp_key },
 		{ WESTON_OPTION_STRING,  "rdp-tls-cert", 0, &config.server_cert },
 		{ WESTON_OPTION_STRING,  "rdp-tls-key", 0, &config.server_key },
+		{ WESTON_OPTION_INTEGER, "scale", 0, &parsed_options->scale },
 		{ WESTON_OPTION_BOOLEAN, "force-no-compression", 0, &config.force_no_compression },
+		{ WESTON_OPTION_BOOLEAN, "no-remotefx-codec", 0, &no_remotefx_codec },
 	};
 
 	parse_options(rdp_options, ARRAY_LENGTH(rdp_options), argc, argv);
+	config.remotefx_codec = !no_remotefx_codec;
+	config.renderer = renderer;
 
-	wet_set_simple_head_configurator(c, rdp_backend_output_configure);
+	section = weston_config_get_section(wc, "rdp", NULL, NULL);
+	weston_config_section_get_int(section, "refresh-rate",
+				      &config.refresh_rate,
+				      RDP_DEFAULT_FREQ);
+	weston_config_section_get_string(section, "tls-cert",
+					 &config.server_cert,
+					 config.server_cert);
+	weston_config_section_get_string(section, "tls-key",
+					 &config.server_key, config.server_key);
 
-	ret = weston_compositor_load_backend(c, WESTON_BACKEND_RDP,
-					     &config.base);
+	wb = wet_compositor_load_backend(c, WESTON_BACKEND_RDP, &config.base,
+					 rdp_heads_changed, NULL);
 
 	free(config.bind_address);
 	free(config.rdp_key);
 	free(config.server_cert);
 	free(config.server_key);
 
-	return ret;
-}
-
-static int
-fbdev_backend_output_configure(struct weston_output *output)
-{
-	struct weston_config *wc = wet_get_config(output->compositor);
-	struct weston_config_section *section;
-
-	section = weston_config_get_section(wc, "output", "name", "fbdev");
-
-	if (wet_output_set_transform(output, section,
-				     WL_OUTPUT_TRANSFORM_NORMAL,
-				     UINT32_MAX) < 0) {
+	if (!wb)
 		return -1;
-	}
-
-	weston_output_set_scale(output, 1);
 
 	return 0;
 }
 
 static int
-load_fbdev_backend(struct weston_compositor *c,
-		      int *argc, char **argv, struct weston_config *wc)
+vnc_backend_output_configure(struct weston_output *output)
 {
-	struct weston_fbdev_backend_config config = {{ 0, }};
-	int ret = 0;
+	struct wet_output_config defaults = {
+		.width = 640,
+		.height = 480,
+	};
+	struct wet_compositor *compositor = to_wet_compositor(output->compositor);
+	struct wet_output_config *parsed_options = compositor->parsed_options;
+	const struct weston_vnc_output_api *api = weston_vnc_output_get_api(output->compositor);
+	struct weston_config *wc = wet_get_config(output->compositor);
+	struct weston_config_section *section;
+	int width;
+	int height;
+	bool resizeable;
 
-	const struct weston_option fbdev_options[] = {
-		{ WESTON_OPTION_INTEGER, "tty", 0, &config.tty },
-		{ WESTON_OPTION_STRING, "device", 0, &config.device },
-		{ WESTON_OPTION_STRING, "seat", 0, &config.seat_id },
+	assert(parsed_options);
+
+	if (!api) {
+		weston_log("Cannot use weston_vnc_output_api.\n");
+		return -1;
+	}
+
+	section = weston_config_get_section(wc, "output", "name", output->name);
+
+	parse_simple_mode(output, section, &width, &height, &defaults,
+			  compositor->parsed_options);
+
+	weston_config_section_get_bool(section, "resizeable", &resizeable, true);
+
+	weston_output_set_scale(output, 1);
+	weston_output_set_transform(output, WL_OUTPUT_TRANSFORM_NORMAL);
+
+	if (api->output_set_size(output, width, height, resizeable) < 0) {
+		weston_log("Cannot configure output \"%s\" using weston_vnc_output_api.\n",
+			   output->name);
+		return -1;
+	}
+	weston_log("vnc_backend_output_configure.. Done\n");
+
+	return 0;
+}
+
+
+static void
+weston_vnc_backend_config_init(struct weston_vnc_backend_config *config)
+{
+	config->base.struct_version = WESTON_VNC_BACKEND_CONFIG_VERSION;
+	config->base.struct_size = sizeof(struct weston_vnc_backend_config);
+
+	config->renderer = WESTON_RENDERER_AUTO;
+	config->bind_address = NULL;
+	config->port = 5900;
+	config->refresh_rate = VNC_DEFAULT_FREQ;
+}
+
+static int
+load_vnc_backend(struct weston_compositor *c,
+		int *argc, char *argv[], struct weston_config *wc,
+		enum weston_renderer_type renderer)
+{
+	struct weston_vnc_backend_config config  = {{ 0, }};
+	struct weston_config_section *section;
+	struct wet_backend *wb;
+
+	struct wet_output_config *parsed_options = wet_init_parsed_options(c);
+	if (!parsed_options)
+		return -1;
+
+	weston_vnc_backend_config_init(&config);
+
+	const struct weston_option vnc_options[] = {
+		{ WESTON_OPTION_INTEGER, "width", 0, &parsed_options->width },
+		{ WESTON_OPTION_INTEGER, "height", 0, &parsed_options->height },
+		{ WESTON_OPTION_STRING,  "address", 0, &config.bind_address },
+		{ WESTON_OPTION_INTEGER, "port", 0, &config.port },
+		{ WESTON_OPTION_STRING,  "vnc-tls-cert", 0, &config.server_cert },
+		{ WESTON_OPTION_STRING,  "vnc-tls-key", 0, &config.server_key },
 	};
 
-	parse_options(fbdev_options, ARRAY_LENGTH(fbdev_options), argc, argv);
+	parse_options(vnc_options, ARRAY_LENGTH(vnc_options), argc, argv);
 
-	config.base.struct_version = WESTON_FBDEV_BACKEND_CONFIG_VERSION;
-	config.base.struct_size = sizeof(struct weston_fbdev_backend_config);
-	config.configure_device = configure_input_device;
+	config.renderer = renderer;
 
-	wet_set_simple_head_configurator(c, fbdev_backend_output_configure);
+	section = weston_config_get_section(wc, "vnc", NULL, NULL);
+	weston_config_section_get_int(section, "refresh-rate",
+				      &config.refresh_rate,
+				      VNC_DEFAULT_FREQ);
+	weston_config_section_get_string(section, "tls-cert",
+					 &config.server_cert,
+					 config.server_cert);
+	weston_config_section_get_string(section, "tls-key",
+					 &config.server_key, config.server_key);
 
-	/* load the actual wayland backend and configure it */
-	ret = weston_compositor_load_backend(c, WESTON_BACKEND_FBDEV,
-					     &config.base);
+	wb = wet_compositor_load_backend(c, WESTON_BACKEND_VNC, &config.base,
+					 simple_heads_changed,
+					 vnc_backend_output_configure);
 
-	free(config.device);
-	return ret;
+	free(config.bind_address);
+	free(config.server_cert);
+	free(config.server_key);
+
+	if (!wb)
+		return -1;
+
+	return 0;
 }
 
 static int
@@ -2914,13 +3570,15 @@ x11_backend_output_configure(struct weston_output *output)
 
 static int
 load_x11_backend(struct weston_compositor *c,
-		 int *argc, char **argv, struct weston_config *wc)
+		 int *argc, char **argv, struct weston_config *wc,
+		 enum weston_renderer_type renderer)
 {
 	char *default_output;
 	const struct weston_windowed_output_api *api;
 	struct weston_x11_backend_config config = {{ 0, }};
 	struct weston_config_section *section;
-	int ret = 0;
+	struct wet_backend *wb;
+	bool force_pixman;
 	int option_count = 1;
 	int output_count = 0;
 	char const *section_name;
@@ -2931,7 +3589,7 @@ load_x11_backend(struct weston_compositor *c,
 		return -1;
 
 	section = weston_config_get_section(wc, "core", NULL, NULL);
-	weston_config_section_get_bool(section, "use-pixman", &config.use_pixman,
+	weston_config_section_get_bool(section, "use-pixman", &force_pixman,
 				       false);
 
 	const struct weston_option options[] = {
@@ -2941,7 +3599,7 @@ load_x11_backend(struct weston_compositor *c,
 	       { WESTON_OPTION_BOOLEAN, "fullscreen", 'f', &config.fullscreen },
 	       { WESTON_OPTION_INTEGER, "output-count", 0, &option_count },
 	       { WESTON_OPTION_BOOLEAN, "no-input", 0, &config.no_input },
-	       { WESTON_OPTION_BOOLEAN, "use-pixman", 0, &config.use_pixman },
+	       { WESTON_OPTION_BOOLEAN, "use-pixman", 0, &force_pixman },
 	};
 
 	parse_options(options, ARRAY_LENGTH(options), argc, argv);
@@ -2949,14 +3607,22 @@ load_x11_backend(struct weston_compositor *c,
 	config.base.struct_version = WESTON_X11_BACKEND_CONFIG_VERSION;
 	config.base.struct_size = sizeof(struct weston_x11_backend_config);
 
-	wet_set_simple_head_configurator(c, x11_backend_output_configure);
+	if (force_pixman && renderer != WESTON_RENDERER_AUTO) {
+		weston_log("error: conflicting renderer specification\n");
+		return -1;
+	} else if (force_pixman) {
+		config.renderer = WESTON_RENDERER_PIXMAN;
+	} else {
+		config.renderer = renderer;
+	}
 
 	/* load the actual backend and configure it */
-	ret = weston_compositor_load_backend(c, WESTON_BACKEND_X11,
-					     &config.base);
+	wb = wet_compositor_load_backend(c, WESTON_BACKEND_X11, &config.base,
+					 simple_heads_changed,
+					 x11_backend_output_configure);
 
-	if (ret < 0)
-		return ret;
+	if (!wb)
+		return -1;
 
 	api = weston_windowed_output_get_api(c);
 
@@ -2982,7 +3648,7 @@ load_x11_backend(struct weston_compositor *c,
 			continue;
 		}
 
-		if (api->create_head(c, output_name) < 0) {
+		if (api->create_head(wb->backend, output_name) < 0) {
 			free(output_name);
 			return -1;
 		}
@@ -2998,7 +3664,7 @@ load_x11_backend(struct weston_compositor *c,
 			return -1;
 		}
 
-		if (api->create_head(c, default_output) < 0) {
+		if (api->create_head(wb->backend, default_output) < 0) {
 			free(default_output);
 			return -1;
 		}
@@ -3023,15 +3689,17 @@ wayland_backend_output_configure(struct weston_output *output)
 
 static int
 load_wayland_backend(struct weston_compositor *c,
-		     int *argc, char **argv, struct weston_config *wc)
+		     int *argc, char **argv, struct weston_config *wc,
+		     enum weston_renderer_type renderer)
 {
 	struct weston_wayland_backend_config config = {{ 0, }};
 	struct weston_config_section *section;
 	const struct weston_windowed_output_api *api;
 	const char *section_name;
+	struct wet_backend *wb;
 	char *output_name = NULL;
+	bool force_pixman = false;
 	int count = 1;
-	int ret = 0;
 	int i;
 
 	struct wet_output_config *parsed_options = wet_init_parsed_options(c);
@@ -3043,7 +3711,7 @@ load_wayland_backend(struct weston_compositor *c,
 	config.display_name = NULL;
 
 	section = weston_config_get_section(wc, "core", NULL, NULL);
-	weston_config_section_get_bool(section, "use-pixman", &config.use_pixman,
+	weston_config_section_get_bool(section, "use-pixman", &force_pixman,
 				       false);
 
 	const struct weston_option wayland_options[] = {
@@ -3051,7 +3719,7 @@ load_wayland_backend(struct weston_compositor *c,
 		{ WESTON_OPTION_INTEGER, "height", 0, &parsed_options->height },
 		{ WESTON_OPTION_INTEGER, "scale", 0, &parsed_options->scale },
 		{ WESTON_OPTION_STRING, "display", 0, &config.display_name },
-		{ WESTON_OPTION_BOOLEAN, "use-pixman", 0, &config.use_pixman },
+		{ WESTON_OPTION_BOOLEAN, "use-pixman", 0, &force_pixman },
 		{ WESTON_OPTION_INTEGER, "output-count", 0, &count },
 		{ WESTON_OPTION_BOOLEAN, "fullscreen", 0, &config.fullscreen },
 		{ WESTON_OPTION_BOOLEAN, "sprawl", 0, &config.sprawl },
@@ -3068,15 +3736,25 @@ load_wayland_backend(struct weston_compositor *c,
 	config.base.struct_size = sizeof(struct weston_wayland_backend_config);
 	config.base.struct_version = WESTON_WAYLAND_BACKEND_CONFIG_VERSION;
 
+	if (force_pixman && renderer != WESTON_RENDERER_AUTO) {
+		weston_log("error: conflicting renderer specification\n");
+		return -1;
+	} else if (force_pixman) {
+		config.renderer = WESTON_RENDERER_PIXMAN;
+	} else {
+		config.renderer = renderer;
+	}
+
 	/* load the actual wayland backend and configure it */
-	ret = weston_compositor_load_backend(c, WESTON_BACKEND_WAYLAND,
-					     &config.base);
+	wb = wet_compositor_load_backend(c, WESTON_BACKEND_WAYLAND,
+					 &config.base, simple_heads_changed,
+					 NULL);
 
 	free(config.cursor_theme);
 	free(config.display_name);
 
-	if (ret < 0)
-		return ret;
+	if (!wb)
+		return -1;
 
 	api = weston_windowed_output_get_api(c);
 
@@ -3086,12 +3764,10 @@ load_wayland_backend(struct weston_compositor *c,
 		 * started with --sprawl or runs on fullscreen-shell.
 		 * In this case, all values are hardcoded, so nothing can be
 		 * configured; simply create and enable an output. */
-		wet_set_simple_head_configurator(c, NULL);
-
 		return 0;
 	}
 
-	wet_set_simple_head_configurator(c, wayland_backend_output_configure);
+	wb->simple_output_configure = wayland_backend_output_configure;
 
 	section = NULL;
 	while (weston_config_next_section(wc, &section, &section_name)) {
@@ -3112,7 +3788,7 @@ load_wayland_backend(struct weston_compositor *c,
 			continue;
 		}
 
-		if (api->create_head(c, output_name) < 0) {
+		if (api->create_head(wb->backend, output_name) < 0) {
 			free(output_name);
 			return -1;
 		}
@@ -3125,7 +3801,7 @@ load_wayland_backend(struct weston_compositor *c,
 		if (asprintf(&output_name, "wayland%d", i) < 0)
 			return -1;
 
-		if (api->create_head(c, output_name) < 0) {
+		if (api->create_head(wb->backend, output_name) < 0) {
 			free(output_name);
 			return -1;
 		}
@@ -3137,24 +3813,75 @@ load_wayland_backend(struct weston_compositor *c,
 
 
 static int
-load_backend(struct weston_compositor *compositor, const char *backend,
-	     int *argc, char **argv, struct weston_config *config)
+load_backend(struct weston_compositor *compositor, const char *name,
+	     int *argc, char **argv, struct weston_config *config,
+	     const char *renderer_name)
 {
-	if (strstr(backend, "headless-backend.so"))
-		return load_headless_backend(compositor, argc, argv, config);
-	else if (strstr(backend, "rdp-backend.so"))
-		return load_rdp_backend(compositor, argc, argv, config);
-	else if (strstr(backend, "fbdev-backend.so"))
-		return load_fbdev_backend(compositor, argc, argv, config);
-	else if (strstr(backend, "drm-backend.so"))
-		return load_drm_backend(compositor, argc, argv, config);
-	else if (strstr(backend, "x11-backend.so"))
-		return load_x11_backend(compositor, argc, argv, config);
-	else if (strstr(backend, "wayland-backend.so"))
-		return load_wayland_backend(compositor, argc, argv, config);
+	enum weston_compositor_backend backend;
+	enum weston_renderer_type renderer;
 
-	weston_log("Error: unknown backend \"%s\"\n", backend);
-	return -1;
+	if (!get_backend_from_string(name, &backend)) {
+		weston_log("Error: unknown backend \"%s\"\n", name);
+		return -1;
+	}
+
+	if (!get_renderer_from_string(renderer_name, &renderer)) {
+		weston_log("Error: unknown renderer \"%s\"\n", renderer_name);
+		return -1;
+	}
+
+	switch (backend) {
+	case WESTON_BACKEND_DRM:
+		return load_drm_backend(compositor, argc, argv, config,
+					renderer);
+	case WESTON_BACKEND_HEADLESS:
+		return load_headless_backend(compositor, argc, argv, config,
+					     renderer);
+	case WESTON_BACKEND_PIPEWIRE:
+		return load_pipewire_backend(compositor, argc, argv, config,
+					     renderer);
+	case WESTON_BACKEND_RDP:
+		return load_rdp_backend(compositor, argc, argv, config,
+					renderer);
+	case WESTON_BACKEND_VNC:
+		return load_vnc_backend(compositor, argc, argv, config,
+					renderer);
+	case WESTON_BACKEND_WAYLAND:
+		return load_wayland_backend(compositor, argc, argv, config,
+					    renderer);
+	case WESTON_BACKEND_X11:
+		return load_x11_backend(compositor, argc, argv, config,
+					renderer);
+	default:
+		unreachable("unknown backend type in load_backend()");
+	}
+}
+
+static int
+load_backends(struct weston_compositor *ec, const char *backends,
+	      int *argc, char *argv[], struct weston_config *config,
+	      const char *renderer)
+{
+	const char *p, *end;
+	char buffer[256];
+
+	if (backends == NULL)
+		return 0;
+
+	p = backends;
+	while (*p) {
+		end = strchrnul(p, ',');
+		snprintf(buffer, sizeof buffer, "%.*s", (int) (end - p), p);
+
+		if (load_backend(ec, buffer, argc, argv, config, renderer) < 0)
+			return -1;
+
+		p = end;
+		while (*p == ',')
+			p++;
+	}
+
+	return 0;
 }
 
 static char *
@@ -3178,10 +3905,15 @@ copy_command_line(int argc, char * const argv[])
 }
 
 #if !defined(BUILD_XWAYLAND)
-int
+void *
 wet_load_xwayland(struct weston_compositor *comp)
 {
-	return -1;
+	return NULL;
+}
+
+void
+wet_xwayland_destroy(struct weston_compositor *comp, void *wet_xwl)
+{
 }
 #endif
 
@@ -3210,6 +3942,7 @@ execute_autolaunch(struct wet_compositor *wet, struct weston_config *config)
 		weston_log("Failed to fork autolaunch process: %s\n", strerror(errno));
 		goto out;
 	} else if (tmp_pid == 0) {
+		cleanup_for_child_process();
 		execl(autolaunch_path, autolaunch_path, NULL);
 		/* execl shouldn't return */
 		fprintf(stderr, "Failed to execute autolaunch: %s\n", strerror(errno));
@@ -3266,16 +3999,34 @@ weston_log_subscribe_to_scopes(struct weston_log_context *log_ctx,
 		weston_log_setup_scopes(log_ctx, flight_rec, flight_rec_scopes);
 }
 
+static void
+screenshot_allow_all(struct wl_listener *l,
+		     struct weston_output_capture_attempt *att)
+{
+	/*
+	 * The effect of --debug option: indiscriminately allow everyone to
+	 * take screenshots of any output.
+	 */
+	att->authorized = true;
+}
+
+static void
+sigint_helper(int sig)
+{
+	raise(SIGUSR2);
+}
+
 WL_EXPORT int
 wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 {
 	int ret = EXIT_FAILURE;
 	char *cmdline;
 	struct wl_display *display;
-	struct wl_event_source *signals[4];
+	struct wl_event_source *signals[3];
 	struct wl_event_loop *loop;
 	int i, fd;
-	char *backend = NULL;
+	char *backends = NULL;
+	char *renderer = NULL;
 	char *shell = NULL;
 	bool xwayland = false;
 	char *modules = NULL;
@@ -3284,6 +4035,7 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 	char *log_scopes = NULL;
 	char *flight_rec_scopes = NULL;
 	char *server_socket = NULL;
+	char *require_outputs = NULL;
 	int32_t idle_time = -1;
 	int32_t help = 0;
 	char *socket_name = NULL;
@@ -3301,13 +4053,18 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 	struct weston_log_context *log_ctx = NULL;
 	struct weston_log_subscriber *logger = NULL;
 	struct weston_log_subscriber *flight_rec = NULL;
+	struct wet_process *process, *process_tmp;
+	void *wet_xwl = NULL;
 	sigset_t mask;
+	struct sigaction action;
 
 	bool wait_for_debugger = false;
 	struct wl_protocol_logger *protologger = NULL;
 
 	const struct weston_option core_options[] = {
-		{ WESTON_OPTION_STRING, "backend", 'B', &backend },
+		{ WESTON_OPTION_STRING, "backend", 'B', &backends },
+		{ WESTON_OPTION_STRING, "backends", 0, &backends },
+		{ WESTON_OPTION_STRING, "renderer", 0, &renderer },
 		{ WESTON_OPTION_STRING, "shell", 0, &shell },
 		{ WESTON_OPTION_STRING, "socket", 'S', &socket_name },
 		{ WESTON_OPTION_INTEGER, "idle-time", 'i', &idle_time },
@@ -3327,6 +4084,7 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 	};
 
 	wl_list_init(&wet.layoutput_list);
+	wl_list_init(&wet.backend_list);
 
 	os_fd_set_cloexec(fileno(stdin));
 
@@ -3392,16 +4150,28 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 	loop = wl_display_get_event_loop(display);
 	signals[0] = wl_event_loop_add_signal(loop, SIGTERM, on_term_signal,
 					      display);
-	signals[1] = wl_event_loop_add_signal(loop, SIGINT, on_term_signal,
-					      display);
-	signals[2] = wl_event_loop_add_signal(loop, SIGQUIT, on_term_signal,
+	signals[1] = wl_event_loop_add_signal(loop, SIGUSR2, on_term_signal,
 					      display);
 
 	wl_list_init(&wet.child_process_list);
-	signals[3] = wl_event_loop_add_signal(loop, SIGCHLD, sigchld_handler,
+	signals[2] = wl_event_loop_add_signal(loop, SIGCHLD, sigchld_handler,
 					      &wet);
 
-	if (!signals[0] || !signals[1] || !signals[2] || !signals[3])
+	/* When debugging weston, if use wl_event_loop_add_signal() to catch
+	 * SIGINT, the debugger can't catch it, and attempting to stop
+	 * weston from within the debugger results in weston exiting
+	 * cleanly.
+	 *
+	 * Instead, use the sigaction() function, which sets up the signal
+	 * in a way that gdb can successfully catch, but have the handler
+	 * for SIGINT send SIGUSR2 (xwayland uses SIGUSR1), which we catch
+	 * via wl_event_loop_add_signal().
+	 */
+	action.sa_handler = sigint_helper;
+	sigemptyset(&action.sa_mask);
+	action.sa_flags = 0;
+	sigaction(SIGINT, &action, NULL);
+	if (!signals[0] || !signals[1] || !signals[2])
 		goto out_signals;
 
 	/* Xwayland uses SIGUSR1 for communicating with weston. Since some
@@ -3430,11 +4200,20 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 		raise(SIGSTOP);
 	}
 
-	if (!backend) {
-		weston_config_section_get_string(section, "backend", &backend,
+	if (!renderer) {
+		weston_config_section_get_string(section, "renderer",
+						 &renderer, NULL);
+	}
+
+	if (!backends) {
+		weston_config_section_get_string(section, "backends", &backends,
 						 NULL);
-		if (!backend)
-			backend = weston_choose_default_backend();
+		if (!backends) {
+			weston_config_section_get_string(section, "backend",
+							 &backends, NULL);
+			if (!backends)
+				backends = weston_choose_default_backend();
+		}
 	}
 
 	wet.compositor = weston_compositor_create(display, log_ctx, &wet, test_data);
@@ -3451,8 +4230,12 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 	protologger = wl_display_add_protocol_logger(display,
 						     protocol_log_fn,
 						     NULL);
-	if (debug_protocol)
+	if (debug_protocol) {
 		weston_compositor_enable_debug_protocol(wet.compositor);
+		weston_compositor_add_screenshot_authority(wet.compositor,
+							   &wet.screenshot_auth,
+							   screenshot_allow_all);
+	}
 
 	if (flight_rec)
 		weston_compositor_add_debug_binding(wet.compositor, KEY_D,
@@ -3465,10 +4248,24 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 	weston_config_section_get_bool(section, "require-input",
 				       &wet.compositor->require_input, true);
 
-	if (load_backend(wet.compositor, backend, &argc, argv, config) < 0) {
+	wet.require_outputs = REQUIRE_OUTPUTS_ANY;
+	weston_config_section_get_string(section, "require-outputs",
+					 &require_outputs, NULL);
+	if (require_outputs) {
+		weston_parse_require_outputs(require_outputs,
+					     &wet.require_outputs);
+		free(require_outputs);
+	}
+
+	wet.compositor->multi_backend = backends && strchr(backends, ',');
+	if (load_backends(wet.compositor, backends, &argc, argv, config,
+			  renderer) < 0) {
 		weston_log("fatal: failed to create compositor backend\n");
 		goto out;
 	}
+
+	if (weston_compositor_backends_loaded(wet.compositor) < 0)
+		goto out;
 
 	if (test_data && !check_compositor_capabilities(wet.compositor,
 				test_data->test_quirks.required_capabilities)) {
@@ -3517,26 +4314,33 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 
 	if (!shell)
 		weston_config_section_get_string(section, "shell", &shell,
-						 "desktop-shell.so");
+						 "desktop");
 
 	if (wet_load_shell(wet.compositor, shell, &argc, argv) < 0)
 		goto out;
 
-	weston_config_section_get_string(section, "modules", &modules, "");
-	if (load_modules(wet.compositor, modules, &argc, argv, &xwayland) < 0)
-		goto out;
-
-	if (load_modules(wet.compositor, option_modules, &argc, argv, &xwayland) < 0)
-		goto out;
-
+	/* Load xwayland before other modules - this way if we're using
+	 * the systemd-notify module it will notify after we're ready
+	 * to receive xwayland connections.
+	 */
 	if (!xwayland) {
 		weston_config_section_get_bool(section, "xwayland", &xwayland,
 					       false);
 	}
 	if (xwayland) {
-		if (wet_load_xwayland(wet.compositor) < 0)
+		wet_xwl = wet_load_xwayland(wet.compositor);
+		if (!wet_xwl)
 			goto out;
 	}
+
+	weston_config_section_get_string(section, "modules", &modules, "");
+	if (load_modules(wet.compositor, modules, &argc, argv) < 0)
+		goto out;
+
+	if (load_modules(wet.compositor, option_modules, &argc, argv) < 0)
+		goto out;
+
+	load_additional_modules(wet);
 
 	section = weston_config_get_section(config, "keyboard", NULL, NULL);
 	weston_config_section_get_bool(section, "numlock-on", &numlock_on, false);
@@ -3573,7 +4377,7 @@ wet_main(int argc, char *argv[], const struct weston_testsuite_data *test_data)
 	ret = wet.compositor->exit_code;
 
 out:
-	wet_compositor_destroy_layout(&wet);
+	wet_compositor_destroy_backend_callbacks(&wet);
 
 	/* free(NULL) is valid, and it won't be NULL if it's used */
 	free(wet.parsed_options);
@@ -3581,9 +4385,16 @@ out:
 	if (protologger)
 		wl_protocol_logger_destroy(protologger);
 
+	if (wet_xwl)
+		wet_xwayland_destroy(wet.compositor, wet_xwl);
+
 	weston_compositor_destroy(wet.compositor);
+	wet_compositor_destroy_layout(&wet);
 	weston_log_scope_destroy(protocol_scope);
 	protocol_scope = NULL;
+
+	wl_list_for_each_safe(process, process_tmp, &wet.child_process_list, link)
+		wet_process_destroy(process, 0, false);
 
 out_signals:
 	for (i = ARRAY_LENGTH(signals) - 1; i >= 0; i--)
@@ -3604,7 +4415,8 @@ out_display:
 	if (config)
 		weston_config_destroy(config);
 	free(config_file);
-	free(backend);
+	free(backends);
+	free(renderer);
 	free(shell);
 	free(socket_name);
 	free(option_modules);

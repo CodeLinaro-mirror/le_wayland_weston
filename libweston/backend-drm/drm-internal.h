@@ -54,6 +54,7 @@
 #include <libweston/libweston.h>
 #include <libweston/backend-drm.h>
 #include <libweston/weston-log.h>
+#include "output-capture.h"
 #include "shared/helpers.h"
 #include "shared/weston-drm-fourcc.h"
 #include "libinput-seat.h"
@@ -70,6 +71,10 @@
 
 #ifndef DRM_PLANE_ZPOS_INVALID_PLANE
 #define DRM_PLANE_ZPOS_INVALID_PLANE	0xffffffffffffffffULL
+#endif
+
+#ifndef DRM_PLANE_ALPHA_OPAQUE
+#define DRM_PLANE_ALPHA_OPAQUE	0xffffUL
 #endif
 
 /**
@@ -162,6 +167,8 @@ enum wdrm_plane_property {
 	WDRM_PLANE_IN_FENCE_FD,
 	WDRM_PLANE_FB_DAMAGE_CLIPS,
 	WDRM_PLANE_ZPOS,
+	WDRM_PLANE_ROTATION,
+	WDRM_PLANE_ALPHA,
 	WDRM_PLANE__COUNT
 };
 
@@ -176,16 +183,35 @@ enum wdrm_plane_type {
 };
 
 /**
+ * Possible values for the WDRM_PLANE_ROTATION property.
+ */
+enum wdrm_plane_rotation {
+	WDRM_PLANE_ROTATION_0 = 0,
+	WDRM_PLANE_ROTATION_90,
+	WDRM_PLANE_ROTATION_180,
+	WDRM_PLANE_ROTATION_270,
+	WDRM_PLANE_ROTATION_REFLECT_X,
+	WDRM_PLANE_ROTATION_REFLECT_Y,
+	WDRM_PLANE_ROTATION__COUNT,
+};
+
+/**
  * List of properties attached to a DRM connector
  */
 enum wdrm_connector_property {
 	WDRM_CONNECTOR_EDID = 0,
 	WDRM_CONNECTOR_DPMS,
 	WDRM_CONNECTOR_CRTC_ID,
+	WDRM_CONNECTOR_WRITEBACK_PIXEL_FORMATS,
+	WDRM_CONNECTOR_WRITEBACK_FB_ID,
+	WDRM_CONNECTOR_WRITEBACK_OUT_FENCE_PTR,
 	WDRM_CONNECTOR_NON_DESKTOP,
 	WDRM_CONNECTOR_CONTENT_PROTECTION,
 	WDRM_CONNECTOR_HDCP_CONTENT_TYPE,
 	WDRM_CONNECTOR_PANEL_ORIENTATION,
+	WDRM_CONNECTOR_HDR_OUTPUT_METADATA,
+	WDRM_CONNECTOR_MAX_BPC,
+	WDRM_CONNECTOR_CONTENT_TYPE,
 	WDRM_CONNECTOR__COUNT
 };
 
@@ -218,12 +244,27 @@ enum wdrm_panel_orientation {
 	WDRM_PANEL_ORIENTATION__COUNT
 };
 
+enum wdrm_content_type {
+	WDRM_CONTENT_TYPE_NO_DATA = 0,
+	WDRM_CONTENT_TYPE_GRAPHICS,
+	WDRM_CONTENT_TYPE_PHOTO,
+	WDRM_CONTENT_TYPE_CINEMA,
+	WDRM_CONTENT_TYPE_GAME,
+	WDRM_CONTENT_TYPE__COUNT
+};
+
 /**
  * List of properties attached to DRM CRTCs
  */
 enum wdrm_crtc_property {
 	WDRM_CRTC_MODE_ID = 0,
 	WDRM_CRTC_ACTIVE,
+	WDRM_CRTC_CTM,
+	WDRM_CRTC_DEGAMMA_LUT,
+	WDRM_CRTC_DEGAMMA_LUT_SIZE,
+	WDRM_CRTC_GAMMA_LUT,
+	WDRM_CRTC_GAMMA_LUT_SIZE,
+	WDRM_CRTC_VRR_ENABLED,
 	WDRM_CRTC__COUNT
 };
 
@@ -232,10 +273,20 @@ enum wdrm_crtc_property {
  */
 enum try_view_on_plane_failure_reasons {
 	FAILURE_REASONS_NONE = 0,
-	FAILURE_REASONS_FORCE_RENDERER = (1 << 0),
-	FAILURE_REASONS_FB_FORMAT_INCOMPATIBLE = (1 << 1),
-	FAILURE_REASONS_DMABUF_MODIFIER_INVALID = (1 << 2),
-	FAILURE_REASONS_ADD_FB_FAILED = (1 << 3),
+	FAILURE_REASONS_FORCE_RENDERER = 1 << 0,
+	FAILURE_REASONS_FB_FORMAT_INCOMPATIBLE = 1 << 1,
+	FAILURE_REASONS_DMABUF_MODIFIER_INVALID = 1 << 2,
+	FAILURE_REASONS_ADD_FB_FAILED = 1 << 3,
+	FAILURE_REASONS_NO_PLANES_AVAILABLE = 1 << 4,
+	FAILURE_REASONS_PLANES_REJECTED = 1 << 5,
+	FAILURE_REASONS_INADEQUATE_CONTENT_PROTECTION = 1 << 6,
+	FAILURE_REASONS_INCOMPATIBLE_TRANSFORM = 1 << 7,
+	FAILURE_REASONS_NO_BUFFER = 1 << 8,
+	FAILURE_REASONS_BUFFER_TYPE = 1 << 9,
+	FAILURE_REASONS_GLOBAL_ALPHA = 1 << 10,
+	FAILURE_REASONS_NO_GBM = 1 << 11,
+	FAILURE_REASONS_GBM_BO_IMPORT_FAILED = 1 << 12,
+	FAILURE_REASONS_GBM_BO_GET_HANDLE_FAILED = 1 << 13,
 };
 
 /**
@@ -248,6 +299,58 @@ enum actions_needed_dmabuf_feedback {
 	ACTION_NEEDED_REMOVE_SCANOUT_TRANCHE = (1 << 1),
 };
 
+struct drm_device {
+	struct drm_backend *backend;
+
+	struct {
+		int id;
+		int fd;
+		char *filename;
+		dev_t devnum;
+	} drm;
+
+	/* Track the GEM handles if the device does not have a gbm device, which
+	 * tracks the handles for us.
+	 */
+	struct hash_table *gem_handle_refcnt;
+
+	/* drm_crtc::link */
+	struct wl_list crtc_list;
+
+	struct wl_list plane_list;
+
+	/* drm_writeback::link */
+	struct wl_list writeback_connector_list;
+
+	bool state_invalid;
+
+	bool atomic_modeset;
+
+	bool tearing_supported;
+
+	bool aspect_ratio_supported;
+
+	int32_t cursor_width;
+	int32_t cursor_height;
+
+	bool cursors_are_broken;
+	bool sprites_are_broken;
+
+	void *repaint_data;
+
+	bool fb_modifiers;
+
+	/* we need these parameters in order to not fail drmModeAddFB2()
+	 * due to out of bounds dimensions, and then mistakenly set
+	 * sprites_are_broken:
+	 */
+	int min_width, max_width;
+	int min_height, max_height;
+
+	/* drm_backend::kms_list */
+	struct wl_list link;
+};
+
 struct drm_backend {
 	struct weston_backend base;
 	struct weston_compositor *compositor;
@@ -258,56 +361,18 @@ struct drm_backend {
 	struct udev_monitor *udev_monitor;
 	struct wl_event_source *udev_drm_source;
 
-	struct {
-		int id;
-		int fd;
-		char *filename;
-		dev_t devnum;
-	} drm;
+	struct drm_device *drm;
+	/* drm_device::link */
+	struct wl_list kms_list;
 	struct gbm_device *gbm;
 	struct wl_listener session_listener;
-	uint32_t gbm_format;
+	const struct pixel_format_info *format;
 
-	/* we need these parameters in order to not fail drmModeAddFB2()
-	 * due to out of bounds dimensions, and then mistakenly set
-	 * sprites_are_broken:
-	 */
-	int min_width, max_width;
-	int min_height, max_height;
-
-	struct wl_list plane_list;
-	uint32_t next_plane_idx;
-
-	void *repaint_data;
-
-	bool state_invalid;
-
-	/* drm_crtc::link */
-	struct wl_list crtc_list;
-
-	/* drm_writeback::link */
-	struct wl_list writeback_connector_list;
-
-	bool sprites_are_broken;
-	bool cursors_are_broken;
-
-	bool atomic_modeset;
-
-	bool use_pixman;
 	bool use_pixman_shadow;
 
 	struct udev_input input;
 
-	int32_t cursor_width;
-	int32_t cursor_height;
-
 	uint32_t pageflip_timeout;
-
-	bool shutting_down;
-
-	bool aspect_ratio_supported;
-
-	bool fb_modifiers;
 
 	struct weston_log_scope *debug;
 };
@@ -329,6 +394,9 @@ enum drm_fb_type {
 
 struct drm_fb {
 	enum drm_fb_type type;
+
+	struct drm_backend *backend;
+	struct drm_device *scanout_device;
 
 	int refcnt;
 
@@ -355,14 +423,13 @@ struct drm_fb {
 struct drm_buffer_fb {
 	struct drm_fb *fb;
 	enum try_view_on_plane_failure_reasons failure_reasons;
-	struct wl_listener buffer_destroy_listener;
+	struct drm_device *device;
+	struct wl_list link;
 };
 
-struct drm_edid {
-	char eisa_id[13];
-	char monitor_name[13];
-	char pnp_id[5];
-	char serial_number[13];
+struct drm_fb_private {
+	struct wl_list buffer_fb_list;
+	struct wl_listener buffer_destroy_listener;
 };
 
 /**
@@ -372,7 +439,7 @@ struct drm_edid {
  * output state will complete and be retired separately.
  */
 struct drm_pending_state {
-	struct drm_backend *backend;
+	struct drm_device *device;
 	struct wl_list output_list;
 };
 
@@ -393,16 +460,7 @@ struct drm_output_state {
 	enum dpms_enum dpms;
 	enum weston_hdcp_protection protection;
 	struct wl_list plane_list;
-};
-
-/**
- * An instance of this class is created each time we believe we have a plane
- * suitable to be used by a view as a direct scan-out. The list is initialized
- * and populated locally.
- */
-struct drm_plane_zpos {
-	struct drm_plane *plane;
-	struct wl_list link;	/**< :candidate_plane_zpos_list */
+	bool tear;
 };
 
 /**
@@ -430,7 +488,10 @@ struct drm_plane_state {
 	int32_t dest_x, dest_y;
 	uint32_t dest_w, dest_h;
 
+	uint32_t rotation;
+
 	uint64_t zpos;
+	uint16_t alpha;
 
 	bool complete;
 
@@ -460,13 +521,14 @@ struct drm_plane_state {
 struct drm_plane {
 	struct weston_plane base;
 
-	struct drm_backend *backend;
+	struct drm_device *device;
 
 	enum wdrm_plane_type type;
 
 	uint32_t possible_crtcs;
 	uint32_t plane_id;
 	uint32_t plane_idx;
+	uint32_t crtc_id;
 
 	struct drm_property_info props[WDRM_PLANE__COUNT];
 
@@ -476,13 +538,16 @@ struct drm_plane {
 	uint64_t zpos_min;
 	uint64_t zpos_max;
 
+	uint16_t alpha_min;
+	uint16_t alpha_max;
+
 	struct wl_list link;
 
 	struct weston_drm_format_array formats;
 };
 
 struct drm_connector {
-	struct drm_backend *backend;
+	struct drm_device *device;
 
 	drmModeConnector *conn;
 	uint32_t connector_id;
@@ -493,31 +558,70 @@ struct drm_connector {
 	struct drm_property_info props[WDRM_CONNECTOR__COUNT];
 };
 
+enum writeback_screenshot_state {
+	/* No writeback connector screenshot ongoing. */
+	DRM_OUTPUT_WB_SCREENSHOT_OFF,
+	/* Screenshot client just triggered a writeback connector screenshot.
+         * Now we need to prepare an atomic commit that will make DRM perform
+         * the writeback operation. */
+	DRM_OUTPUT_WB_SCREENSHOT_PREPARE_COMMIT,
+	/* The atomic commit with writeback setup has been committed. After the
+	 * commit is handled by DRM it will give us a sync fd that gets
+	 * signalled when the writeback is done. */
+	DRM_OUTPUT_WB_SCREENSHOT_CHECK_FENCE,
+	/* The atomic commit completed and we received the sync fd from the
+	 * kernel. We've polled to check if the writeback was over, but it
+	 * wasn't. Now we must stop the repaint loop and wait until the
+	 * writeback is complete, because we can't commit with KMS objects
+	 * (CRTC, planes, etc) that are in used by the writeback job. */
+	DRM_OUTPUT_WB_SCREENSHOT_WAITING_SIGNAL,
+};
+
+struct drm_writeback_state {
+	struct drm_writeback *wb;
+	struct drm_output *output;
+
+	enum writeback_screenshot_state state;
+	struct weston_capture_task *ct;
+
+	struct drm_fb *fb;
+	int32_t out_fence_fd;
+	struct wl_event_source *wb_source;
+
+	/* Reference to fb's being used by the writeback job. These are all the
+	 * framebuffers in every drm_plane_state of the output state that we've
+	 * used to request the writeback job */
+	struct wl_array referenced_fbs;
+};
+
 struct drm_writeback {
-	/* drm_backend::writeback_connector_list */
+	/* drm_device::writeback_connector_list */
 	struct wl_list link;
 
-	struct drm_backend *backend;
+	struct drm_device *device;
 	struct drm_connector connector;
+
+	struct weston_drm_format_array formats;
 };
 
 struct drm_head {
 	struct weston_head base;
-	struct drm_backend *backend;
 	struct drm_connector connector;
-
-	struct drm_edid edid;
 
 	struct backlight *backlight;
 
 	drmModeModeInfo inherited_mode;	/**< Original mode on the connector */
+	uint32_t inherited_max_bpc;	/**< Original max_bpc on the connector */
 	uint32_t inherited_crtc_id;	/**< Original CRTC assignment */
+
+	/* drm_output::disable_head */
+	struct wl_list disable_head_link;
 };
 
 struct drm_crtc {
-	/* drm_backend::crtc_list */
+	/* drm_device::crtc_list */
 	struct wl_list link;
-	struct drm_backend *backend;
+	struct drm_device *device;
 
 	/* The output driven by the CRTC */
 	struct drm_output *output;
@@ -532,13 +636,18 @@ struct drm_crtc {
 struct drm_output {
 	struct weston_output base;
 	struct drm_backend *backend;
+	struct drm_device *device;
 	struct drm_crtc *crtc;
+
+	/* drm_head::disable_head_link */
+	struct wl_list disable_head;
 
 	bool page_flip_pending;
 	bool atomic_complete_pending;
 	bool destroy_pending;
 	bool disable_pending;
 	bool dpms_off_pending;
+	bool mode_switch_pending;
 
 	uint32_t gbm_cursor_handle[2];
 	struct drm_fb *gbm_cursor_fb[2];
@@ -548,8 +657,16 @@ struct drm_output {
 	int current_cursor;
 
 	struct gbm_surface *gbm_surface;
-	uint32_t gbm_format;
+	const struct pixel_format_info *format;
 	uint32_t gbm_bo_flags;
+
+	uint32_t hdr_output_metadata_blob_id;
+	uint64_t ackd_color_outcome_serial;
+
+	unsigned max_bpc;
+
+	bool deprecated_gamma_is_set;
+	bool legacy_gamma_not_supported;
 
 	/* Plane being displayed directly on the CRTC */
 	struct drm_plane *scanout_plane;
@@ -560,10 +677,12 @@ struct drm_output {
 	 * yet acknowledged completion of state_cur. */
 	struct drm_output_state *state_last;
 
+	/* only set when a writeback screenshot is ongoing */
+	struct drm_writeback_state *wb_state;
+
 	struct drm_fb *dumb[2];
-	pixman_image_t *image[2];
+	struct weston_renderbuffer *renderbuffer[2];
 	int current_image;
-	pixman_region32_t previous_damage;
 
 	struct vaapi_recorder *recorder;
 	struct wl_listener recorder_frame_listener;
@@ -571,26 +690,63 @@ struct drm_output {
 	struct wl_event_source *pageflip_timer;
 
 	bool virtual;
+	void (*virtual_destroy)(struct weston_output *base);
 
 	submit_frame_cb virtual_submit_frame;
+
+	enum wdrm_content_type content_type;
 };
+
+void
+drm_destroy(struct weston_backend *backend);
 
 static inline struct drm_head *
 to_drm_head(struct weston_head *base)
 {
+	if (base->backend->destroy != drm_destroy)
+		return NULL;
 	return container_of(base, struct drm_head, base);
 }
+
+void
+drm_writeback_reference_planes(struct drm_writeback_state *state,
+			       struct wl_list *plane_state_list);
+bool
+drm_writeback_should_wait_completion(struct drm_writeback_state *state);
+void
+drm_writeback_fail_screenshot(struct drm_writeback_state *state,
+			      const char *err_msg);
+enum writeback_screenshot_state
+drm_output_get_writeback_state(struct drm_output *output);
+
+void
+drm_output_destroy(struct weston_output *output_base);
+void
+drm_virtual_output_destroy(struct weston_output *output_base);
 
 static inline struct drm_output *
 to_drm_output(struct weston_output *base)
 {
+	if (
+#ifdef BUILD_DRM_VIRTUAL
+	    base->destroy != drm_virtual_output_destroy &&
+#endif
+	    base->destroy != drm_output_destroy)
+		return NULL;
 	return container_of(base, struct drm_output, base);
 }
 
 static inline struct drm_backend *
 to_drm_backend(struct weston_compositor *base)
 {
-	return container_of(base->backend, struct drm_backend, base);
+	struct weston_backend *backend;
+
+	wl_list_for_each(backend, &base->backend_list, link) {
+		if (backend->destroy == drm_destroy)
+			return container_of(backend, struct drm_backend, base);
+	}
+
+	return NULL;
 }
 
 static inline struct drm_mode *
@@ -616,32 +772,31 @@ drm_output_get_plane_type_name(struct drm_plane *p)
 }
 
 struct drm_crtc *
-drm_crtc_find(struct drm_backend *b, uint32_t crtc_id);
+drm_crtc_find(struct drm_device *device, uint32_t crtc_id);
 
 struct drm_head *
 drm_head_find_by_connector(struct drm_backend *backend, uint32_t connector_id);
 
-static inline bool
-drm_view_transform_supported(struct weston_view *ev, struct weston_output *output)
-{
-	struct weston_buffer_viewport *viewport = &ev->surface->buffer_viewport;
+uint64_t
+drm_rotation_from_output_transform(struct drm_plane *plane,
+				   enum wl_output_transform ot);
 
-	/* This will incorrectly disallow cases where the combination of
-	 * buffer and view transformations match the output transform.
-	 * Fixing this requires a full analysis of the transformation
-	 * chain. */
-	if (ev->transform.enabled &&
-	    ev->transform.matrix.type >= WESTON_MATRIX_TRANSFORM_ROTATE)
+static inline bool
+drm_paint_node_transform_supported(struct weston_paint_node *node, struct drm_plane *plane)
+{
+	/* if false, the transform doesn't map to any of the standard
+	 * (ie: 90 degree) output transformations. */
+	if (!node->valid_transform)
 		return false;
 
-	if (viewport->buffer.transform != output->transform)
+	if (drm_rotation_from_output_transform(plane, node->transform) == 0)
 		return false;
 
 	return true;
 }
 
 int
-drm_mode_ensure_blob(struct drm_backend *backend, struct drm_mode *mode);
+drm_mode_ensure_blob(struct drm_device *device, struct drm_mode *mode);
 
 struct drm_mode *
 drm_output_choose_mode(struct drm_output *output,
@@ -650,7 +805,7 @@ void
 update_head_from_connector(struct drm_head *head);
 
 void
-drm_mode_list_destroy(struct drm_backend *backend, struct wl_list *mode_list);
+drm_mode_list_destroy(struct drm_device *device, struct wl_list *mode_list);
 
 void
 drm_output_print_modes(struct drm_output *output);
@@ -661,7 +816,7 @@ drm_output_set_mode(struct weston_output *base,
 		    const char *modeline);
 
 void
-drm_property_info_populate(struct drm_backend *b,
+drm_property_info_populate(struct drm_device *device,
 		           const struct drm_property_info *src,
 			   struct drm_property_info *info,
 			   unsigned int num_infos,
@@ -689,7 +844,7 @@ extern const struct drm_property_info connector_props[];
 extern const struct drm_property_info crtc_props[];
 
 int
-init_kms_caps(struct drm_backend *b);
+init_kms_caps(struct drm_device *device);
 
 int
 drm_pending_state_test(struct drm_pending_state *pending_state);
@@ -716,31 +871,35 @@ void
 drm_fb_unref(struct drm_fb *fb);
 
 struct drm_fb *
-drm_fb_create_dumb(struct drm_backend *b, int width, int height,
+drm_fb_create_dumb(struct drm_device *device, int width, int height,
 		   uint32_t format);
 struct drm_fb *
-drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
+drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_device *device,
 		   bool is_opaque, enum drm_fb_type type);
 
 void
 drm_output_set_cursor_view(struct drm_output *output, struct weston_view *ev);
 
+int
+drm_output_ensure_hdr_output_metadata_blob(struct drm_output *output);
+
 #ifdef BUILD_DRM_GBM
 extern struct drm_fb *
-drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev,
-		     uint32_t *try_view_on_plane_failure_reasons);
+drm_fb_get_from_paint_node(struct drm_output_state *state,
+			   struct weston_paint_node *pnode);
+
 extern bool
-drm_can_scanout_dmabuf(struct weston_compositor *ec,
+drm_can_scanout_dmabuf(struct weston_backend *backend,
 		       struct linux_dmabuf_buffer *dmabuf);
 #else
 static inline struct drm_fb *
-drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev,
-		     uint32_t *try_view_on_plane_failure_reasons)
+drm_fb_get_from_paint_node(struct drm_output_state *state,
+			   struct weston_paint_node *pnode)
 {
 	return NULL;
 }
 static inline bool
-drm_can_scanout_dmabuf(struct weston_compositor *ec,
+drm_can_scanout_dmabuf(struct weston_backend *backend,
 		       struct linux_dmabuf_buffer *dmabuf)
 {
 	return false;
@@ -748,7 +907,7 @@ drm_can_scanout_dmabuf(struct weston_compositor *ec,
 #endif
 
 struct drm_pending_state *
-drm_pending_state_alloc(struct drm_backend *backend);
+drm_pending_state_alloc(struct drm_device *device);
 void
 drm_pending_state_free(struct drm_pending_state *pending_state);
 struct drm_output_state *
@@ -793,24 +952,24 @@ drm_plane_state_free(struct drm_plane_state *state, bool force);
 void
 drm_plane_state_put_back(struct drm_plane_state *state);
 bool
-drm_plane_state_coords_for_view(struct drm_plane_state *state,
-				struct weston_view *ev, uint64_t zpos);
+drm_plane_state_coords_for_paint_node(struct drm_plane_state *state,
+				      struct weston_paint_node *node,
+				      uint64_t zpos);
 void
 drm_plane_reset_state(struct drm_plane *plane);
 
 void
-drm_assign_planes(struct weston_output *output_base, void *repaint_data);
+drm_assign_planes(struct weston_output *output_base);
 
 bool
 drm_plane_is_available(struct drm_plane *plane, struct drm_output *output);
 
 void
-drm_output_render(struct drm_output_state *state, pixman_region32_t *damage);
+drm_output_render(struct drm_output_state *state);
 
 int
-parse_gbm_format(const char *s, uint32_t default_value, uint32_t *gbm_format);
-
-extern struct gl_renderer_interface *gl_renderer;
+parse_gbm_format(const char *s, const struct pixel_format_info *default_format,
+		 const struct pixel_format_info **format);
 
 #ifdef BUILD_DRM_VIRTUAL
 extern int
@@ -836,9 +995,6 @@ drm_output_fini_egl(struct drm_output *output);
 struct drm_fb *
 drm_output_render_gl(struct drm_output_state *state, pixman_region32_t *damage);
 
-void
-renderer_switch_binding(struct weston_keyboard *keyboard,
-			const struct timespec *time, uint32_t key, void *data);
 #else
 inline static int
 init_egl(struct drm_backend *b)
@@ -862,12 +1018,5 @@ inline static struct drm_fb *
 drm_output_render_gl(struct drm_output_state *state, pixman_region32_t *damage)
 {
 	return NULL;
-}
-
-inline static void
-renderer_switch_binding(struct weston_keyboard *keyboard,
-			const struct timespec *time, uint32_t key, void *data)
-{
-	weston_log("Compiled without GBM/EGL support\n");
 }
 #endif
