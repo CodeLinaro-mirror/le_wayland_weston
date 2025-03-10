@@ -263,10 +263,15 @@ weston_log_continue(const char *fmt, ...)
 WL_EXPORT void
 weston_place_marker(const char *name)
 {
+#if MARKER_PRINT_TO_FILE
 	int fd = open("/sys/kernel/boot_kpi/kpi_values", O_WRONLY);
 
 	if (fd > 0) {
 		write(fd, name, strlen(name));
 		close(fd);
 	}
+#else
+	setvbuf(stdout, NULL, _IOLBF, 0);
+	fprintf(stdout,"%s\n",name);
+#endif
 }
