@@ -24,6 +24,13 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+/*
+ * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
+ *
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ *
+ */
 
 #ifndef _WAYLAND_SYSTEM_COMPOSITOR_H_
 #define _WAYLAND_SYSTEM_COMPOSITOR_H_
@@ -1933,6 +1940,30 @@ weston_log_continue(const char *fmt, ...)
 
 void
 weston_place_marker(const char *name);
+
+bool
+weston_atrace_enable(void);
+
+void
+weston_atrace_marker(const char *type, const char *name);
+
+#define ATRACE_BEGIN(fmt_str, ...) \
+	do { \
+		if (weston_atrace_enable()) { \
+			char buf_begin[256]; \
+			snprintf(buf_begin, 256, fmt_str, ##__VA_ARGS__); \
+			weston_atrace_marker("B", buf_begin); \
+		} \
+	} while (0)
+
+#define ATRACE_END(fmt_str, ...) \
+	do { \
+		if (weston_atrace_enable()) { \
+			char buf_end[256]; \
+			snprintf(buf_end, 256, fmt_str, ##__VA_ARGS__); \
+			weston_atrace_marker("E", buf_end); \
+		} \
+	} while (0)
 
 enum weston_screenshooter_outcome {
 	WESTON_SCREENSHOOTER_SUCCESS,
