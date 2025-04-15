@@ -26,7 +26,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -3271,8 +3271,7 @@ import_simple_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 	if (result == GBM_ERROR_NONE) {
 		switch (colormeta.matrixCoefficients) {
 		case MatrixCoEff_BT709_5:
-			/* currently don't support the 709 full range yet.*/
-			colorspace = (colormeta.range) ? GBM_METADATA_COLOR_SPACE_ITU_R_709 :
+			colorspace = (colormeta.range) ? GBM_METADATA_COLOR_SPACE_ITU_R_709_FR :
 							GBM_METADATA_COLOR_SPACE_ITU_R_709;
 			break;
 		case MatrixCoEff_BT601_6_525:
@@ -3312,6 +3311,12 @@ import_simple_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
 			attribs[atti++] = EGL_ITU_REC709_EXT;
 			attribs[atti++] = EGL_SAMPLE_RANGE_HINT_EXT;
 			attribs[atti++] = EGL_YUV_NARROW_RANGE_EXT;
+			break;
+		case GBM_METADATA_COLOR_SPACE_ITU_R_709_FR:
+			attribs[atti++] = EGL_YUV_COLOR_SPACE_HINT_EXT;
+			attribs[atti++] = EGL_ITU_REC709_EXT;
+			attribs[atti++] = EGL_SAMPLE_RANGE_HINT_EXT;
+			attribs[atti++] = EGL_YUV_FULL_RANGE_EXT;
 			break;
 		case GBM_METADATA_COLOR_SPACE_ITU_R_2020:
 			attribs[atti++] = EGL_YUV_COLOR_SPACE_HINT_EXT;
