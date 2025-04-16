@@ -3753,7 +3753,11 @@ weston_output_finish_frame(struct weston_output *output,
 	int64_t msec_rel;
 
 	ATRACE_BEGIN("%s", __func__);
-	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
+	//assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
+
+	if (REPAINT_AWAITING_COMPLETION != output->repaint_status) {
+		return;
+	}
 
 	/*
 	 * If timestamp of latest vblank is given, it must always go forwards.

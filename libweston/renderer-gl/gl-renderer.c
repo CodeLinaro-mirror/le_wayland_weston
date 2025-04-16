@@ -71,6 +71,7 @@
 #include "gbm_priv.h"
 #include "gbm-buffer-backend.h"
 #include "screen-capture.h"
+#include "bootkpi/logging.h"
 
 #define BUFFER_DAMAGE_COUNT 2
 
@@ -4377,8 +4378,10 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 	EGLint attribs[3];
 	int is_secure_surface = 0;
 
-	if (firstCreateWin) {
-		weston_place_marker("G - first create window start");
+	if (firstCreateWin)
+	{
+		bootkpi_log_init();
+		bootkpi_log_line("G - first create window start");
 	}
 
 	gbm_perform(GBM_PERFORM_GET_SURFACE_SECURE_STATUS, (struct gbm_surface *)window_for_platform, &is_secure_surface);
@@ -4405,8 +4408,10 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 						     egl_config,
 						     window_for_legacy, attribs);
 
-	if (firstCreateWin) {
-		weston_place_marker("G - first create window end");
+	if (firstCreateWin)
+	{
+		bootkpi_log_init();
+		bootkpi_log_line("G - first create window end");
 		firstCreateWin = false;
 	}
 
@@ -4644,8 +4649,10 @@ gl_renderer_display_create(struct weston_compositor *ec,
 						LIBWESTON_MODULEDIR);
 	assert(screen_capture_backend);
 
-	if (firstCreateDisplay) {
-		weston_place_marker("G - setup egl start");
+	if (firstCreateDisplay)
+	{
+		bootkpi_log_init();
+		bootkpi_log_line("G - setup egl start");
 	}
 
 	gr = zalloc(sizeof *gr);
@@ -4714,8 +4721,10 @@ gl_renderer_display_create(struct weston_compositor *ec,
 		}
 	}
 
-	if (firstCreateDisplay) {
-		weston_place_marker("G - setup egl end");
+	if (firstCreateDisplay)
+	{
+		bootkpi_log_init();
+		bootkpi_log_line("G - setup egl end");
 		firstCreateDisplay = false;
 	}
 
