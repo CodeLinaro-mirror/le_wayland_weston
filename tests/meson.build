@@ -2,7 +2,7 @@ plugin_test_shell_desktop = shared_library(
 	'weston-test-desktop-shell',
 	'weston-test-desktop-shell.c',
 	include_directories: common_inc,
-	dependencies: [ dep_lib_desktop, dep_libweston_public, dep_libexec_weston ],
+	dependencies: [ dep_libweston_public, dep_libexec_weston ],
 	name_prefix: '',
 	install: false
 )
@@ -14,6 +14,8 @@ lib_test_runner = static_library(
 	dependencies: [
 		dep_libweston_private_h_deps,
 		dep_wayland_client,
+                dep_libdl,
+                dep_threads,
 	],
 	include_directories: common_inc,
 	install: false,
@@ -29,8 +31,9 @@ lib_test_client = static_library(
 		'weston-test-client-helper.c',
 		'weston-test-fixture-compositor.c',
 		weston_test_client_protocol_h,
-		weston_screenshooter_protocol_c,
 		weston_test_protocol_c,
+		weston_output_capture_client_protocol_h,
+		weston_output_capture_protocol_c,
 		viewporter_client_protocol_h,
 		viewporter_protocol_c,
 		'color_util.h',
@@ -41,7 +44,10 @@ lib_test_client = static_library(
 		dep_libshared,
 		dep_wayland_client,
 		dep_libexec_weston,
+		dep_libweston_private,
+		dep_libdrm_headers,
 		dep_pixman,
+                dep_threads,
 		dependency('cairo'),
 	],
 	install: false,
@@ -55,8 +61,25 @@ dep_test_client = declare_dependency(
 		dep_wayland_client,
 		dep_test_runner,
 		dep_pixman,
+		dep_libdrm_headers,
+                dep_threads,
 		dependency('libudev', version: '>= 136'),
 	]
+)
+
+lib_lcms_util = static_library(
+	'lib_lcms_util',
+	[ 'lcms_util.c' ],
+	include_directories: common_inc,
+	dependencies: [
+		dep_lcms2, dep_libm
+	],
+	build_by_default: false,
+	install: false,
+)
+dep_lcms_util = declare_dependency(
+	link_with: lib_lcms_util,
+	dependencies: [ dep_lcms2 ]
 )
 
 exe_plugin_test = shared_library(
@@ -90,8 +113,6 @@ lib_zuc = static_library(
 	'../tools/zunitc/inc/zunitc/zunitc_impl.h',
 	'../tools/zunitc/src/zuc_base_logger.c',
 	'../tools/zunitc/src/zuc_base_logger.h',
-	'../tools/zunitc/src/zuc_collector.c',
-	'../tools/zunitc/src/zuc_collector.h',
 	'../tools/zunitc/src/zuc_context.h',
 	'../tools/zunitc/src/zuc_event.h',
 	'../tools/zunitc/src/zuc_event_listener.h',
@@ -124,15 +145,29 @@ tests = [
 		'name': 'alpha-blending',
 		'dep_objs': dep_libm,
 	},
+	{	'name': 'assert', },
 	{	'name': 'bad-buffer', },
 	{	'name': 'buffer-transforms', },
+	{
+		'name': 'color-metadata-errors',
+		'dep_objs': dep_libexec_weston,
+	},
 	{	'name': 'color-manager', },
+	{
+		'name': 'constraints',
+		'sources': [
+			'constraints-test.c',
+			pointer_constraints_unstable_v1_protocol_c,
+		],
+	},
+        {       'name': 'custom-env', },
 	{	'name': 'devices', },
 	{
 		'name': 'drm-formats',
 		'dep_objs': dep_libdrm_headers,
 	},
 	{	'name': 'drm-smoke', 'run_exclusive': true },
+	{	'name': 'drm-writeback-screenshot', 'run_exclusive': true },
 	{	'name': 'event', },
 	{	'name': 'internal-screenshot', },
 	{
@@ -152,9 +187,28 @@ tests = [
 			linux_explicit_synchronization_unstable_v1_protocol_c,
 		],
 	},
+	{
+		'name': 'matrix',
+		'dep_objs': [ dep_libm ]
+	},
+	{
+		'name': 'matrix-transform',
+		'dep_objs': dep_libm,
+	},
+	{
+		'name': 'output-capture-protocol',
+		'sources': [
+			'output-capture-protocol-test.c',
+			weston_output_capture_protocol_c,
+			weston_output_capture_client_protocol_h,
+		],
+		'dep_objs': [ dep_libdrm_headers ],
+	},
 	{	'name': 'output-damage', },
+	{	'name': 'output-decorations', },
 	{	'name': 'output-transforms', },
 	{	'name': 'plugin-registry', },
+        {       'name': 'paint-node', },
 	{
 		'name': 'pointer',
 		'sources': [
@@ -181,6 +235,14 @@ tests = [
 			xdg_shell_protocol_c,
 		],
 	},
+	{
+		'name': 'single-pixel-buffer',
+		'sources': [
+			'single-pixel-buffer-test.c',
+			single_pixel_buffer_v1_client_protocol_h,
+			single_pixel_buffer_v1_protocol_c,
+		]
+	},
 	{	'name': 'string', },
 	{	'name': 'subsurface', },
 	{	'name': 'subsurface-shot', },
@@ -203,10 +265,6 @@ tests = [
 			input_timestamps_unstable_v1_protocol_c,
 		],
 	},
-	{
-		'name': 'vertex-clip',
-		'dep_objs': dep_vertex_clipping,
-	},
 	{	'name': 'viewporter', },
 	{	'name': 'viewporter-shot', },
 	{
@@ -220,15 +278,50 @@ tests = [
 	{	'name': 'safe-signal-output-removal',
 		'sources': [
 		  'safe-signal-output-removal-test.c',
-		  '../shared/shell-utils.c',
 		],
-		'dep_objs': [ dep_lib_desktop ]
+		'dep_objs': [ dep_libweston_public ]
+	},
+	{	'name': 'iterate-debug-scopes',
+		'sources': [
+		  'iterate-debug-scopes-test.c',
+		],
+		'dep_objs': [ dep_libweston_public ]
 	},
 ]
 
+if get_option('renderer-gl')
+	tests += {
+		'name': 'vertex-clip',
+		'link_with': plugin_gl,
+	}
+
+endif
+
+if get_option('color-management-lcms')
+	if not dep_lcms2.found()
+		error('color-management-lcms tests require lcms2 which was not found. Or, you can use \'-Dcolor-management-lcms=false\'.')
+	endif
+	tests += [
+		{
+			'name': 'color-icc-output',
+			'dep_objs': [ dep_libm, dep_lcms_util ]
+		},
+		{
+			'name': 'color-lcms-optimizer',
+			'link_with': plugin_color_lcms,
+			'dep_objs': [ dep_lcms_util ]
+		},
+		{	'name': 'color-metadata-parsing' },
+		{
+			'name': 'lcms-util',
+			'dep_objs': [ dep_lcms_util ]
+		},
+	]
+endif
+
+
 tests_standalone = [
 	['config-parser', [], [ dep_zucmain ]],
-	['matrix', [], [ dep_libm, dep_matrix_c ]],
 	['timespec', [], [ dep_zucmain ]],
 	['zuc',
 		[
@@ -240,14 +333,34 @@ tests_standalone = [
 ]
 
 if get_option('xwayland')
-	d = dependency('x11', required: false)
-	if not d.found()
-		error('Xwayland tests require libX11 which was not found. Or, you can use \'-Dxwayland=false\'.')
+	xcb_dep = dependency('xcb', required: false)
+	xcb_cursor_dep = dependency('xcb-cursor', required: false)
+
+	if not xcb_dep.found() or not xcb_cursor_dep.found()
+		error('xcb and xcb-cursor required for running xwayland tests')
 	endif
-	tests += {
+
+	libxwayland_test_client = static_library(
+		'test-xwayland-client',
+		[ 'xcb-client-helper.c', weston_test_client_protocol_h ],
+		include_directories: common_inc,
+		dependencies: [
+			dep_pixman, dep_xcb_xwayland,
+			xcb_dep, xcb_cursor_dep,
+			dep_wayland_client,
+		],
+		install: false,
+	)
+
+	dep_libxwayland_test = declare_dependency(
+		dependencies: [ xcb_dep, xcb_cursor_dep ],
+		link_with: libxwayland_test_client,
+	)
+
+	tests += [ {
 		'name': 'xwayland',
-		'dep_objs': d,
-	}
+		'dep_objs': dep_libxwayland_test,
+	} ]
 endif
 
 # Manual test plugin, not used in the automatic suite
@@ -305,6 +418,13 @@ test_config_h.set_quoted('TESTSUITE_PLUGIN_PATH', exe_plugin_test.full_path())
 test_config_h.set10('WESTON_TEST_SKIP_IS_FAILURE', get_option('test-skip-is-failure'))
 configure_file(output: 'test-config.h', configuration: test_config_h)
 
+test_env = {}
+
+# there are some leaks in fontconfig we can't fix; 
+if get_option('b_sanitize') in ['address', 'address,undefined' ]
+  test_env += { 'LSAN_OPTIONS': 'suppressions=@0@'.format(dir_gitlab_ci / 'leak-sanitizer.supp') }
+endif
+
 foreach t : tests
 	t_name = 'test-' + t.get('name')
 	t_sources = t.get('sources', [t.get('name') + '-test.c'])
@@ -319,18 +439,19 @@ foreach t : tests
 		t_name,
 		t_sources,
 		c_args: [
-			'-DUNIT_TEST',
 			'-DTHIS_TEST_NAME="' + t_name + '"',
 		],
 		build_by_default: true,
 		include_directories: common_inc,
 		dependencies: t_deps,
+		link_with: t.get('link_with', []),
 		install: false,
 	)
 
 	test(
 		t.get('name'),
 		t_exe,
+                env: test_env,
 		depends: t.get('test_deps', []),
 		timeout: 120,
 		protocol: 'tap',
@@ -362,7 +483,6 @@ foreach t : tests_standalone
 	exe_t = executable(
 		'test-@0@'.format(t.get(0)),
 		srcs_t,
-		c_args: [ '-DUNIT_TEST' ],
 		build_by_default: true,
 		include_directories: common_inc,
 		dependencies: deps_t,

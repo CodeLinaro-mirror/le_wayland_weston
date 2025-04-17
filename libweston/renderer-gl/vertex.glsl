@@ -25,13 +25,35 @@
  * SOFTWARE.
  */
 
+/* enum gl_shader_texcoord_input */
+#define SHADER_TEXCOORD_INPUT_ATTRIB  0
+#define SHADER_TEXCOORD_INPUT_SURFACE 1
+
+/* Always use high-precision for vertex calculations */
+precision highp float;
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+#define FRAG_PRECISION highp
+#else
+#define FRAG_PRECISION mediump
+#endif
+
 uniform mat4 proj;
+uniform mat4 surface_to_buffer;
+
 attribute vec2 position;
 attribute vec2 texcoord;
-varying vec2 v_texcoord;
+
+/* Match the varying precision to the fragment shader */
+varying FRAG_PRECISION vec2 v_texcoord;
 
 void main()
 {
 	gl_Position = proj * vec4(position, 0.0, 1.0);
+
+#if DEF_TEXCOORD_INPUT == SHADER_TEXCOORD_INPUT_ATTRIB
 	v_texcoord = texcoord;
+#elif DEF_TEXCOORD_INPUT == SHADER_TEXCOORD_INPUT_SURFACE
+	v_texcoord = vec2(surface_to_buffer * vec4(position, 0.0, 1.0));
+#endif
 }

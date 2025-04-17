@@ -39,6 +39,7 @@ fixture_setup(struct weston_test_harness *harness)
 	struct compositor_setup setup;
 
 	compositor_setup_defaults(&setup);
+	setup.shell = SHELL_TEST_DESKTOP;
 
 	return weston_test_harness_execute_as_plugin(harness, &setup);
 }
@@ -49,7 +50,8 @@ PLUGIN_TEST(surface_transform)
 	/* struct weston_compositor *compositor; */
 	struct weston_surface *surface;
 	struct weston_view *view;
-	float x, y;
+	struct weston_coord_surface coord_s;
+	struct weston_coord_global coord_g;
 
 	surface = weston_surface_create(compositor);
 	assert(surface);
@@ -57,18 +59,22 @@ PLUGIN_TEST(surface_transform)
 	assert(view);
 	surface->width = 200;
 	surface->height = 200;
-	weston_view_set_position(view, 100, 100);
+	coord_g.c = weston_coord(100, 100);
+	weston_view_set_position(view, coord_g);
 	weston_view_update_transform(view);
-	weston_view_to_global_float(view, 20, 20, &x, &y);
+	coord_s = weston_coord_surface(20, 20, surface);
+	coord_g = weston_coord_surface_to_global(view, coord_s);
 
-	fprintf(stderr, "20,20 maps to %f, %f\n", x, y);
-	assert(x == 120 && y == 120);
+	fprintf(stderr, "20,20 maps to %f, %f\n", coord_g.c.x, coord_g.c.y);
+	assert(coord_g.c.x == 120 && coord_g.c.y == 120);
 
-	weston_view_set_position(view, 150, 300);
+	coord_g.c = weston_coord(150, 300);
+	weston_view_set_position(view, coord_g);
 	weston_view_update_transform(view);
-	weston_view_to_global_float(view, 50, 40, &x, &y);
-	assert(x == 200 && y == 340);
+	coord_s = weston_coord_surface(50, 40, surface);
+	coord_g = weston_coord_surface_to_global(view, coord_s);
+	assert(coord_g.c.x == 200 && coord_g.c.y == 340);
 
 	/* Destroys all views too. */
-	weston_surface_destroy(surface);
+	weston_surface_unref(surface);
 }

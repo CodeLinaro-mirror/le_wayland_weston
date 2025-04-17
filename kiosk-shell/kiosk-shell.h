@@ -24,7 +24,7 @@
 #ifndef WESTON_KIOSK_SHELL_H
 #define WESTON_KIOSK_SHELL_H
 
-#include <libweston-desktop/libweston-desktop.h>
+#include <libweston/desktop.h>
 #include <libweston/libweston.h>
 #include <libweston/config-parser.h>
 
@@ -60,8 +60,13 @@ struct kiosk_shell_surface {
 	struct wl_listener output_destroy_listener;
 
 	struct wl_signal destroy_signal;
+
+	struct wl_signal parent_destroy_signal;
 	struct wl_listener parent_destroy_listener;
 	struct kiosk_shell_surface *parent;
+
+	struct wl_list surface_tree_list;
+	struct wl_list surface_tree_link;
 
 	int focus_count;
 
@@ -70,9 +75,10 @@ struct kiosk_shell_surface {
 
 	struct {
 		bool is_set;
-		int32_t x;
-		int32_t y;
+		struct weston_coord_global pos;
 	} xwayland;
+
+	bool appid_output_assigned;
 };
 
 struct kiosk_shell_seat {
@@ -86,12 +92,14 @@ struct kiosk_shell_seat {
 struct kiosk_shell_output {
 	struct weston_output *output;
 	struct wl_listener output_destroy_listener;
-	struct weston_view *background_view;
+	struct weston_curtain *curtain;
 
 	struct kiosk_shell *shell;
 	struct wl_list link;
 
 	char *app_ids;
+
+	struct wl_list *active_surface_tree;
 };
 
 #endif /* WESTON_KIOSK_SHELL_H */

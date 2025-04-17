@@ -11,6 +11,7 @@ deps_libweston = [
 srcs_libweston = [
 	git_version_h,
 	'animation.c',
+	'auth.c',
 	'bindings.c',
 	'clipboard.c',
 	'color.c',
@@ -25,6 +26,7 @@ srcs_libweston = [
 	'linux-sync-file.c',
 	'log.c',
 	'noop-renderer.c',
+	'output-capture.c',
 	'pixel-formats.c',
 	'pixman-renderer.c',
 	'plugin-registry.c',
@@ -36,7 +38,6 @@ srcs_libweston = [
 	'weston-log-flight-rec.c',
 	'weston-log.c',
 	'weston-direct-display.c',
-	'zoom.c',
 	linux_dmabuf_unstable_v1_protocol_c,
 	linux_dmabuf_unstable_v1_server_protocol_h,
 	linux_explicit_synchronization_unstable_v1_protocol_c,
@@ -51,8 +52,10 @@ srcs_libweston = [
 	pointer_constraints_unstable_v1_server_protocol_h,
 	relative_pointer_unstable_v1_protocol_c,
 	relative_pointer_unstable_v1_server_protocol_h,
-	weston_screenshooter_protocol_c,
-	weston_screenshooter_server_protocol_h,
+	single_pixel_buffer_v1_protocol_c,
+	single_pixel_buffer_v1_server_protocol_h,
+	tearing_control_v1_protocol_c,
+	tearing_control_v1_server_protocol_h,
 	text_cursor_position_protocol_c,
 	text_cursor_position_server_protocol_h,
 	text_input_unstable_v1_protocol_c,
@@ -69,7 +72,14 @@ srcs_libweston = [
 	weston_debug_server_protocol_h,
 	weston_direct_display_protocol_c,
 	weston_direct_display_server_protocol_h,
+	weston_output_capture_protocol_c,
+	weston_output_capture_server_protocol_h,
+	tablet_unstable_v2_protocol_c,
+	tablet_unstable_v2_server_protocol_h,
 ]
+
+subdir('desktop')
+subdir('shell-utils')
 
 if get_option('renderer-gl')
 	dep_egl = dependency('egl', required: false)
@@ -77,6 +87,20 @@ if get_option('renderer-gl')
 		error('libweston + gl-renderer requires egl which was not found. Or, you can use \'-Drenderer-gl=false\'.')
 	endif
 	deps_libweston += dep_egl
+else
+	dep_egl = dependency('', required: false)
+endif
+
+if get_option('backend-vnc')
+	dep_pam = dependency('pam', required: false)
+	if not dep_pam.found()
+		dep_pam = cc.find_library('pam')
+	endif
+	if not dep_pam.found()
+		error('VNC backend requires libpam which was not found. Or, you can use \'-Dbackend-vnc=false\'.')
+	endif
+	config_h.set('HAVE_PAM', '1')
+	deps_libweston += dep_pam
 endif
 
 lib_weston = shared_library(
@@ -89,11 +113,6 @@ lib_weston = shared_library(
 	dependencies: deps_libweston
 )
 
-deps_for_libweston_users = [
-	dep_wayland_server,
-	dep_pixman,
-	dep_xkbcommon,
-]
 
 # For external users, like Weston.
 dep_libweston_public = declare_dependency(
@@ -138,87 +157,46 @@ pkgconfig.generate(
 	version: version_weston,
 	description: 'libWeston protocol files',
 	variables: [
-		'datarootdir=' + join_paths('${prefix}', get_option('datadir')),
-		'pkgdatadir=' + join_paths('${pc_sysrootdir}${datarootdir}', dir_protocol_libweston)
+		'datarootdir=' + '${prefix}' / get_option('datadir'),
+		'pkgdatadir=' + '${pc_sysrootdir}${datarootdir}' / dir_protocol_libweston
 	],
 	install_dir: dir_data_pc
 )
 
-srcs_session_helper = [
-	'launcher-direct.c',
-	'launcher-util.c',
-	'launcher-weston-launch.c',
-]
-deps_session_helper = [
-	dep_libweston_private_h,
-	dep_libweston_private,
-]
-
 if get_option('backend-drm')
-	deps_session_helper += dep_libdrm
-endif
-
-systemd_dep = dependency('', required: false)
-if get_option('launcher-logind')
-	systemd_dep = dependency('libsystemd', version: '>= 209', required: false)
-	if systemd_dep.found()
-		config_h.set('HAVE_SYSTEMD_LOGIN_209', '1')
-	else
-		systemd_dep = dependency('libsystemd-login', version: '>= 198', required: false)
-		if not systemd_dep.found()
-			error('logind support requires libsystemd or libsystemd-login but neither was found. Or, you can use \'-Dlauncher-logind=false\'')
-		endif
-	endif
-
-	dbus_dep = dependency('dbus-1', version: '>= 1.6', required: false)
-	if not dbus_dep.found()
-		error('logind support requires dbus-1 >= 1.6 which was not found. Or, you can use \'-Dlauncher-logind=false\'')
-	endif
-
-	config_h.set('HAVE_DBUS', '1')
-	config_h.set('HAVE_SYSTEMD_LOGIN', '1')
-
-	srcs_session_helper += [
-		'dbus.c',
-		'launcher-logind.c',
-	]
-	deps_session_helper += [
-		dbus_dep,
-		systemd_dep,
-	]
-endif
-if get_option('launcher-libseat')
-	libseat_dep = dependency('libseat', version: '>= 0.4')
-	config_h.set('HAVE_LIBSEAT', '1')
-	srcs_session_helper += [
+	dep_libseat = dependency('libseat', version: '>= 0.4')
+	srcs_session_helper = [
 		'launcher-libseat.c',
+		'launcher-util.c',
 	]
-	deps_session_helper += [
-		libseat_dep,
+	deps_session_helper = [
+		dep_libseat,
+		dep_libweston_private_h,
+		dep_libweston_public,
 	]
+
+	lib_session_helper = shared_library(
+		'session-helper',
+		srcs_session_helper,
+		include_directories: common_inc,
+		dependencies: deps_session_helper,
+		install: true
+	)
+	dep_session_helper = declare_dependency(link_with: lib_session_helper)
 endif
-
-lib_session_helper = shared_library(
-	'session-helper',
-	srcs_session_helper,
-	include_directories: common_inc,
-	dependencies: deps_session_helper,
-	install: true
-)
-dep_session_helper = declare_dependency(link_with: lib_session_helper)
-
 
 lib_libinput_backend = shared_library(
 	'libinput-backend',
 	[
 		'libinput-device.c',
-		'libinput-seat.c'
+		'libinput-seat.c',
+		tablet_unstable_v2_server_protocol_h
 	],
 	dependencies: [
 		dep_libweston_private,
-		dep_session_helper,
 		dep_libinput,
-		dependency('libudev', version: '>= 136')
+		dependency('libudev', version: '>= 136'),
+		dep_session_helper
 	],
 	include_directories: common_inc,
 	install: true
@@ -233,41 +211,42 @@ dep_vertex_clipping = declare_dependency(
 	include_directories: include_directories('.')
 )
 
-if get_option('deprecated-weston-launch')
-	warning('weston-launch is deprecated and will be removed in a future release. Please migrate to libseat and seatd-launch.')
-	dep_pam = cc.find_library('pam')
-
-	if not cc.has_function('pam_open_session', dependencies: dep_pam)
-		error('pam_open_session not found for weston-launch')
-	endif
-
-	executable(
-		'weston-launch',
-		'weston-launch.c',
-		dependencies: [dep_pam, systemd_dep, dep_libdrm],
-		include_directories: common_inc,
-		install: true
-	)
-
-	meson.add_install_script('echo', 'REMINDER: You are installing weston-launch, please make it setuid-root.')
-endif
+lib_gl_borders = static_library(
+	'gl-borders',
+	'gl-borders.c',
+	include_directories: common_inc,
+	dependencies: [
+		dep_lib_cairo_shared,
+		dep_egl, # for gl-renderer.h
+		deps_for_libweston_users,
+	],
+	build_by_default: false,
+	install: false
+)
+dep_lib_gl_borders = declare_dependency(
+	link_with: lib_gl_borders,
+	dependencies: dep_lib_cairo_shared
+)
 
 install_headers(
 	'backend.h',
 	'libinput-seat.h',
 	'libweston-internal.h',
 	'linux-dmabuf.h',
+	'linux-explicit-synchronization.h',
 	'color.h',
 	'launcher-util.h',
 	'pixman-renderer.h',
+	'pixel-formats.h',
 	subdir: dir_include_libweston_private_install
 )
 
 subdir('color-lcms')
 subdir('renderer-gl')
 subdir('backend-drm')
-subdir('backend-fbdev')
 subdir('backend-headless')
+subdir('backend-pipewire')
 subdir('backend-rdp')
+subdir('backend-vnc')
 subdir('backend-wayland')
 subdir('backend-x11')

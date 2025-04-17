@@ -34,6 +34,12 @@
 
       These requests may allow clients to do very bad things.
     </description>
+
+    <enum name="error">
+      <entry name="touch_up_with_coordinate" value="0"
+        summary="invalid coordinate"/>
+    </enum>
+
     <request name="move_surface">
       <arg name="surface" type="object" interface="wl_surface"/>
       <arg name="x" type="int"/>
@@ -88,6 +94,23 @@
       <arg name="x" type="fixed"/>
       <arg name="y" type="fixed"/>
       <arg name="touch_type" type="uint"/>
+    </request>
+
+    <enum name="breakpoint">
+      <entry name="post_repaint" value="0"
+             summary="after output repaint (filter type: wl_output)"/>
+    </enum>
+
+    <request name="client_break">
+      <description summary="request compositor pause at a certain point">
+        Request that the compositor pauses execution at a certain point. When
+	execution is paused, the compositor will signal the shared semaphore
+	to the client.
+      </description>
+      <arg name="breakpoint" type="uint" enum="breakpoint"
+           summary="event type to wait for" />
+      <arg name="resource_id" type="uint"
+           summary="optional Wayland resource ID to filter for (type-specific)"/>
     </request>
   </interface>
 

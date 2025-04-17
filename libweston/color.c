@@ -38,6 +38,8 @@
 
 #include "color.h"
 #include "libweston-internal.h"
+#include <libweston/weston-log.h>
+#include "shared/xalloc.h"
 
 /**
  * Increase reference count of the color profile object
@@ -48,7 +50,6 @@
 WL_EXPORT struct weston_color_profile *
 weston_color_profile_ref(struct weston_color_profile *cprof)
 {
-	/* NULL is a valid color space: sRGB */
 	if (!cprof)
 		return NULL;
 
@@ -90,7 +91,7 @@ weston_color_profile_get_description(struct weston_color_profile *cprof)
 	if (cprof)
 		return cprof->description;
 	else
-		return "built-in default sRGB SDR profile";
+		return "(untagged)";
 }
 
 /**
@@ -163,6 +164,87 @@ weston_color_transform_init(struct weston_color_transform *xform,
 	xform->cm = cm;
 	xform->ref_count = 1;
 	wl_signal_init(&xform->destroy_signal);
+}
+
+static const char *
+curve_type_to_str(enum weston_color_curve_type curve_type)
+{
+	switch (curve_type) {
+	case WESTON_COLOR_CURVE_TYPE_IDENTITY:
+		return "identity";
+	case WESTON_COLOR_CURVE_TYPE_LUT_3x1D:
+		return "3x1D LUT";
+	}
+	return "???";
+}
+
+static const char *
+mapping_type_to_str(enum weston_color_mapping_type mapping_type)
+{
+	switch (mapping_type) {
+	case WESTON_COLOR_MAPPING_TYPE_IDENTITY:
+		return "identity";
+	case WESTON_COLOR_MAPPING_TYPE_3D_LUT:
+		return "3D LUT";
+	case WESTON_COLOR_MAPPING_TYPE_MATRIX:
+		return "matrix";
+	}
+	return "???";
+}
+
+/**
+ * Print the color transform pipeline to a string
+ *
+ * \param xform The color transform.
+ * \return The string in which the pipeline is printed.
+ */
+WL_EXPORT char *
+weston_color_transform_string(const struct weston_color_transform *xform)
+{
+	enum weston_color_mapping_type mapping_type = xform->mapping.type;
+	enum weston_color_curve_type pre_type = xform->pre_curve.type;
+	enum weston_color_curve_type post_type = xform->post_curve.type;
+	const char *empty = "";
+	const char *sep = empty;
+	FILE *fp;
+	char *str = NULL;
+	size_t size = 0;
+
+	fp = open_memstream(&str, &size);
+	abort_oom_if_null(fp);
+
+	fprintf(fp, "pipeline: ");
+
+	if (pre_type != WESTON_COLOR_CURVE_TYPE_IDENTITY) {
+		fprintf(fp, "%spre %s", sep, curve_type_to_str(pre_type));
+		if (pre_type == WESTON_COLOR_CURVE_TYPE_LUT_3x1D)
+			fprintf(fp, " [%u]", xform->pre_curve.u.lut_3x1d.optimal_len);
+		sep = ", ";
+	}
+
+	if (mapping_type != WESTON_COLOR_MAPPING_TYPE_IDENTITY) {
+		fprintf(fp, "%smapping %s", sep, mapping_type_to_str(mapping_type));
+		if (mapping_type == WESTON_COLOR_MAPPING_TYPE_3D_LUT)
+			fprintf(fp, " [%u]", xform->mapping.u.lut3d.optimal_len);
+		sep = ", ";
+	}
+
+	if (post_type != WESTON_COLOR_CURVE_TYPE_IDENTITY) {
+		fprintf(fp, "%spost %s", sep, curve_type_to_str(post_type));
+		if (post_type == WESTON_COLOR_CURVE_TYPE_LUT_3x1D)
+			fprintf(fp, " [%u]", xform->post_curve.u.lut_3x1d.optimal_len);
+		sep = ", ";
+	}
+
+	if (sep == empty)
+		fprintf(fp, "identity\n");
+	else
+		fprintf(fp, "\n");
+
+	fclose(fp);
+	abort_oom_if_null(str);
+
+	return str;
 }
 
 /** Deep copy */
@@ -296,4 +378,56 @@ weston_compositor_load_icc_file(struct weston_compositor *compositor,
 out_close:
 	close(fd);
 	return cprof;
+}
+
+/** Get a string naming the EOTF mode
+ *
+ * \internal
+ */
+WL_EXPORT const char *
+weston_eotf_mode_to_str(enum weston_eotf_mode e)
+{
+	switch (e) {
+	case WESTON_EOTF_MODE_NONE:		return "(none)";
+	case WESTON_EOTF_MODE_SDR:		return "SDR";
+	case WESTON_EOTF_MODE_TRADITIONAL_HDR:	return "traditional gamma HDR";
+	case WESTON_EOTF_MODE_ST2084:		return "ST2084";
+	case WESTON_EOTF_MODE_HLG:		return "HLG";
+	}
+	return "???";
+}
+
+/** A list of EOTF modes as a string
+ *
+ * \param eotf_mask Bitwise-or'd enum weston_eotf_mode values.
+ * \return Comma separated names of the listed EOTF modes. Must be free()'d by
+ * the caller.
+ */
+WL_EXPORT char *
+weston_eotf_mask_to_str(uint32_t eotf_mask)
+{
+	FILE *fp;
+	char *str = NULL;
+	size_t size = 0;
+	unsigned i;
+	const char *sep = "";
+
+	fp = open_memstream(&str, &size);
+	if (!fp)
+		return NULL;
+
+	for (i = 0; eotf_mask; i++) {
+		uint32_t bitmask = 1u << i;
+
+		if (eotf_mask & bitmask) {
+			fprintf(fp, "%s%s", sep,
+				weston_eotf_mode_to_str(bitmask));
+			sep = ", ";
+		}
+
+		eotf_mask &= ~bitmask;
+	}
+	fclose(fp);
+
+	return str;
 }

@@ -23,6 +23,8 @@
  * SOFTWARE.
  */
 
+#pragma once
+
 #include "config.h"
 
 #include <stdint.h>
@@ -64,16 +66,17 @@ enum gl_renderer_border_side {
  * \see struct gl_renderer_interface
  */
 struct gl_renderer_display_options {
+	struct weston_renderer_options base;
 	/** The EGL platform identifier */
 	EGLenum egl_platform;
 	/** The native display corresponding to the given EGL platform */
 	void *egl_native_display;
 	/** EGL_SURFACE_TYPE bits for the base EGLConfig */
 	EGLint egl_surface_type;
-	/** Array of DRM pixel formats acceptable for the base EGLConfig */
-	const uint32_t *drm_formats;
-	/** The \c drm_formats array length */
-	unsigned drm_formats_count;
+	/** Array of pixel formats acceptable for the base EGLConfig */
+	const struct pixel_format_info **formats;
+	/** The \c formats array length */
+	unsigned formats_count;
 };
 
 struct gl_renderer_output_options {
@@ -81,21 +84,21 @@ struct gl_renderer_output_options {
 	EGLNativeWindowType window_for_legacy;
 	/** Native window handle for \c eglCreatePlatformWindowSurface */
 	void *window_for_platform;
-	/** Array of DRM pixel formats acceptable for the window */
-	const uint32_t *drm_formats;
-	/** The \c drm_formats array length */
-	unsigned drm_formats_count;
+	/** Size of the framebuffer in pixels, including borders */
+	struct weston_size fb_size;
+	/** Area inside the framebuffer in pixels for composited content */
+	struct weston_geometry area;
+	/** Array of pixel formats acceptable for the window */
+	const struct pixel_format_info **formats;
+	/** The \c formats array length */
+	unsigned formats_count;
 };
 
-struct gl_renderer_pbuffer_options {
-	/** Width of the rendering surface in pixels */
-	int width;
-	/** Height of the rendering surface in pixels */
-	int height;
-	/** Array of DRM pixel formats acceptable for the pbuffer */
-	const uint32_t *drm_formats;
-	/** The \c drm_formats array length */
-	unsigned drm_formats_count;
+struct gl_renderer_fbo_options {
+	/** Size of the framebuffer in pixels, including borders */
+	struct weston_size fb_size;
+	/** Area inside the framebuffer in pixels for composited content */
+	struct weston_geometry area;
 };
 
 struct gl_renderer_interface {
@@ -116,14 +119,14 @@ struct gl_renderer_interface {
 	 * advertises it. Without the advertisement this function fails.
 	 *
 	 * If neither EGL_KHR_no_config_context or EGL_MESA_configless_context
-	 * are supported, the arguments egl_surface_type, drm_formats, and
-	 * drm_formats_count are used to find a so called base EGLConfig. The
+	 * are supported, the arguments egl_surface_type, formats, and
+	 * formats_count are used to find a so called base EGLConfig. The
 	 * GL context is created with the base EGLConfig, and outputs will be
 	 * required to use the same config as well. If one or both of the
 	 * extensions are supported, these arguments are unused, and each
 	 * output can use a different EGLConfig (pixel format).
 	 *
-	 * The first format in drm_formats that matches any EGLConfig
+	 * The first format in formats that matches any EGLConfig
 	 * determines which EGLConfig is chosen. On EGL GBM platform, the
 	 * pixel format must match exactly. On other platforms, it is enough
 	 * that each R, G, B, A channel has the same number of bits as in the
@@ -147,7 +150,7 @@ struct gl_renderer_interface {
 	 * used, otherwise \c window_for_legacy is used. This is because the
 	 * handle on X11 platform is different between the two.
 	 *
-	 * The first format in drm_formats that matches any EGLConfig
+	 * The first format in formats that matches any EGLConfig
 	 * determines which EGLConfig is chosen. See \c display_create about
 	 * how the matching works and the possible limitations.
 	 *
@@ -158,25 +161,18 @@ struct gl_renderer_interface {
 				    const struct gl_renderer_output_options *options);
 
 	/**
-	 * Attach GL-renderer to the output with internal pixel storage
+	 * Attach GL-renderer to the output with a frame buffer object
 	 *
-	 * \param output The output to create a rendering surface for.
-	 * \param options The options struct describing the pbuffer
+	 * \param output The output to prepare for FBO rendering.
+	 * \param options The options struct describing the render geometry
 	 * \return 0 on success, -1 on failure.
 	 *
 	 * This function creates the renderer data structures needed to repaint
-	 * the output. The repaint results will be kept internal and can only
-	 * be accessed through e.g. screen capture.
-	 *
-	 * The first format in drm_formats that matches any EGLConfig
-	 * determines which EGLConfig is chosen. See \c display_create about
-	 * how the matching works and the possible limitations.
-	 *
-	 * This function should be used only if \c display_create was called
-	 * with \c EGL_PBUFFER_BIT in \c egl_surface_type.
+	 * the output. The repaint results will be stored in FBO renderbuffers
+	 * passed to \c repaint_output.
 	 */
-	int (*output_pbuffer_create)(struct weston_output *output,
-				     const struct gl_renderer_pbuffer_options *options);
+	int (*output_fbo_create)(struct weston_output *output,
+				 const struct gl_renderer_fbo_options *options);
 
 	void (*output_destroy)(struct weston_output *output);
 
@@ -218,4 +214,24 @@ struct gl_renderer_interface {
 	 * EGL_ANDROID_native_fence_sync extension.
 	 */
 	int (*create_fence_fd)(struct weston_output *output);
+
+	/**
+	 * Create an FBO renderbuffer that repaint_output can render to
+	 *
+	 * \param output The output to create an FBO renderbuffer for.
+	 * \param format The renderbuffer pixel format.
+	 * \param width The renderbuffer width.
+	 * \param height The renderbuffer height.
+	 * \param pixels Optional buffer to download the pixels to after rendering.
+	 * \return 0 on success, -1 on failure.
+	 *
+	 * This function creates an FBO renderbuffer that can be passed to \c
+	 * repaint_output. If pixels is non-NULL, repaint_output will call
+	 * glReadPixels to download pixel data into the provided buffer after
+	 * repaint.
+	 */
+	struct weston_renderbuffer *(*create_fbo)(struct weston_output *output,
+						  const struct pixel_format_info *format,
+						  int width, int height,
+						  uint32_t *pixels);
 };

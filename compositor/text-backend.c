@@ -39,6 +39,7 @@
 #include "input-method-unstable-v1-server-protocol.h"
 #include "shared/helpers.h"
 #include "shared/timespec-util.h"
+#include "shared/xalloc.h"
 
 struct text_input_manager;
 struct input_method;
@@ -140,6 +141,12 @@ deactivate_input_method(struct input_method *input_method)
 	wl_list_remove(&input_method->link);
 	input_method->input = NULL;
 	input_method->context = NULL;
+
+	/* text_input_manager::destroy_listener by compositor shutdown */
+	if (!text_input->manager) {
+		zwp_text_input_v1_send_leave(text_input->resource);
+		return;
+	}
 
 	if (wl_list_empty(&text_input->input_methods) &&
 	    text_input->input_panel_visible &&
@@ -406,9 +413,7 @@ static void text_input_manager_create_text_input(struct wl_client *client,
 		wl_resource_get_user_data(resource);
 	struct text_input *text_input;
 
-	text_input = zalloc(sizeof *text_input);
-	if (text_input == NULL)
-		return;
+	text_input = xzalloc(sizeof *text_input);
 
 	text_input->resource =
 		wl_resource_create(client, &zwp_text_input_v1_interface, 1, id);
@@ -456,6 +461,8 @@ text_input_manager_notifier_destroy(struct wl_listener *listener, void *data)
 	wl_list_remove(&text_input_manager->destroy_listener.link);
 	wl_global_destroy(text_input_manager->text_input_manager_global);
 
+	if (text_input_manager->current_text_input)
+		text_input_manager->current_text_input->manager = NULL;
 	free(text_input_manager);
 }
 
@@ -464,9 +471,7 @@ text_input_manager_create(struct weston_compositor *ec)
 {
 	struct text_input_manager *text_input_manager;
 
-	text_input_manager = zalloc(sizeof *text_input_manager);
-	if (text_input_manager == NULL)
-		return;
+	text_input_manager = xzalloc(sizeof *text_input_manager);
 
 	text_input_manager->ec = ec;
 
@@ -806,9 +811,7 @@ input_method_context_create(struct text_input *input,
 	if (!input_method->input_method_binding)
 		return;
 
-	context = zalloc(sizeof *context);
-	if (context == NULL)
-		return;
+	context = xzalloc(sizeof *context);
 
 	binding = input_method->input_method_binding;
 	context->resource =
@@ -949,7 +952,7 @@ input_method_init_seat(struct weston_seat *seat)
 	seat->input_method->focus_listener_initialized = true;
 }
 
-static void launch_input_method(struct text_backend *text_backend);
+static void launch_input_method(void *data);
 
 static void
 respawn_input_method_process(struct text_backend *text_backend)
@@ -985,12 +988,16 @@ input_method_client_notifier(struct wl_listener *listener, void *data)
 				    client_listener);
 
 	text_backend->input_method.client = NULL;
-	respawn_input_method_process(text_backend);
+
+	if (!text_backend->compositor->shutting_down)
+		respawn_input_method_process(text_backend);
 }
 
 static void
-launch_input_method(struct text_backend *text_backend)
+launch_input_method(void *data)
 {
+	struct text_backend *text_backend = data;
+
 	if (!text_backend->input_method.path)
 		return;
 
@@ -1001,8 +1008,8 @@ launch_input_method(struct text_backend *text_backend)
 		setenv("WESTON_KEYBOARD_SURFACE_TYPE", "overlay", 1);
 
 	text_backend->input_method.client =
-		weston_client_start(text_backend->compositor,
-				    text_backend->input_method.path);
+		wet_client_start(text_backend->compositor,
+				 text_backend->input_method.path);
 
 	if (!text_backend->input_method.client) {
 		weston_log("not able to start %s\n",
@@ -1022,9 +1029,7 @@ text_backend_seat_created(struct text_backend *text_backend,
 	struct input_method *input_method;
 	struct weston_compositor *ec = seat->compositor;
 
-	input_method = zalloc(sizeof *input_method);
-	if (input_method == NULL)
-		return;
+	input_method = xzalloc(sizeof *input_method);
 
 	input_method->seat = seat;
 	input_method->input = NULL;
@@ -1093,10 +1098,9 @@ text_backend_init(struct weston_compositor *ec)
 {
 	struct text_backend *text_backend;
 	struct weston_seat *seat;
+	struct wl_event_loop *loop;
 
-	text_backend = zalloc(sizeof(*text_backend));
-	if (text_backend == NULL)
-		return NULL;
+	text_backend = xzalloc(sizeof(*text_backend));
 
 	text_backend->compositor = ec;
 
@@ -1110,7 +1114,8 @@ text_backend_init(struct weston_compositor *ec)
 
 	text_input_manager_create(ec);
 
-	launch_input_method(text_backend);
+	loop = wl_display_get_event_loop(ec->wl_display);
+	wl_event_loop_add_idle(loop, launch_input_method, text_backend);
 
 	return text_backend;
 }

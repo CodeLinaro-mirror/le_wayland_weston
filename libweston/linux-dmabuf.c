@@ -25,7 +25,6 @@
 
 #include "config.h"
 
-#include <assert.h>
 #include <errno.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -35,8 +34,11 @@
 
 #include <libweston/libweston.h>
 #include "linux-dmabuf.h"
+#include "linux-dmabuf-unstable-v1-server-protocol.h"
 #include "shared/os-compatibility.h"
+#include "shared/helpers.h"
 #include "libweston-internal.h"
+#include "shared/weston-assert.h"
 #include "shared/weston-drm-fourcc.h"
 
 static void
@@ -93,8 +95,8 @@ params_add(struct wl_client *client,
 		return;
 	}
 
-	assert(buffer->params_resource == params_resource);
-	assert(!buffer->buffer_resource);
+	weston_assert_ptr_eq(buffer->compositor, buffer->params_resource, params_resource);
+	weston_assert_ptr_is_null(buffer->compositor, buffer->buffer_resource);
 
 	if (plane_idx >= MAX_DMABUF_PLANES) {
 		wl_resource_post_error(params_resource,
@@ -120,8 +122,7 @@ params_add(struct wl_client *client,
 	if (wl_resource_get_version(params_resource) < ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION)
 		buffer->attributes.modifier[plane_idx] = DRM_FORMAT_MOD_INVALID;
 	else
-		buffer->attributes.modifier[plane_idx] = ((uint64_t)modifier_hi << 32) |
-							 modifier_lo;
+		buffer->attributes.modifier[plane_idx] = u64_from_u32s(modifier_hi, modifier_lo);
 
 	buffer->attributes.n_planes++;
 }
@@ -143,8 +144,8 @@ destroy_linux_dmabuf_wl_buffer(struct wl_resource *resource)
 	struct linux_dmabuf_buffer *buffer;
 
 	buffer = wl_resource_get_user_data(resource);
-	assert(buffer->buffer_resource == resource);
-	assert(!buffer->params_resource);
+	weston_assert_ptr_eq(buffer->compositor, buffer->buffer_resource, resource);
+	weston_assert_ptr_is_null(buffer->compositor, buffer->params_resource);
 
 	if (buffer->user_data_destroy_func)
 		buffer->user_data_destroy_func(buffer);
@@ -173,8 +174,8 @@ params_create_common(struct wl_client *client,
 		return;
 	}
 
-	assert(buffer->params_resource == params_resource);
-	assert(!buffer->buffer_resource);
+	weston_assert_ptr_eq(buffer->compositor, buffer->params_resource, params_resource);
+	weston_assert_ptr_is_null(buffer->compositor, buffer->buffer_resource);
 
 	/* Switch the linux_dmabuf_buffer object from params resource to
 	 * eventually wl_buffer resource.
@@ -684,6 +685,7 @@ weston_dmabuf_feedback_destroy(struct weston_dmabuf_feedback *dmabuf_feedback)
 	wl_resource_for_each_safe(res, res_tmp, &dmabuf_feedback->resource_list) {
 		wl_list_remove(wl_resource_get_link(res));
 		wl_list_init(wl_resource_get_link(res));
+		wl_resource_set_user_data(res, NULL);
 	}
 
 	free(dmabuf_feedback);
@@ -777,15 +779,18 @@ weston_dmabuf_feedback_send(struct weston_dmabuf_feedback *dmabuf_feedback,
  * is dynamic and can change throughout compositor's life. These changes results
  * in the need to resend the feedback events to clients.
  *
+ * @param compositor The weston compositor
  * @param dmabuf_feedback The weston_dmabuf_feedback object
  * @param format_table The dma-buf feedback formats table
  */
 WL_EXPORT void
-weston_dmabuf_feedback_send_all(struct weston_dmabuf_feedback *dmabuf_feedback,
+weston_dmabuf_feedback_send_all(struct weston_compositor *compositor,
+				struct weston_dmabuf_feedback *dmabuf_feedback,
 				struct weston_dmabuf_feedback_format_table *format_table)
 {
 	struct wl_resource *res;
 
+	weston_assert_true(compositor, !wl_list_empty(&dmabuf_feedback->resource_list));
 	wl_resource_for_each(res, &dmabuf_feedback->resource_list)
 		weston_dmabuf_feedback_send(dmabuf_feedback,
 					    format_table, res, false);
@@ -794,7 +799,16 @@ weston_dmabuf_feedback_send_all(struct weston_dmabuf_feedback *dmabuf_feedback,
 static void
 dmabuf_feedback_resource_destroy(struct wl_resource *resource)
 {
+	struct weston_surface *surface =
+		wl_resource_get_user_data(resource);
+
 	wl_list_remove(wl_resource_get_link(resource));
+
+	if (surface &&
+	    wl_list_empty(&surface->dmabuf_feedback->resource_list)) {
+		weston_dmabuf_feedback_destroy(surface->dmabuf_feedback);
+		surface->dmabuf_feedback = NULL;
+	}
 }
 
 static void
@@ -810,7 +824,8 @@ zwp_linux_dmabuf_feedback_implementation = {
 
 static struct wl_resource *
 dmabuf_feedback_resource_create(struct wl_resource *dmabuf_resource,
-				struct wl_client *client, uint32_t dmabuf_feedback_id)
+				struct wl_client *client, uint32_t dmabuf_feedback_id,
+				struct weston_surface *surface)
 {
 	struct wl_resource *dmabuf_feedback_res;
 	uint32_t version;
@@ -826,7 +841,7 @@ dmabuf_feedback_resource_create(struct wl_resource *dmabuf_resource,
 	wl_list_init(wl_resource_get_link(dmabuf_feedback_res));
 	wl_resource_set_implementation(dmabuf_feedback_res,
 				       &zwp_linux_dmabuf_feedback_implementation,
-				       NULL, dmabuf_feedback_resource_destroy);
+				       surface, dmabuf_feedback_resource_destroy);
 
 	return dmabuf_feedback_res;
 }
@@ -842,7 +857,8 @@ linux_dmabuf_get_default_feedback(struct wl_client *client,
 
 	dmabuf_feedback_resource =
 		dmabuf_feedback_resource_create(dmabuf_resource,
-						client, dmabuf_feedback_id);
+						client, dmabuf_feedback_id,
+						NULL);
 	if (!dmabuf_feedback_resource) {
 		wl_resource_post_no_memory(dmabuf_resource);
 		return;
@@ -853,22 +869,55 @@ linux_dmabuf_get_default_feedback(struct wl_client *client,
 				    dmabuf_feedback_resource, true);
 }
 
+static int
+create_surface_dmabuf_feedback(struct weston_compositor *ec,
+			       struct weston_surface *surface)
+{
+	struct weston_dmabuf_feedback_tranche *tranche;
+	dev_t main_device = ec->default_dmabuf_feedback->main_device;
+	uint32_t flags = 0;
+
+	surface->dmabuf_feedback = weston_dmabuf_feedback_create(main_device);
+	if (!surface->dmabuf_feedback)
+		return -1;
+
+	tranche = weston_dmabuf_feedback_tranche_create(surface->dmabuf_feedback,
+							ec->dmabuf_feedback_format_table,
+							main_device, flags,
+							RENDERER_PREF);
+	if (!tranche) {
+		weston_dmabuf_feedback_destroy(surface->dmabuf_feedback);
+		surface->dmabuf_feedback = NULL;
+		return -1;
+	}
+
+	return 0;
+}
+
 static void
 linux_dmabuf_get_per_surface_feedback(struct wl_client *client,
 				      struct wl_resource *dmabuf_resource,
 				      uint32_t dmabuf_feedback_id,
 				      struct wl_resource *surface_resource)
 {
+	struct weston_compositor *compositor =
+		wl_resource_get_user_data(dmabuf_resource);
 	struct weston_surface *surface =
 		wl_resource_get_user_data(surface_resource);
 	struct wl_resource *dmabuf_feedback_resource;
+	int ret;
 
 	dmabuf_feedback_resource =
 		dmabuf_feedback_resource_create(dmabuf_resource,
-						client, dmabuf_feedback_id);
-	if (!dmabuf_feedback_resource) {
-		wl_resource_post_no_memory(dmabuf_resource);
-		return;
+						client, dmabuf_feedback_id,
+						surface);
+	if (!dmabuf_feedback_resource)
+		goto err;
+
+	if (!surface->dmabuf_feedback) {
+		ret = create_surface_dmabuf_feedback(compositor, surface);
+		if (ret < 0)
+			goto err_feedback;
 	}
 
 	/* Surface dma-buf feedback is dynamic and may need to be resent to
@@ -879,6 +928,13 @@ linux_dmabuf_get_per_surface_feedback(struct wl_client *client,
 	weston_dmabuf_feedback_send(surface->dmabuf_feedback,
 				    surface->compositor->dmabuf_feedback_format_table,
 				    dmabuf_feedback_resource, true);
+	return;
+
+err_feedback:
+	wl_resource_set_user_data(dmabuf_feedback_resource, NULL);
+	wl_resource_destroy(dmabuf_feedback_resource);
+err:
+	wl_resource_post_no_memory(dmabuf_resource);
 }
 
 /** Get the linux_dmabuf_buffer from a wl_buffer resource
@@ -887,11 +943,13 @@ linux_dmabuf_get_per_surface_feedback(struct wl_client *client,
  * protocol interface, returns the linux_dmabuf_buffer object. This can
  * be used as a type check for a wl_buffer.
  *
+ * \param compositor The weston compositor.
  * \param resource A wl_buffer resource.
  * \return The linux_dmabuf_buffer if it exists, or NULL otherwise.
  */
 WL_EXPORT struct linux_dmabuf_buffer *
-linux_dmabuf_buffer_get(struct wl_resource *resource)
+linux_dmabuf_buffer_get(struct weston_compositor *compositor,
+			struct wl_resource *resource)
 {
 	struct linux_dmabuf_buffer *buffer;
 
@@ -903,9 +961,9 @@ linux_dmabuf_buffer_get(struct wl_resource *resource)
 		return NULL;
 
 	buffer = wl_resource_get_user_data(resource);
-	assert(buffer);
-	assert(!buffer->params_resource);
-	assert(buffer->buffer_resource == resource);
+	weston_assert_ptr(compositor, buffer);
+	weston_assert_ptr_is_null(compositor, buffer->params_resource);
+	weston_assert_ptr_eq(compositor, buffer->buffer_resource, resource);
 
 	return buffer;
 }
@@ -932,7 +990,7 @@ linux_dmabuf_buffer_set_user_data(struct linux_dmabuf_buffer *buffer,
 				  void *data,
 				  dmabuf_user_data_destroy_func func)
 {
-	assert(data == NULL || buffer->user_data == NULL);
+	weston_assert_true(buffer->compositor, data == NULL || buffer->user_data == NULL);
 
 	buffer->user_data = data;
 	buffer->user_data_destroy_func = func;
@@ -990,7 +1048,7 @@ bind_linux_dmabuf(struct wl_client *client,
 
 	/* If we got here, it means that the renderer is able to import dma-buf
 	 * buffers, and so it must have get_supported_formats() set. */
-	assert(compositor->renderer->get_supported_formats != NULL);
+	weston_assert_ptr(compositor, compositor->renderer->get_supported_formats);
 	supported_formats = compositor->renderer->get_supported_formats(compositor);
 
 	wl_array_for_each(fmt, &supported_formats->arr) {
@@ -1065,12 +1123,12 @@ linux_dmabuf_buffer_send_server_error(struct linux_dmabuf_buffer *buffer,
 	struct wl_resource *display_resource;
 	uint32_t id;
 
-	assert(buffer->buffer_resource);
+	weston_assert_ptr(buffer->compositor, buffer->buffer_resource);
 	id = wl_resource_get_id(buffer->buffer_resource);
 	client = wl_resource_get_client(buffer->buffer_resource);
 	display_resource = wl_client_get_object(client, 1);
 
-	assert(display_resource);
+	weston_assert_ptr(buffer->compositor, display_resource);
 	wl_resource_post_error(display_resource,
 			       WL_DISPLAY_ERROR_INVALID_OBJECT,
 			       "linux_dmabuf server error with "
