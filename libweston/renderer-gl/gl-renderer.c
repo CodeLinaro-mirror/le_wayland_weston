@@ -26,7 +26,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -3937,6 +3937,7 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 		break;
 	case WESTON_BUFFER_GBMBUF:
 		ret = gl_renderer_attach_gbm_buffer(es, buffer);
+		break;
 	case WESTON_BUFFER_RENDERER_OPAQUE:
 		ret = gl_renderer_attach_egl(es, buffer);
 		break;
