@@ -2314,7 +2314,8 @@ drm_backend_add_connector(struct drm_backend *b, drmModeConnector *conn,
 {
 	int ret;
 
-	if (conn->connector_type == DRM_MODE_CONNECTOR_WRITEBACK) {
+	if ((conn->connector_type == DRM_MODE_CONNECTOR_WRITEBACK) ||
+		 (conn->connector_type == DRM_MODE_CONNECTOR_VIRTUAL)) {
 		ret = drm_writeback_create(b, conn);
 		if (ret < 0)
 			weston_log("DRM: failed to create writeback for connector %d.\n",
