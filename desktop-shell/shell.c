@@ -272,11 +272,10 @@ set_shsurf_size_maximized_or_fullscreen(struct shell_surface *shsurf,
 			width = shsurf->output->width;
 			height = shsurf->output->height;
 		}
-	}
-
-	/* take the panels into considerations */
-	if (max_requested)
+	} else if (max_requested) {
+		/* take the panels into considerations */
 		get_maximized_size(shsurf, &width, &height);
+	}
 
 	/* (0, 0) means we're back from one of the maximized/fullcreen states */
 	weston_desktop_surface_set_size(shsurf->desktop_surface, width, height);
@@ -3351,10 +3350,7 @@ surface_opacity_binding(struct weston_pointer *pointer,
 		return;
 
 	alpha = shsurf->view->alpha - (event->value * step);
-	if (shsurf->view->alpha > 1.0)
-		shsurf->view->alpha = 1.0;
-	if (shsurf->view->alpha < step)
-		shsurf->view->alpha = step;
+	alpha = CLIP(alpha, step, 1.0);
 
 	weston_view_set_alpha(shsurf->view, alpha);
 }
@@ -3846,7 +3842,7 @@ shell_fade_create_view(struct desktop_shell *shell)
 	};
 	struct weston_curtain *curtain;
 	bool first = true;
-	int x1, y1, x2, y2;
+	int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
 
 	wl_list_for_each(shell_output, &shell->output_list, link) {
 		struct weston_output *op = shell_output->output;
