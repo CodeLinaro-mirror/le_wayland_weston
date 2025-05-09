@@ -24,9 +24,8 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -2243,7 +2242,7 @@ gl_renderer_capture_screen(struct weston_output *output,
 	GLuint framebuffer, texture;
 	GLenum status;
 	struct gbm_buffer *gbm_buf = NULL;
-	EGLImageKHR cap_buf_image;
+	EGLImageKHR cap_buf_image = EGL_NO_IMAGE_KHR;
 	struct gl_buffer_state *gb;
 	struct weston_view *view;
 	struct weston_paint_node *pnode;
@@ -2268,6 +2267,9 @@ gl_renderer_capture_screen(struct weston_output *output,
 	} else if (gbm_buf = wl_resource_get_user_data(buffer->resource)) {
 		/* TODO: Create egl image */
 		weston_log("Error! no egl image is bound.\n");
+		return;
+	} else {
+		weston_log("Error! no gbm_buf.\n");
 		return;
 	}
 
