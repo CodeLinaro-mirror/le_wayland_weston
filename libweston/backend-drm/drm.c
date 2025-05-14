@@ -75,56 +75,78 @@ static void
 drm_backend_create_faked_zpos(struct drm_device *device)
 {
 	struct drm_backend *b = device->backend;
-	struct drm_plane *plane;
+	struct drm_plane *plane, *tmp;
+	struct wl_list tmp_list;
 	uint64_t zpos = 0ULL;
 	uint64_t zpos_min_primary;
 	uint64_t zpos_min_overlay;
 	uint64_t zpos_min_cursor;
 
-	zpos_min_primary = zpos;
+	/* if the property is there, bail out sooner */
 	wl_list_for_each(plane, &device->plane_list, link) {
-		/* if the property is there, bail out sooner */
 		if (plane->props[WDRM_PLANE_ZPOS].prop_id != 0)
 			return;
-
-		if (plane->type != WDRM_PLANE_TYPE_PRIMARY)
-			continue;
-		zpos++;
-	}
-
-	zpos_min_overlay = zpos;
-	wl_list_for_each(plane, &device->plane_list, link) {
-		if (plane->type != WDRM_PLANE_TYPE_OVERLAY)
-			continue;
-		zpos++;
-	}
-
-	zpos_min_cursor = zpos;
-	wl_list_for_each(plane, &device->plane_list, link) {
-		if (plane->type != WDRM_PLANE_TYPE_CURSOR)
-			continue;
-		zpos++;
 	}
 
 	drm_debug(b, "[drm-backend] zpos property not found. "
 		     "Using invented immutable zpos values:\n");
-	/* assume that invented zpos values are immutable */
-	wl_list_for_each(plane, &device->plane_list, link) {
-		if (plane->type == WDRM_PLANE_TYPE_PRIMARY) {
-			plane->zpos_min = zpos_min_primary;
-			plane->zpos_max = zpos_min_primary;
-		} else if (plane->type == WDRM_PLANE_TYPE_OVERLAY) {
-			plane->zpos_min = zpos_min_overlay;
-			plane->zpos_max = zpos_min_overlay;
-		} else if (plane->type == WDRM_PLANE_TYPE_CURSOR) {
-			plane->zpos_min = zpos_min_cursor;
-			plane->zpos_max = zpos_min_cursor;
-		}
+
+	wl_list_init(&tmp_list);
+	wl_list_insert_list(&tmp_list, &device->plane_list);
+	wl_list_init(&device->plane_list);
+
+	zpos_min_primary = zpos;
+	wl_list_for_each_safe(plane, tmp, &tmp_list, link) {
+		if (plane->type != WDRM_PLANE_TYPE_PRIMARY)
+			continue;
+
+		plane->zpos_min = zpos_min_primary;
+		plane->zpos_max = zpos_min_primary;
+		wl_list_remove(&plane->link);
+		wl_list_insert(&device->plane_list, &plane->link);
+		zpos++;
+
 		drm_debug(b, "\t[plane] %s plane %d, zpos_min %"PRIu64", "
 			      "zpos_max %"PRIu64"\n",
 			      drm_output_get_plane_type_name(plane),
 			      plane->plane_id, plane->zpos_min, plane->zpos_max);
 	}
+
+	zpos_min_overlay = zpos;
+	wl_list_for_each_safe(plane, tmp, &tmp_list, link) {
+		if (plane->type != WDRM_PLANE_TYPE_OVERLAY)
+			continue;
+
+		plane->zpos_min = zpos_min_overlay;
+		plane->zpos_max = zpos_min_overlay;
+		wl_list_remove(&plane->link);
+		wl_list_insert(&device->plane_list, &plane->link);
+		zpos++;
+
+		drm_debug(b, "\t[plane] %s plane %d, zpos_min %"PRIu64", "
+			      "zpos_max %"PRIu64"\n",
+			      drm_output_get_plane_type_name(plane),
+			      plane->plane_id, plane->zpos_min, plane->zpos_max);
+	}
+
+	zpos_min_cursor = zpos;
+	wl_list_for_each_safe(plane, tmp, &tmp_list, link) {
+		if (plane->type != WDRM_PLANE_TYPE_CURSOR)
+			continue;
+
+		plane->zpos_min = zpos_min_cursor;
+		plane->zpos_max = zpos_min_cursor;
+		wl_list_remove(&plane->link);
+		wl_list_insert(&device->plane_list, &plane->link);
+		zpos++;
+
+		drm_debug(b, "\t[plane] %s plane %d, zpos_min %"PRIu64", "
+			      "zpos_max %"PRIu64"\n",
+			      drm_output_get_plane_type_name(plane),
+			      plane->plane_id, plane->zpos_min, plane->zpos_max);
+	}
+
+	assert(wl_list_empty(&tmp_list));
 }
 
 static int
@@ -355,7 +377,7 @@ drm_output_render_pixman(struct drm_output_state *state,
 }
 
 void
-drm_output_render(struct drm_output_state *state, pixman_region32_t *damage)
+drm_output_render(struct drm_output_state *state)
 {
 	struct drm_output *output = state->output;
 	struct drm_device *device = output->device;
@@ -365,7 +387,7 @@ drm_output_render(struct drm_output_state *state, pixman_region32_t *damage)
 	struct drm_property_info *damage_info =
 		&scanout_plane->props[WDRM_PLANE_FB_DAMAGE_CLIPS];
 	struct drm_fb *fb;
-	pixman_region32_t scanout_damage;
+	pixman_region32_t damage, scanout_damage;
 	pixman_box32_t *rects;
 	int n_rects;
 
@@ -375,6 +397,10 @@ drm_output_render(struct drm_output_state *state, pixman_region32_t *damage)
 	if (scanout_state->fb)
 		return;
 
+	pixman_region32_init(&damage);
+
+	weston_output_flush_damage_for_primary_plane(&output->base, &damage);
+
 	/*
 	 * If we don't have any damage on the primary plane, and we already
 	 * have a renderer buffer active, we can reuse it; else we pass
@@ -382,7 +408,7 @@ drm_output_render(struct drm_output_state *state, pixman_region32_t *damage)
 	 * area. But, we still have to call the renderer anyway if any screen
 	 * capture is pending, otherwise the capture will not complete.
 	 */
-	if (!pixman_region32_not_empty(damage) &&
+	if (!pixman_region32_not_empty(&damage) &&
 	    wl_list_empty(&output->base.frame_signal.listener_list) &&
 	    !weston_output_has_renderer_capture_tasks(&output->base) &&
 	    scanout_plane->state_cur->fb &&
@@ -390,14 +416,14 @@ drm_output_render(struct drm_output_state *state, pixman_region32_t *damage)
 	     scanout_plane->state_cur->fb->type == BUFFER_PIXMAN_DUMB)) {
 		fb = drm_fb_ref(scanout_plane->state_cur->fb);
 	} else if (c->renderer->type == WESTON_RENDERER_PIXMAN) {
-		fb = drm_output_render_pixman(state, damage);
+		fb = drm_output_render_pixman(state, &damage);
 	} else {
-		fb = drm_output_render_gl(state, damage);
+		fb = drm_output_render_gl(state, &damage);
 	}
 
 	if (!fb) {
 		drm_plane_state_put_back(scanout_state);
-		return;
+		goto out;
 	}
 
 	scanout_state->fb = fb;
@@ -417,13 +443,13 @@ drm_output_render(struct drm_output_state *state, pixman_region32_t *damage)
 
 	/* Don't bother calculating plane damage if the plane doesn't support it */
 	if (damage_info->prop_id == 0)
-		return;
+		goto out;
 
 	pixman_region32_init(&scanout_damage);
 
 	weston_region_global_to_output(&scanout_damage,
 				       &output->base,
-				       damage);
+				       &damage);
 
 	assert(scanout_state->damage_blob_id == 0);
 
@@ -440,6 +466,8 @@ drm_output_render(struct drm_output_state *state, pixman_region32_t *damage)
 				  &scanout_state->damage_blob_id);
 
 	pixman_region32_fini(&scanout_damage);
+out:
+	pixman_region32_fini(&damage);
 }
 
 static uint32_t
@@ -651,7 +679,7 @@ cursor_bo_update(struct drm_output *output, struct weston_view *ev)
 #endif
 
 static int
-drm_output_repaint(struct weston_output *output_base, pixman_region32_t *damage)
+drm_output_repaint(struct weston_output *output_base)
 {
 	struct drm_output *output = to_drm_output(output_base);
 	struct drm_output_state *state = NULL;
@@ -718,7 +746,7 @@ drm_output_repaint(struct weston_output *output_base, pixman_region32_t *damage)
 	if (device->atomic_modeset)
 		drm_output_pick_writeback_capture_task(output);
 
-	drm_output_render(state, damage);
+	drm_output_render(state);
 	scanout_state = drm_output_state_get_plane(state,
 						   output->scanout_plane);
 	if (!scanout_state || !scanout_state->fb)
