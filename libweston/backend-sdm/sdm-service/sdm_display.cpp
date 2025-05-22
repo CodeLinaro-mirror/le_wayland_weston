@@ -793,6 +793,9 @@ int SdmDisplay::PrepareNormalLayerGeometry(struct drm_output *output,
     else
         layer->blending = SDM_BLENDING_COVERAGE;
 
+
+    pixman_region32_fini(&r);
+
     // Video layers are always opaque
     if (layer->flags.video_present) {
         layer->blending = SDM_BLENDING_NONE;
