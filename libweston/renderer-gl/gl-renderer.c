@@ -24,9 +24,8 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -1467,8 +1466,7 @@ out_clear_paint_node:
 }
 
 static void
-draw_paint_node_overlay(struct weston_paint_node *pnode, pixman_region32_t *damage,
-				bool have_primary_view)
+draw_paint_node_overlay(struct weston_paint_node *pnode, pixman_region32_t *damage)
 {
 	pixman_region32_t r;
 	bool is_yuv;
@@ -1500,13 +1498,11 @@ draw_paint_node_overlay(struct weston_paint_node *pnode, pixman_region32_t *dama
 	else if (dmabuf = linux_dmabuf_buffer_get(ec, buffer->resource))
 		is_yuv = gbm_buffer_backend->is_yuv_format(dmabuf->attributes.format);
 
-	/* only can clear view by meeting all the three conditions:
-	 * 1, have views on primary plane. If none of views composed by gpu,
-	 * don't clear framebuffer becuase it had been cleared before.
-	 * 2, the whole surface region is opaque or it's yuv region.
-	 * 3, global alpha value is 1.
+	/* only can clear view by meeting both conditions:
+	 * 1, the whole surface region is opaque or it's yuv region.
+	 * 2, global alpha value is 1.
 	 */
-	if (have_primary_view && (!pixman_region32_not_empty(&r) || is_yuv) &&
+	if ((!pixman_region32_not_empty(&r) || is_yuv) &&
 			(pnode->view->alpha == 1)) {
 	/* clear framebuffer with transparent pixels where this layer would be*/
 		clear_paint_node(pnode, damage);
@@ -1534,7 +1530,7 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
 			have_primary_view = true;
 			draw_paint_node(pnode, damage);
 		} else {
-			draw_paint_node_overlay(pnode, damage, have_primary_view);
+			draw_paint_node_overlay(pnode, damage);
 		}
 	}
 
@@ -2062,6 +2058,18 @@ gl_renderer_repaint_output(struct weston_output *output,
 				get_surface_state(pnode->view->surface);
 			gs->used_in_output_repaint = false;
 		}
+		/* Skip screen capture buffer during damage calculation */
+		if (screen_capture_backend->is_screen_capture_view(pnode->view))
+			continue;
+		if (pnode->view->is_completely_covered)
+			continue;
+		/* damage of overlay views hasn't been considered by compositor, but
+		 * since we need to paint them as transparant on GPU render target later,
+		 * merge those regions into &rb->base.damage. */
+		if (pnode->plane != &output->primary_plane) {
+			pixman_region32_union(&rb->base.damage, &rb->base.damage,
+					&pnode->view->transform.boundingbox);
+		}
 	}
 
 	timeline_begin_render_query(gr, go->render_query);
@@ -2185,30 +2193,35 @@ gl_renderer_repaint_output(struct weston_output *output,
 
 	if (rb->pixels) {
 		uint32_t *pixels = rb->pixels;
-		int stride = go->fb_size.width;
-		pixman_box32_t *extents = &rb->base.damage.extents;
+		int width = go->fb_size.width;
+		int stride = width * (compositor->read_format->bpp >> 3);
+		pixman_box32_t extents;
 		struct weston_geometry rect = {
 			.x = go->area.x,
 			.width = go->area.width,
 		};
 
+		extents = weston_matrix_transform_rect(&output->matrix,
+						       rb->base.damage.extents);
+
 		if (gr->fan_debug) {
 			rect.y = go->fb_size.height - go->area.y - go->area.height;
 			rect.height = go->area.height;
 		} else {
-			rect.y = go->fb_size.height - go->area.y - extents->y2;
-			rect.height = extents->y2 - extents->y1;
-			pixels += rect.width * (extents->y1 - (int)output->pos.c.y);
+			rect.y = go->fb_size.height - go->area.y - extents.y2;
+			rect.height = extents.y2 - extents.y1;
+			pixels += rect.width * extents.y1;
 		}
 
 		if (gr->gl_version >= gr_gl_version(3, 0) && ! gr->fan_debug) {
-			glPixelStorei(GL_PACK_ROW_LENGTH, stride);
-			rect.width = extents->x2 - extents->x1;
-			rect.x += extents->x1 - (int)output->pos.c.x;
-			pixels += extents->x1 - (int)output->pos.c.x;
+			glPixelStorei(GL_PACK_ROW_LENGTH, width);
+			rect.width = extents.x2 - extents.x1;
+			rect.x += extents.x1;
+			pixels += extents.x1;
 		}
 
-		gl_renderer_do_read_pixels(gr, compositor->read_format, pixels, stride, &rect);
+		gl_renderer_do_read_pixels(gr, compositor->read_format, pixels,
+					   stride, &rect);
 
 		if (gr->gl_version >= gr_gl_version(3, 0))
 			glPixelStorei(GL_PACK_ROW_LENGTH, 0);
@@ -2234,7 +2247,7 @@ gl_renderer_capture_screen(struct weston_output *output,
 	GLuint framebuffer, texture;
 	GLenum status;
 	struct gbm_buffer *gbm_buf = NULL;
-	EGLImageKHR cap_buf_image;
+	EGLImageKHR cap_buf_image = EGL_NO_IMAGE_KHR;
 	struct gl_buffer_state *gb;
 	struct weston_view *view;
 	struct weston_paint_node *pnode;
@@ -2259,6 +2272,9 @@ gl_renderer_capture_screen(struct weston_output *output,
 	} else if (gbm_buf = wl_resource_get_user_data(buffer->resource)) {
 		/* TODO: Create egl image */
 		weston_log("Error! no egl image is bound.\n");
+		return;
+	} else {
+		weston_log("Error! no gbm_buf.\n");
 		return;
 	}
 
@@ -3928,6 +3944,7 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 		break;
 	case WESTON_BUFFER_GBMBUF:
 		ret = gl_renderer_attach_gbm_buffer(es, buffer);
+		break;
 	case WESTON_BUFFER_RENDERER_OPAQUE:
 		ret = gl_renderer_attach_egl(es, buffer);
 		break;

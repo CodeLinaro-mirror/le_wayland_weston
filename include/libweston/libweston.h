@@ -26,7 +26,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -559,7 +559,7 @@ struct weston_output {
 	struct weston_log_pacer pixman_overdraw_pacer;
 
 	int (*start_repaint_loop)(struct weston_output *output);
-	int (*repaint)(struct weston_output *output, pixman_region32_t *damage);
+	int (*repaint)(struct weston_output *output);
 	void (*destroy)(struct weston_output *output);
 	void (*assign_planes)(struct weston_output *output);
 	int (*switch_mode)(struct weston_output *output, struct weston_mode *mode);
@@ -2410,6 +2410,30 @@ weston_log_paced(struct weston_log_pacer *pacer, unsigned int max_burst,
 
 void
 weston_place_marker(const char *name);
+
+bool
+weston_atrace_enable(void);
+
+void
+weston_atrace_marker(const char *type, const char *name);
+
+#define ATRACE_BEGIN(fmt_str, ...) \
+	do { \
+		if (weston_atrace_enable()) { \
+			char buf_begin[256]; \
+			snprintf(buf_begin, 256, fmt_str, ##__VA_ARGS__); \
+			weston_atrace_marker("B", buf_begin); \
+		} \
+	} while (0)
+
+#define ATRACE_END(fmt_str, ...) \
+	do { \
+		if (weston_atrace_enable()) { \
+			char buf_end[256]; \
+			snprintf(buf_end, 256, fmt_str, ##__VA_ARGS__); \
+			weston_atrace_marker("E", buf_end); \
+		} \
+	} while (0)
 
 enum weston_screenshooter_outcome {
 	WESTON_SCREENSHOOTER_SUCCESS,

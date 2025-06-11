@@ -28,7 +28,7 @@
 /*
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -100,7 +100,7 @@
  * \defgroup compositor Compositor
  */
 
-#define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
+#define DEFAULT_REPAINT_WINDOW 15 /* milliseconds */
 
 struct gbm_buffer_backend_c_interface *gbm_buffer_backend;
 
@@ -3408,11 +3408,31 @@ weston_output_flush_damage_for_plane(struct weston_output *output,
 			continue;
 		changed = true;
 
+		/* We can safely clip paint node damage to visible region
+		 * here, as we're only dealing with nodes on this output,
+		 * and the visibility regions for paint nodes on this
+		 * output are up to date.
+		 */
+		pixman_region32_intersect(&pnode->damage, &pnode->damage, &pnode->visible);
 		pixman_region32_union(damage, damage, &pnode->damage);
 		pixman_region32_clear(&pnode->damage);
 	}
 	pixman_region32_intersect(damage, damage, &output->region);
 	return changed;
+}
+
+WL_EXPORT void
+weston_output_flush_damage_for_primary_plane(struct weston_output *output,
+					     pixman_region32_t *damage)
+{
+	weston_output_flush_damage_for_plane(output,
+					     &output->primary_plane,
+					     damage);
+
+	if (output->full_repaint_needed) {
+		pixman_region32_copy(damage, &output->region);
+		output->full_repaint_needed = false;
+	}
 }
 
 static int
@@ -3423,7 +3443,6 @@ weston_output_repaint(struct weston_output *output)
 	struct weston_animation *animation, *next;
 	struct wl_resource *cb, *cnext;
 	struct wl_list frame_callback_list;
-	pixman_region32_t output_damage;
 	int r;
 	uint32_t frame_time_msec;
 	enum weston_hdcp_protection highest_requested = WESTON_HDCP_DISABLE;
@@ -3432,6 +3451,7 @@ weston_output_repaint(struct weston_output *output)
 		return 0;
 
 	TL_POINT(ec, "core_repaint_begin", TLP_OUTPUT(output), TLP_END);
+	ATRACE_BEGIN("%s", __func__);
 
 	/* Rebuild the surface list and update surface transforms up front. */
 	if (ec->view_list_needs_rebuild)
@@ -3495,19 +3515,7 @@ weston_output_repaint(struct weston_output *output)
 
 	output_accumulate_damage(output);
 
-	pixman_region32_init(&output_damage);
-
-	weston_output_flush_damage_for_plane(output, &output->primary_plane,
-					     &output_damage);
-
-	if (output->full_repaint_needed) {
-		pixman_region32_copy(&output_damage, &output->region);
-		output->full_repaint_needed = false;
-	}
-
-	r = output->repaint(output, &output_damage);
-
-	pixman_region32_fini(&output_damage);
+	r = output->repaint(output);
 
 	output->repaint_needed = false;
 	if (r == 0)
@@ -3530,6 +3538,7 @@ weston_output_repaint(struct weston_output *output)
 	weston_output_capture_info_repaint_done(output->capture_info);
 
 	TL_POINT(ec, "core_repaint_posted", TLP_OUTPUT(output), TLP_END);
+	ATRACE_END("%s", __func__);
 
 	return r;
 }
@@ -3743,6 +3752,7 @@ weston_output_finish_frame(struct weston_output *output,
 	struct timespec vblank_monotonic;
 	int64_t msec_rel;
 
+	ATRACE_BEGIN("%s", __func__);
 	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
 
 	/*
@@ -3815,6 +3825,7 @@ weston_output_finish_frame(struct weston_output *output,
 out:
 	output->repaint_status = REPAINT_SCHEDULED;
 	output_repaint_timer_arm(compositor);
+	ATRACE_END("%s", __func__);
 }
 
 
@@ -3874,16 +3885,9 @@ weston_view_move_to_layer(struct weston_view *view,
 			  struct weston_layer_entry *layer)
 {
 	bool was_mapped = view->is_mapped;
-	struct weston_paint_node *pnode, *pntmp;
 
 	if (layer == &view->layer_link)
 		return;
-
-	/* Remove all paint nodes because we have no idea what a layer change
-	 * does to view visibility on any output.
-	 */
-	wl_list_for_each_safe(pnode, pntmp, &view->paint_node_list, view_link)
-		weston_paint_node_destroy(pnode);
 
 	view->surface->compositor->view_list_needs_rebuild = true;
 
@@ -3914,6 +3918,18 @@ weston_view_move_to_layer(struct weston_view *view,
 WL_EXPORT void
 weston_layer_entry_remove(struct weston_layer_entry *entry)
 {
+	struct weston_paint_node *pnode, *pntmp;
+	struct weston_view *view;
+
+	/* Remove all paint nodes because we have no idea what a layer change
+	 * does to view visibility on any output.
+	 */
+	view = container_of(entry, struct weston_view, layer_link);
+	view->surface->compositor->view_list_needs_rebuild = true;
+
+	wl_list_for_each_safe(pnode, pntmp, &view->paint_node_list, view_link)
+		weston_paint_node_destroy(pnode);
+
 	wl_list_remove(&entry->link);
 	wl_list_init(&entry->link);
 	entry->layer = NULL;
@@ -4663,6 +4679,7 @@ surface_commit(struct wl_client *client, struct wl_resource *resource)
 		return;
 	}
 
+	ATRACE_BEGIN("%s", __func__);
 	if (sub) {
 		status = weston_subsurface_commit(sub);
 	} else {
@@ -4673,6 +4690,7 @@ surface_commit(struct wl_client *client, struct wl_resource *resource)
 		}
 		status |= weston_surface_commit(surface);
 	}
+	ATRACE_END("%s", __func__);
 
 	if (status & WESTON_SURFACE_DIRTY_SUBSURFACE_CONFIG)
 		surface->compositor->view_list_needs_rebuild = true;
@@ -4974,6 +4992,7 @@ weston_subsurface_commit(struct weston_subsurface *sub)
 	enum weston_surface_status status = WESTON_SURFACE_CLEAN;
 	struct weston_subsurface *tmp;
 
+	ATRACE_BEGIN("%s", __func__);
 	/* Recursive check for effectively synchronized. */
 	if (weston_subsurface_is_synchronized(sub)) {
 		weston_subsurface_commit_to_cache(sub);
@@ -4991,6 +5010,7 @@ weston_subsurface_commit(struct weston_subsurface *sub)
 				status |= weston_subsurface_parent_commit(tmp, 0);
 		}
 	}
+	ATRACE_END("%s", __func__);
 
 	return status;
 }
