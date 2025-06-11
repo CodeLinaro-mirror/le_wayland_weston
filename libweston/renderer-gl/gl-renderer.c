@@ -3209,6 +3209,11 @@ choose_texture_target(struct gl_renderer *gr,
 	}
 
 	switch (attributes->format & ~DRM_FORMAT_BIG_ENDIAN) {
+	case DRM_FORMAT_NV12:
+	case DRM_FORMAT_NV21:
+	case DRM_FORMAT_YUV420:
+	case DRM_FORMAT_YVU420:
+	case DRM_FORMAT_P010:
 	case DRM_FORMAT_YUYV:
 	case DRM_FORMAT_YVYU:
 	case DRM_FORMAT_UYVY:
