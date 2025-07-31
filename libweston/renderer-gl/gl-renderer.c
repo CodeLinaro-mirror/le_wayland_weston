@@ -2095,6 +2095,12 @@ gl_renderer_repaint_output(struct weston_output *output,
 			   go->area.width, go->area.height);
 	}
 
+	/* If partial update is disabled, clear all unknown regions */
+	if (!gr->has_egl_partial_update) {
+		glClearColor(0,0,0,0);
+		glClear(GL_COLOR_BUFFER_BIT);
+	}
+
 	/* In fan debug mode, redraw everything to make sure that we clear any
 	 * fans left over from previous draws on this buffer.
 	 * This precludes the use of EGL_EXT_swap_buffers_with_damage and
