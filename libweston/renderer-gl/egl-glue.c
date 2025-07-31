@@ -668,10 +668,11 @@ gl_renderer_setup_egl_extensions(struct weston_compositor *ec)
 	if (weston_check_egl_extension(extensions, "EGL_EXT_buffer_age"))
 		gr->has_egl_buffer_age = true;
 
-	if (weston_check_egl_extension(extensions, "EGL_KHR_partial_update")) {
-		assert(gr->set_damage_region);
-		gr->has_egl_partial_update = true;
-	}
+	/* Commented out this logic, since partial update can't work properly for transparent background */
+	// if (weston_check_egl_extension(extensions, "EGL_KHR_partial_update")) {
+	// 	assert(gr->set_damage_region);
+	// 	gr->has_egl_partial_update = true;
+	// }
 
 	for (i = 0; i < ARRAY_LENGTH(swap_damage_ext_to_entrypoint); i++) {
 		if (weston_check_egl_extension(extensions,
