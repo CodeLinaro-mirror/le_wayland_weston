@@ -295,6 +295,12 @@ int early_create_display(uint32_t display_id, struct EarlyDisplayInfo *dispinfo)
     return -1;
 
   drm_mgr_intf_->GetConnectorInfo(conn_id, &info);
+
+  weston_log("[%s] num modes: %d\n", __func__, info.modes.size());
+  if (info.modes.size() == 0) {
+      weston_log("no mode found.\n");
+      return -1;
+  }
   current_mode_ = info.modes[0].mode;
 
   switch (info.type) {
