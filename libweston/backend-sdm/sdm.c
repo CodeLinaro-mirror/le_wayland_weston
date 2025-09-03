@@ -166,8 +166,13 @@ vblank_handler(int display_id, int64_t timestamp, void *data)
 		}
 	}
 
+#if defined (__aarch64__)
 	output->last_vblank.sec = timestamp / 1000000000LL;
 	output->last_vblank.usec = (timestamp % 1000000000LL) / 1000;
+#else
+	output->last_vblank.sec = (uint32_t)(timestamp / 1000000000LL);
+	output->last_vblank.usec = (uint32_t)((timestamp % 1000000000LL) / 1000);
+#endif
 
 	write(output->vblank_ev_fd, &v, sizeof v);
 }
@@ -235,7 +240,11 @@ on_vblank(int fd, uint32_t mask, void *data)
 
 	struct drm_backend *b = to_drm_backend(output->base.compositor);;
 	unsigned int sec, usec;
+#if defined (__aarch64__)
 	uint64_t v = 0;
+#else
+	uint32_t v = 0;
+#endif
 
 #ifdef MULTI_DISPLAY
 	struct timespec ts;

@@ -71,6 +71,7 @@ struct drm_property_enum_info content_protection_enums[] = {
 	},
 };
 
+
 void
 drm_output_update_msc(struct drm_output *output, unsigned int seq)
 {
@@ -92,7 +93,11 @@ on_drm_input(int fd, uint32_t mask, void *data)
 int
 init_kms_caps(struct drm_backend *b)
 {
+#if defined (__aarch64__)
 	uint64_t cap;
+#else
+	uint32_t cap;
+#endif
 	int ret;
 	clockid_t clk_id;
 
