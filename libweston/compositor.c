@@ -102,7 +102,7 @@
 
 #define DEFAULT_REPAINT_WINDOW 15 /* milliseconds */
 
-struct gbm_buffer_backend_c_interface *gbm_buffer_backend;
+static struct gbm_buffer_backend_c_interface *gbm_buffer_backend;
 
 static void
 weston_output_transform_scale_init(struct weston_output *output,
