@@ -46,6 +46,8 @@
 #define DRM_FORMAT_MOD_LINEAR 0
 #endif
 
+struct pcc_setting global_pcc_setting = {0};
+
 struct drm_property_enum_info plane_type_enums[] = {
 	[WDRM_PLANE_TYPE_PRIMARY] = {
 		.name = "Primary",
@@ -140,8 +142,8 @@ const struct drm_property_info connector_props[] = {
 const struct drm_property_info crtc_props[] = {
 	[WDRM_CRTC_MODE_ID] = { .name = "MODE_ID", },
 	[WDRM_CRTC_ACTIVE] = { .name = "ACTIVE", },
+	[WDRM_CRTC_PCC] = { .name = "SDE_DSPP_PCC_V4", },
 };
-
 
 /**
  * Mode for drm_pending_state_apply and co.
@@ -963,6 +965,7 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
 	struct drm_plane_state *plane_state;
 	struct drm_mode *current_mode = to_drm_mode(output->base.current_mode);
 	struct drm_head *head;
+	static uint32_t pcc_blob_id;
 	int ret = 0;
 
 	drm_debug(b, "\t\t[atomic] %s output %lu (%s) state\n",
@@ -982,6 +985,12 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
 		ret |= crtc_add_prop(req, output, WDRM_CRTC_MODE_ID,
 				     current_mode->blob_id);
 		ret |= crtc_add_prop(req, output, WDRM_CRTC_ACTIVE, 1);
+
+		if (global_pcc_setting.set_count > 0) {
+			ret = drmModeCreatePropertyBlob(b->drm.fd, &global_pcc_setting.pcc_conf, sizeof(global_pcc_setting.pcc_conf), &pcc_blob_id);
+			ret |= crtc_add_prop(req, output, WDRM_CRTC_PCC, pcc_blob_id);
+			global_pcc_setting.set_count --;
+		}
 
 		/* No need for the DPMS property, since it is implicit in
 		 * routing and CRTC activity. */

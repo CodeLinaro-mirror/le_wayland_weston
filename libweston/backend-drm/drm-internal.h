@@ -46,6 +46,7 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 #include <drm_fourcc.h>
+#include <msm_drm_pp.h>
 
 #ifdef BUILD_DRM_GBM
 #include <gbm.h>
@@ -230,6 +231,7 @@ enum wdrm_dpms_state {
 enum wdrm_crtc_property {
 	WDRM_CRTC_MODE_ID = 0,
 	WDRM_CRTC_ACTIVE,
+	WDRM_CRTC_PCC,
 	WDRM_CRTC__COUNT
 };
 
@@ -474,6 +476,11 @@ struct drm_head {
 	uint32_t inherited_crtc_id;	/**< Original CRTC assignment */
 };
 
+struct pcc_setting {
+	int set_count;
+	struct drm_msm_pcc pcc_conf;
+};
+
 struct drm_output {
 	struct weston_output base;
 	struct drm_backend *backend;
@@ -523,6 +530,8 @@ struct drm_output {
 
 	submit_frame_cb virtual_submit_frame;
 };
+
+extern struct pcc_setting global_pcc_setting;
 
 static inline struct drm_head *
 to_drm_head(struct weston_head *base)

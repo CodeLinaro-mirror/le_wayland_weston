@@ -16,6 +16,8 @@ srcs_toytoolkit = [
 	ivi_application_protocol_c,
 	viewporter_client_protocol_h,
 	viewporter_protocol_c,
+	pcc_control_client_protocol_h,
+	pcc_control_protocol_c,
 ]
 deps_toytoolkit = [
 	dep_wayland_client,
@@ -37,6 +39,15 @@ dep_toytoolkit = declare_dependency(
 )
 
 simple_clients = [
+	{
+		'name': 'pcc-setting',
+		'sources': [
+			'pcc-setting.c',
+			pcc_control_client_protocol_h,
+			pcc_control_protocol_c,
+		],
+		'dep_objs': [ dep_wayland_client, dep_libshared ]
+	},
 	{
 		'name': 'qti-extn-test',
 		'sources': [

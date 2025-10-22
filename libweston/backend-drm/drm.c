@@ -65,8 +65,50 @@
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-unstable-v1-server-protocol.h"
 #include "linux-explicit-synchronization.h"
+#include "pcc-control-server-protocol.h"
 
 static const char default_seat[] = "seat0";
+
+
+static void drm_pcc_set_pcc(struct wl_client *client, struct wl_resource *resource, struct wl_array *values)
+{
+	size_t count = values->size / sizeof(uint32_t);
+	uint32_t *arr = values->data;
+
+	if (count != 9)
+		return;
+	global_pcc_setting.set_count = 2;
+	global_pcc_setting.pcc_conf.r.r	= arr[0];
+	global_pcc_setting.pcc_conf.r.g	= arr[1];
+	global_pcc_setting.pcc_conf.r.b	= arr[2];
+	global_pcc_setting.pcc_conf.g.r	= arr[3];
+	global_pcc_setting.pcc_conf.g.g	= arr[4];
+	global_pcc_setting.pcc_conf.g.b	= arr[5];
+	global_pcc_setting.pcc_conf.b.r	= arr[6];
+	global_pcc_setting.pcc_conf.b.g	= arr[7];
+	global_pcc_setting.pcc_conf.b.b	= arr[8];
+}
+
+static const struct pcc_control_interface drm_pcc_interface = {
+	.set_pcc = drm_pcc_set_pcc,
+};
+
+static void
+drm_bind_pcc(struct wl_client *client, void *data, uint32_t version, uint32_t id)
+{
+	struct wl_resource *res;
+	struct weston_compositor *ec = data;
+
+	res = wl_resource_create(client, &pcc_control_interface, version, id);
+	wl_resource_set_implementation(res, &drm_pcc_interface, ec, NULL);
+}
+
+static void
+drm_pcc_protocol_init(struct weston_compositor *ec)
+{
+	wl_global_create(ec->wl_display, &pcc_control_interface, 1, ec, drm_bind_pcc);
+	weston_log("DRM backend: PCC protocol registered.\n");
+}
 
 static void
 drm_backend_create_faked_zpos(struct drm_backend *b)
@@ -2987,6 +3029,8 @@ drm_backend_create(struct weston_compositor *compositor,
 		weston_log("Failed to register virtual output API.\n");
 		goto err_udev_monitor;
 	}
+
+	drm_pcc_protocol_init(compositor);
 
 	return b;
 

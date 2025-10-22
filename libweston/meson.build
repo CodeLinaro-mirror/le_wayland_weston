@@ -72,6 +72,8 @@ srcs_libweston = [
         gbm_buffer_backend_server_protocol_h,
         weston_qti_extn_protocol_c,
         weston_qti_extn_server_protocol_h,
+        pcc_control_protocol_c,
+        pcc_control_server_protocol_h,
 ]
 
 if get_option('renderer-gl')

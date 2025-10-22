@@ -40,6 +40,7 @@ generated_protocols = [
 	[ 'xdg-output', 'v1' ],
 	[ 'xdg-shell', 'v6' ],
 	[ 'xdg-shell', 'stable' ],
+	[ 'pcc-control', 'internal' ],
 ]
 
 foreach proto: generated_protocols

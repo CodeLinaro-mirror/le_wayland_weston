@@ -1,0 +1,11 @@
+<protocol name="pcc_control">
+  <copyright>
+    Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+    SPDX-License-Identifier: BSD-3-Clause-Clear
+  </copyright>
+  <interface name="pcc_control" version="1">
+    <request name="set_pcc">
+      <arg name="data" type="array" summary="array of uint32_t pcc values"/>
+    </request>
+  </interface>
+</protocol>
