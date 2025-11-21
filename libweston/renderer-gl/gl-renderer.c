@@ -217,8 +217,8 @@ struct timeline_render_point {
 	struct wl_event_source *event_source;
 };
 
-struct gbm_buffer_backend_c_interface *gbm_buffer_backend;
-struct screen_capture_c_interface *screen_capture_backend;
+static struct gbm_buffer_backend_c_interface *gbm_buffer_backend;
+static struct screen_capture_c_interface *screen_capture_backend;
 
 static uint32_t
 gr_gl_version(uint16_t major, uint16_t minor)

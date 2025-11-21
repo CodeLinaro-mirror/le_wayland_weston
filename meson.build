@@ -72,6 +72,10 @@ global_args = cc.get_supported_arguments(
 )
 add_project_arguments(global_args, language: 'c')
 
+if get_option('ASAN')
+	add_project_arguments('-fsanitize=address', language: 'c')
+endif
+
 if cc.has_header_symbol('sys/sysmacros.h', 'major')
 	config_h.set('MAJOR_IN_SYSMACROS', 1)
 elif cc.has_header_symbol('sys/mkdev.h', 'major')
