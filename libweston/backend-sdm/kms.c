@@ -93,17 +93,15 @@ on_drm_input(int fd, uint32_t mask, void *data)
 int
 init_kms_caps(struct drm_backend *b)
 {
-#if defined (__aarch64__)
 	uint64_t cap;
-#else
-	uint32_t cap;
-#endif
+	uint64_t drm_cap = 0;
+	uint64_t value = 1 ;
 	int ret;
 	clockid_t clk_id;
 
 	weston_log("using %s\n", b->drm.filename);
-
-	ret = drmGetCap(b->drm.fd, DRM_CAP_TIMESTAMP_MONOTONIC, &cap);
+	drm_cap = DRM_CAP_TIMESTAMP_MONOTONIC;
+	ret = drmGetCap(b->drm.fd, drm_cap, &cap);
 	if (ret == 0 && cap == 1)
 		clk_id = CLOCK_MONOTONIC;
 	else
@@ -114,37 +112,41 @@ init_kms_caps(struct drm_backend *b)
 			   clk_id);
 		return -1;
 	}
-
-	ret = drmGetCap(b->drm.fd, DRM_CAP_CURSOR_WIDTH, &cap);
+	drm_cap = DRM_CAP_CURSOR_WIDTH;
+	ret = drmGetCap(b->drm.fd, drm_cap, &cap);
 	if (ret == 0)
 		b->cursor_width = cap;
 	else
 		b->cursor_width = 64;
-
-	ret = drmGetCap(b->drm.fd, DRM_CAP_CURSOR_HEIGHT, &cap);
+	drm_cap = DRM_CAP_CURSOR_HEIGHT;
+	ret = drmGetCap(b->drm.fd, drm_cap, &cap);
 	if (ret == 0)
 		b->cursor_height = cap;
 	else
 		b->cursor_height = 64;
 
 	if (!getenv("WESTON_DISABLE_UNIVERSAL_PLANES")) {
-		ret = drmSetClientCap(b->drm.fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+	drm_cap = DRM_CLIENT_CAP_UNIVERSAL_PLANES;
+		ret = drmSetClientCap(b->drm.fd, drm_cap, value);
 		b->universal_planes = (ret == 0);
 	}
 	weston_log("DRM: %s universal planes\n",
 		   b->universal_planes ? "supports" : "does not support");
 
 	if (b->universal_planes && !getenv("WESTON_DISABLE_ATOMIC")) {
-		ret = drmGetCap(b->drm.fd, DRM_CAP_CRTC_IN_VBLANK_EVENT, &cap);
+	drm_cap = DRM_CAP_CRTC_IN_VBLANK_EVENT;
+		ret = drmGetCap(b->drm.fd, drm_cap, &cap);
 		if (ret != 0)
 			cap = 0;
-		ret = drmSetClientCap(b->drm.fd, DRM_CLIENT_CAP_ATOMIC, 1);
+	drm_cap = DRM_CLIENT_CAP_ATOMIC;
+		ret = drmSetClientCap(b->drm.fd, drm_cap, value);
 		b->atomic_modeset = ((ret == 0) && (cap == 1));
 	}
 	weston_log("DRM: %s atomic modesetting\n",
 		   b->atomic_modeset ? "supports" : "does not support");
 
-	ret = drmGetCap(b->drm.fd, DRM_CAP_ADDFB2_MODIFIERS, &cap);
+	drm_cap = DRM_CAP_ADDFB2_MODIFIERS;
+	ret = drmGetCap(b->drm.fd, drm_cap, &cap);
 	if (ret == 0)
 		b->fb_modifiers = cap;
 	else
@@ -161,7 +163,8 @@ init_kms_caps(struct drm_backend *b)
 	if (!b->atomic_modeset || getenv("WESTON_FORCE_RENDERER"))
 		b->sprites_are_broken = true;
 
-	ret = drmSetClientCap(b->drm.fd, DRM_CLIENT_CAP_ASPECT_RATIO, 1);
+	drm_cap = DRM_CLIENT_CAP_ASPECT_RATIO;
+	ret = drmSetClientCap(b->drm.fd, drm_cap, value);
 	b->aspect_ratio_supported = (ret == 0);
 	weston_log("DRM: %s picture aspect ratio\n",
 		   b->aspect_ratio_supported ? "supports" : "does not support");
