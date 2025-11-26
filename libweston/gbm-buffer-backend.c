@@ -61,6 +61,8 @@
 #include "gbm-buffer-backend-server-protocol.h"
 #include "libweston-internal.h"
 
+static uint32_t ref_count = 0 ;
+
 static void
 gbm_buffer_destroy_params(struct wl_resource *params_resource);
 
@@ -91,6 +93,11 @@ static const struct gbm_buffer_params_interface gbm_buffer_params_implementation
 static void
 gbm_buffer_destroy(struct gbm_buffer *buffer)
 {
+	if(ref_count <= 0){
+               GBM_PROTOCOL_LOG(LOG_ERR,"destory called on the freed buffer \n");
+               return ;
+       }
+
   // Destroy gbm bo if it is still valid
   if (buffer->bo) {
     GBM_PROTOCOL_LOG(LOG_DBG,"gbm_buffer_destroy close buffer fd[%d] metadata_fd[%d]\n",
@@ -111,7 +118,10 @@ gbm_buffer_destroy(struct gbm_buffer *buffer)
     buffer->bo = NULL;
   }
 
+  ref_count--;
+  buffer->user_data = NULL ;
   free(buffer);
+  buffer = NULL ;
 }
 
 
@@ -173,15 +183,20 @@ gbm_buffer_backend_create_params(struct wl_client *client,
     if (!buffer)
         goto err_out;
 
+    ref_count++;
+
     buffer->fd = -1;
     buffer->metadata_fd = -1;
     buffer->compositor = compositor;
+    buffer->user_data = NULL ;
     buffer->params_resource =
         wl_resource_create(client,
                    &gbm_buffer_params_interface,
                    version, params_id);
-    if (!buffer->params_resource)
+    if (!buffer->params_resource){
+	ref_count--;
         goto err_dealloc;
+    }
 
     wl_resource_set_implementation(buffer->params_resource,
                        &gbm_buffer_params_implementation,
@@ -435,6 +450,11 @@ gbm_buffer_backend_set_user_data(struct gbm_buffer *buffer,
                   void *data,
                   gbm_buffer_user_data_destroy_func func)
 {
+	if(ref_count <= 0 ){
+               GBM_PROTOCOL_LOG(LOG_ERR,"buffer is using after free returning \n");
+               return ;
+       }
+
     assert(data == NULL || buffer->user_data == NULL);
 
     buffer->user_data = data;
