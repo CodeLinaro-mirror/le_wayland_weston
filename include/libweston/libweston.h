@@ -1102,6 +1102,9 @@ struct weston_compositor {
 	/* Whether to let the compositor run without any input device. */
 	bool require_input;
 
+        /* Add option to run weston in secure mode. */
+        bool secure_mode;
+
 	/* Signal for a backend to inform a frontend about possible changes
 	 * in head status.
 	 */

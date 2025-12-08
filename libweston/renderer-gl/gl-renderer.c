@@ -1853,7 +1853,7 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 	struct weston_compositor *ec = es->compositor;
 	struct gl_renderer *gr = get_renderer(ec);
 	struct gl_surface_state *gs = get_surface_state(es);
-	EGLint attribs[3];
+	EGLint attribs[5];
 	int i, num_planes;
 
 	buffer->legacy_buffer = (struct wl_buffer *)buffer->resource;
@@ -1904,9 +1904,14 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 
 	ensure_textures(gs, num_planes);
 	for (i = 0; i < num_planes; i++) {
-		attribs[0] = EGL_WAYLAND_PLANE_WL;
-		attribs[1] = i;
-		attribs[2] = EGL_NONE;
+                unsigned int nattr = 0;
+		attribs[nattr++] = EGL_WAYLAND_PLANE_WL;
+		attribs[nattr++] = i;
+                if (gr->secure_context) {
+                        attribs[nattr++] = EGL_PROTECTED_CONTENT_EXT;
+                        attribs[nattr++] = EGL_TRUE;
+                }
+		attribs[nattr] = EGL_NONE;
 		gs->images[i] = egl_image_create(gr,
 						 EGL_WAYLAND_BUFFER_WL,
 						 buffer->legacy_buffer,
@@ -2029,6 +2034,10 @@ import_simple_dmabuf(struct gl_renderer *gr,
 		}
 	}
 
+        if (gr->secure_context) {
+                attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
+                attribs[atti++] = EGL_TRUE;
+        }
 	attribs[atti++] = EGL_NONE;
 
 	image = egl_image_create(gr, EGL_LINUX_DMA_BUF_EXT, NULL,
@@ -2563,8 +2572,7 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
        gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbmbuf->bo, &secure_status, NULL);
        //If format is in skip list, return with out creating egl image.
        if ((gbmbuf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
-               (gbmbuf->format == GBM_FORMAT_P010) ||
-               ((gbmbuf->format == GBM_FORMAT_NV12) && secure_status)) {
+               (gbmbuf->format == GBM_FORMAT_P010)) {
                return image;
        }
        memset(attribs,0,sizeof(EGLint));
@@ -2610,6 +2618,11 @@ import_gbm_buffer(struct gl_renderer *gr,struct gbm_buffer *gbmbuf)
                attribs[atti++] = gbmbuf->offset[2];
                attribs[atti++] = EGL_DMA_BUF_PLANE2_PITCH_EXT;
                attribs[atti++] = gbmbuf->stride[2];
+       }
+
+       if (gr->secure_context) {
+               attribs[atti++] = EGL_PROTECTED_CONTENT_EXT;
+               attribs[atti++] = EGL_TRUE;
        }
        attribs[atti++] = EGL_NONE;
 
@@ -2693,8 +2706,7 @@ gl_renderer_import_gbm_buffer(struct weston_compositor *ec,
        unsigned int secure_status = 0;
        gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbm_buf->bo, &secure_status);
        if((gbm_buf->format == GBM_FORMAT_YCbCr_420_TP10_UBWC) ||
-               (gbm_buf->format == GBM_FORMAT_P010) ||
-               ((gbm_buf->format == GBM_FORMAT_NV12) && secure_status)) {
+               (gbm_buf->format == GBM_FORMAT_P010)) {
                return true;
        }
 
@@ -2725,8 +2737,7 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
        unsigned int secure_status = 0;
        gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, gbmbuf->bo, &secure_status);
        if ((gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) &&
-               (gbmbuf->format != GBM_FORMAT_P010) &&
-               ((gbmbuf->format == GBM_FORMAT_NV12) && !secure_status)) {
+               (gbmbuf->format != GBM_FORMAT_P010)) {
                for (i = 0; i < gs->num_images; i++)
                        egl_image_unref(gs->images[i]);
        }
@@ -2753,8 +2764,7 @@ gl_renderer_attach_gbm_buffer(struct weston_surface *surface,
        gs->images[0] = gbm_buffer_backend_get_user_data(gbmbuf);
 
        if ((gbmbuf->format != GBM_FORMAT_YCbCr_420_TP10_UBWC) &&
-               (gbmbuf->format != GBM_FORMAT_P010) &&
-               ((gbmbuf->format == GBM_FORMAT_NV12) && !secure_status)) {
+               (gbmbuf->format != GBM_FORMAT_P010)) {
                if (gs->images[0]) {
                        int ret;
 
@@ -3398,6 +3408,13 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 {
 	EGLSurface egl_surface = EGL_NO_SURFACE;
 	EGLConfig egl_config;
+        EGLint window_attribs[3];
+        unsigned int nattr = 0;
+
+        if (gr->secure_context) {
+                window_attribs[nattr++] = EGL_PROTECTED_CONTENT_EXT;
+                window_attribs[nattr++] = EGL_TRUE;
+        }
 
 	egl_config = gl_renderer_get_egl_config(gr, EGL_WINDOW_BIT,
 						drm_formats, drm_formats_count);
@@ -3406,15 +3423,17 @@ gl_renderer_create_window_surface(struct gl_renderer *gr,
 
 	log_egl_config_info(gr->egl_display, egl_config);
 
+	window_attribs[nattr] = EGL_NONE;
+
 	if (gr->create_platform_window)
 		egl_surface = gr->create_platform_window(gr->egl_display,
 							 egl_config,
 							 window_for_platform,
-							 NULL);
+							 window_attribs);
 	else
 		egl_surface = eglCreateWindowSurface(gr->egl_display,
 						     egl_config,
-						     window_for_legacy, NULL);
+						     window_for_legacy, window_attribs);
 
 	return egl_surface;
 }
@@ -3485,11 +3504,19 @@ gl_renderer_output_pbuffer_create(struct weston_output *output,
 	EGLConfig pbuffer_config;
 	EGLSurface egl_surface;
 	int ret;
-	EGLint pbuffer_attribs[] = {
+	EGLint pbuffer_attribs[8] = {
 		EGL_WIDTH, width,
 		EGL_HEIGHT, height,
-		EGL_NONE
 	};
+
+        unsigned int nattr = 4;
+
+        if (gr->secure_context) {
+                pbuffer_attribs[nattr++] = EGL_PROTECTED_CONTENT_EXT;
+                pbuffer_attribs[nattr++] = EGL_TRUE;
+        }
+
+        pbuffer_attribs[nattr] = EGL_NONE;
 
 	pbuffer_config = gl_renderer_get_egl_config(gr, EGL_PBUFFER_BIT,
 						    drm_formats,
@@ -3701,11 +3728,19 @@ output_handle_destroy(struct wl_listener *listener, void *data)
 static int
 gl_renderer_create_pbuffer_surface(struct gl_renderer *gr) {
 	EGLConfig pbuffer_config;
-	static const EGLint pbuffer_attribs[] = {
+	static EGLint pbuffer_attribs[8] = {
 		EGL_WIDTH, 10,
 		EGL_HEIGHT, 10,
-		EGL_NONE
 	};
+
+        unsigned int nattr = 4;
+
+        if (gr->secure_context) {
+                pbuffer_attribs[nattr++] = EGL_PROTECTED_CONTENT_EXT;
+                pbuffer_attribs[nattr++] = EGL_TRUE;
+        }
+
+        pbuffer_attribs[nattr] = EGL_NONE;
 
 	pbuffer_config = gl_renderer_get_egl_config(gr, EGL_PBUFFER_BIT,
 						    NULL, 0);
@@ -3975,10 +4010,21 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	const char *extensions;
 	EGLBoolean ret;
 
+        //Run the GPU in secure_context if weston is running in secure mode
+        if (ec->secure_mode) {
+                weston_log("INFO: Switching GPU to secure context\n");
+                gr->secure_context = ec->secure_mode;
+        }
+
 	EGLint context_attribs[16] = {
 		EGL_CONTEXT_CLIENT_VERSION, 0,
 	};
 	unsigned int nattr = 2;
+
+        if (gr->secure_context) {
+                context_attribs[nattr++] = EGL_PROTECTED_CONTENT_EXT;
+                context_attribs[nattr++] = EGL_TRUE;
+        }
 
 	if (!eglBindAPI(EGL_OPENGL_ES_API)) {
 		weston_log("failed to bind EGL_OPENGL_ES_API\n");

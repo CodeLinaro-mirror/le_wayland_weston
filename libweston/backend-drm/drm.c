@@ -2187,7 +2187,12 @@ drm_output_create(struct weston_compositor *compositor, const char *name)
 
 	output->backend = b;
 #ifdef BUILD_DRM_GBM
-	output->gbm_bo_flags = GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING;
+        if(compositor->secure_mode) {
+	        output->gbm_bo_flags = GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING
+                                         | GBM_BO_USE_PROTECTED;
+        } else {
+	        output->gbm_bo_flags = GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING;
+        }
 #endif
 
 	weston_output_init(&output->base, compositor, name);

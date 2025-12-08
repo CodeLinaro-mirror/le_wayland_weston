@@ -699,6 +699,7 @@ usage(int error_code)
 		"  -c, --config=FILE\tConfig file to load, defaults to weston.ini\n"
 		"  --no-config\t\tDo not read weston.ini\n"
 		"  --wait-for-debugger\tRaise SIGSTOP on start-up\n"
+                "  --secure-mode\tRun weston in secure mode\n"
 		"  --debug\t\tEnable debug extension\n"
 		"  -l, --logger-scopes=SCOPE\n\t\t\tSpecify log scopes to "
 			"subscribe to.\n\t\t\tCan specify multiple scopes, "
@@ -3257,6 +3258,7 @@ wet_main(int argc, char *argv[])
 	sigset_t mask;
 
 	bool wait_for_debugger = false;
+        bool secure_mode = false;
 	struct wl_protocol_logger *protologger = NULL;
 
 	const struct weston_option core_options[] = {
@@ -3277,6 +3279,7 @@ wet_main(int argc, char *argv[])
 		{ WESTON_OPTION_BOOLEAN, "debug", 0, &debug_protocol },
 		{ WESTON_OPTION_STRING, "logger-scopes", 'l', &log_scopes },
 		{ WESTON_OPTION_STRING, "flight-rec-scopes", 'f', &flight_rec_scopes },
+                { WESTON_OPTION_BOOLEAN, "secure-mode", 0, &secure_mode },
 	};
 
 	wl_list_init(&wet.layoutput_list);
@@ -3400,6 +3403,12 @@ wet_main(int argc, char *argv[])
 		goto out;
 	}
 	segv_compositor = wet.compositor;
+        wet.compositor->secure_mode = secure_mode;
+        if (secure_mode) {
+                weston_log("INFO: Running weston in secure mode\n");
+        } else {
+                weston_log("INFO: Running weston in non-secure mode\n");
+        }
 
 	protocol_scope =
 		weston_compositor_add_log_scope(log_ctx,

@@ -44,6 +44,7 @@ struct gl_renderer {
 	struct weston_renderer base;
 	bool fragment_shader_debug;
 	bool fan_debug;
+        bool secure_context;
 	struct weston_binding *fragment_binding;
 	struct weston_binding *fan_binding;
 
