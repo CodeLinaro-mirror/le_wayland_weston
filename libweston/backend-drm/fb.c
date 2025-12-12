@@ -436,6 +436,7 @@ drm_fb_get_from_bo(struct gbm_bo *bo, struct drm_backend *backend,
 				for (j = 0; j < fb->num_planes; j++) {
 				    fb->strides[j] = buf_lyt.planes[j].stride;
 				    fb->handles[j] = gbm_bo_get_handle(bo).u32;;
+					fb->offsets[j] = gbm_bo_get_offset(bo, j);
 			        }
                         }
                 }
