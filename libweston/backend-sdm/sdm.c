@@ -166,8 +166,13 @@ vblank_handler(int display_id, int64_t timestamp, void *data)
 		}
 	}
 
+#if defined (__aarch64__)
 	output->last_vblank.sec = timestamp / 1000000000LL;
 	output->last_vblank.usec = (timestamp % 1000000000LL) / 1000;
+#else
+	output->last_vblank.sec = (uint32_t)(timestamp / 1000000000LL);
+	output->last_vblank.usec = (uint32_t)((timestamp % 1000000000LL) / 1000);
+#endif
 
 	write(output->vblank_ev_fd, &v, sizeof v);
 }
