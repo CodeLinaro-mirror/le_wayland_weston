@@ -34,7 +34,7 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 #include <drm_fourcc.h>
-
+#include <gbm_priv.h>
 #include <libweston/libweston.h>
 #include <libweston/backend-drm.h>
 #include "shared/helpers.h"
@@ -60,6 +60,14 @@ struct drm_property_enum_info plane_type_enums[] = {
 	},
 };
 
+
+struct drm_property_enum_info fb_translation_mode_enums[] = {
+    { .name = "non_sec" },
+    { .name = "sec" },
+    { .name = "non_sec_direct_translation" },
+    { .name = "sec_direct_translation" },
+};
+
 const struct drm_property_info plane_props[] = {
 	[WDRM_PLANE_TYPE] = {
 		.name = "type",
@@ -80,6 +88,12 @@ const struct drm_property_info plane_props[] = {
 	[WDRM_PLANE_IN_FENCE_FD] = { .name = "IN_FENCE_FD" },
 	[WDRM_PLANE_FB_DAMAGE_CLIPS] = { .name = "FB_DAMAGE_CLIPS" },
 	[WDRM_PLANE_ZPOS] = { .name = "zpos" },
+
+        [WDRM_SECURE_FB] = {
+                .name = "fb_translation_mode",
+                .enum_values = fb_translation_mode_enums,
+                .num_enum_values = ARRAY_LENGTH(fb_translation_mode_enums),
+        },
 };
 
 struct drm_property_enum_info dpms_state_enums[] = {
@@ -830,6 +844,7 @@ plane_add_prop(drmModeAtomicReq *req, struct drm_plane *plane,
 
 	ret = drmModeAtomicAddProperty(req, plane->plane_id, info->prop_id,
 				       val);
+
 	drm_debug(plane->backend, "\t\t\t[PLANE:%lu] %lu (%s) -> %llu (0x%llx)\n",
 		  (unsigned long) plane->plane_id,
 		  (unsigned long) info->prop_id, info->name,
@@ -1040,6 +1055,16 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
 				      plane_state->dest_w);
 		ret |= plane_add_prop(req, plane, WDRM_PLANE_CRTC_H,
 				      plane_state->dest_h);
+
+                uint32_t secure_status = 0;
+                gbm_perform(GBM_PERFORM_GET_SECURE_BUFFER_STATUS, plane_state->fb->bo,
+                            &secure_status);
+                if (secure_status > 0) {
+                        ret |= plane_add_prop(req, plane, WDRM_SECURE_FB, 1);
+                } else {
+                        ret |= plane_add_prop(req, plane, WDRM_SECURE_FB, 0);
+                }
+
 		ret |= plane_add_damage(req, b, plane_state);
 
 		if (plane_state->fb && plane_state->fb->format)
