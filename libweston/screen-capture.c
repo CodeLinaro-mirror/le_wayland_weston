@@ -576,10 +576,13 @@ is_screen_capture_buffer(struct weston_buffer *buffer)
 WL_EXPORT bool
 is_screen_capture_view(struct weston_view *ev)
 {
+	if (!ev)
+		return false;
+
 	if (ev->is_capture_view)
 		return true;
 
-	if (ev && ev->surface && ev->surface->buffer_ref.buffer) {
+	if (ev->surface && ev->surface->buffer_ref.buffer) {
 		struct gbm_buffer *gbm_buf =
 				gbm_buffer_get(ev->surface->buffer_ref.buffer->resource);
 
