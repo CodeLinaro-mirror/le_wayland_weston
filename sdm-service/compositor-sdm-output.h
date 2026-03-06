@@ -299,6 +299,8 @@ struct drm_output {
    * layer_none_commit
    */
   bool prev_layer_none_commit;
+  /*Indicate cwb is pending to disable on one display*/
+  bool flush_cwb_pending;
   /* capture buffer in next frame */
   struct screen_capture_buffer *cap_buffer;
   /* Indicate screen capture by GPU or CWB */

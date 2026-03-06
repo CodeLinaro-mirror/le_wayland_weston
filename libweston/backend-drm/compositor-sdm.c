@@ -693,6 +693,7 @@ output_repaint(struct weston_output *output_base,
 			(struct drm_backend *)output->base.compositor->backend;
 	struct drm_mode *mode;
 	static bool commit = false;
+	bool skip_flush = false;
 	int ret = -1;
 	struct sdm_layer *sdm_layer, *next_sdm_layer;
 
@@ -705,7 +706,10 @@ output_repaint(struct weston_output *output_base,
 	assert(wl_list_empty(&output->plane_flip_list));
 
 	sdm_service->SetVSyncState(output->display_id, ENABLE, output);
-	if (output->prev_layer_none_commit && output->layer_none_commit && !output->cap_buffer)
+
+	skip_flush = output->prev_layer_none_commit && output->layer_none_commit
+		&& !output->cap_buffer && !output->flush_cwb_pending;
+	if (skip_flush)
 		weston_log("skip commit if two consecutive frames have no layers\n");
 	else if (output->layer_none_commit){
 		sdm_service->Flush(output->display_id, output);
@@ -2549,6 +2553,7 @@ drm_output_enable(struct weston_output *base)
 	output->layer_none_commit = true;
 	output->retire_fence_fd = -1;
 	output->cap_fallback_gpu = false;
+	output->flush_cwb_pending = false;
 	output->cap_buffer = NULL;
 
 	return 0;
@@ -2604,10 +2609,10 @@ drm_output_disable(struct weston_output *base)
 
 static void drm_output_flush_cwb(struct drm_output* output)
 {
-    if (output && sdm_service) {
-        weston_log("flush output %s cwb\n", output->base.name);
-        sdm_service->FlushConcurrentWriteback(output->display_id);
-    }
+	if (output) {
+		weston_log("flush output %s cwb\n", output->base.name);
+		output->flush_cwb_pending = true;
+	}
 }
 
 /**

@@ -226,6 +226,7 @@ private:
   int GetVisibleRegion(struct drm_output *output, struct weston_view *ev,
                        pixman_region32_t *aboved_opaque, struct RectArray *visible);
   bool IsTransparentGbmFormat(uint32_t format);
+  void PostConcurrentWriteback(struct drm_output *output);
   CoreInterface *core_intf_ = NULL;
   SdmDisplayBufferAllocator buffer_allocator_;
   SdmDisplayBufferSyncHandler buffer_sync_handler_;

@@ -1080,6 +1080,8 @@ DisplayError SdmDisplay::Commit(struct drm_output *output) {
   ret = display_intf_->Commit(&layer_stack_);
   PostCommit(&output->retire_fence_fd);
 
+  PostConcurrentWriteback(output);
+
   if (output->cap_buffer && !(output->cap_fallback_gpu)) {
     output->cap_buffer->release_fence_fd = layer_stack_.output_buffer->release_fence_fd;
     layer_stack_.output_buffer->release_fence_fd = -1;
@@ -1107,7 +1109,17 @@ DisplayError SdmDisplay::Flush(struct drm_output *output) {
     layer_stack_.output_buffer = NULL;
   }
 
+  PostConcurrentWriteback(output);
+
   return ret;
+}
+
+void SdmDisplay::PostConcurrentWriteback(struct drm_output *output)
+{
+  if (output->flush_cwb_pending) {
+    display_intf_->FlushConcurrentWriteback();
+    output->flush_cwb_pending = false;
+  }
 }
 
 void SdmDisplay::FlushConcurrentWriteback()

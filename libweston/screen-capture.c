@@ -92,6 +92,7 @@ screen_capture_create_screen(struct wl_client *client,
 	struct weston_head *mirror_head;
 	struct weston_output *mirror_output;
 	struct drm_backend *b;
+	struct drm_output *output;
 
 	SC_PROTOCOL_LOG(SC_LOG_DBG,"screen_capture_create_screen::Invoked\n");
 
@@ -106,6 +107,15 @@ screen_capture_create_screen(struct wl_client *client,
 		wl_resource_post_error(resource, WL_DISPLAY_ERROR_INVALID_OBJECT, "screen is already created!");
 		screen_capture_send_failed(resource);
 		return;
+	}
+
+	b = (struct drm_backend *)screen_cap->compositor->backend;
+	wl_list_for_each(output, &b->compositor->output_list, base.link) {
+		if (output->flush_cwb_pending) {
+			SC_PROTOCOL_LOG(SC_LOG_ERR,"Error! capture was busy on other display\n");
+			screen_capture_send_failed(resource);
+			return;
+		}
 	}
 
 	mirror_head = wl_resource_get_user_data(output_resource);
@@ -127,7 +137,6 @@ screen_capture_create_screen(struct wl_client *client,
 		screen_cap->force_gpu = true;
 	}
 
-	b = (struct drm_backend *)screen_cap->compositor->backend;
 	b->screen_cap = screen_cap;
 
 	screen_capture_send_created(resource);
