@@ -25,6 +25,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -40,6 +44,7 @@
 #include <linux/vt.h>
 #include <assert.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <poll.h>
 
@@ -1075,6 +1080,15 @@ drm_output_apply_mode(struct drm_output *output)
 static int
 init_pixman(struct drm_backend *b)
 {
+#ifdef BUILD_DRM_GBM
+	if (!b->gbm) {
+		b->gbm = gbm_create_device(b->drm->drm.fd);
+		if (!b->gbm) {
+			weston_log("failed to create GBM device for pixman renderer\n");
+			return -1;
+		}
+	}
+#endif
 	return weston_compositor_init_renderer(b->compositor,
 					       WESTON_RENDERER_PIXMAN, NULL);
 }
@@ -3863,6 +3877,51 @@ static const struct weston_drm_output_api api = {
 	drm_output_set_content_type,
 };
 
+/* Open a DRM device via drmOpen, bypassing udev enumeration.
+ * Used when the device is provided by a user-mode display driver not
+ * visible to udev.
+ */
+static bool
+open_fallback_drm_device(struct drm_backend *b, struct drm_device *device)
+{
+	struct stat st;
+	drmModeRes *res;
+	int fd;
+
+	weston_log("udev device discovery failed, trying drmOpen(msm_drm)\n");
+
+	fd = drmOpen("msm_drm", NULL);
+	if (fd < 0) {
+		weston_log("drmOpen(msm_drm) failed: %s\n", strerror(errno));
+		return false;
+	}
+
+	res = drmModeGetResources(fd);
+	if (!res) {
+		weston_log("drmModeGetResources failed for msm_drm\n");
+		drmClose(fd);
+		return false;
+	}
+
+	if (res->count_crtcs <= 0 || res->count_connectors <= 0 ||
+	    res->count_encoders <= 0) {
+		weston_log("msm_drm has no KMS resources\n");
+		drmModeFreeResources(res);
+		drmClose(fd);
+		return false;
+	}
+
+	drmModeFreeResources(res);
+
+	device->drm.fd = fd;
+	device->drm.filename = strdup("msm_drm");
+	device->drm.id = 0;
+	if (fstat(fd, &st) == 0)
+		device->drm.devnum = st.st_rdev;
+
+	return true;
+}
+
 static struct drm_backend *
 drm_backend_create(struct weston_compositor *compositor,
 		   struct weston_drm_backend_config *config)
@@ -3938,8 +3997,11 @@ drm_backend_create(struct weston_compositor *compositor,
 	else
 		drm_device = find_primary_gpu(b, seat_id);
 	if (drm_device == NULL) {
-		weston_log("no drm device found\n");
-		goto err_udev;
+		if (!open_fallback_drm_device(b, device)) {
+			weston_log("no drm device found\n");
+			goto err_udev;
+		}
+		/* device->drm populated directly; drm_device stays NULL */
 	}
 
 	if (init_kms_caps(device) < 0) {
@@ -4047,7 +4109,8 @@ drm_backend_create(struct weston_compositor *compositor,
 		goto err_udev_monitor;
 	}
 
-	udev_device_unref(drm_device);
+	if (drm_device)
+		udev_device_unref(drm_device);
 
 	weston_compositor_add_debug_binding(compositor, KEY_O,
 					    planes_binding, b);
@@ -4122,7 +4185,8 @@ err_sprite:
 err_create_crtc_list:
 	drmModeFreeResources(res);
 err_udev_dev:
-	udev_device_unref(drm_device);
+	if (drm_device)
+		udev_device_unref(drm_device);
 err_udev:
 	udev_unref(b->udev);
 err_launcher:

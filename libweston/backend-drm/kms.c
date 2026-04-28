@@ -25,6 +25,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -564,13 +568,16 @@ drm_plane_populate_formats(struct drm_plane *plane, const drmModePlane *kplane,
 
 	while (drmModeFormatModifierBlobIterNext(blob, &drm_iter)) {
 		if (fmt_prev != drm_iter.fmt) {
-			fmt = weston_drm_format_array_add_format(&plane->formats,
-								 drm_iter.fmt);
+			fmt = weston_drm_format_array_find_format(&plane->formats,
+								  drm_iter.fmt);
 			if (!fmt) {
-				ret = -1;
-				goto out;
+				fmt = weston_drm_format_array_add_format(&plane->formats,
+									 drm_iter.fmt);
+				if (!fmt) {
+					ret = -1;
+					goto out;
+				}
 			}
-
 			fmt_prev = drm_iter.fmt;
 		}
 
@@ -587,6 +594,9 @@ out:
 fallback:
 	/* No IN_FORMATS blob available, so just use the old. */
 	for (i = 0; i < kplane->count_formats; i++) {
+		if (weston_drm_format_array_find_format(&plane->formats,
+							kplane->formats[i]))
+			continue;
 		fmt = weston_drm_format_array_add_format(&plane->formats,
 							 kplane->formats[i]);
 		if (!fmt)
@@ -1719,7 +1729,22 @@ atomic_flip_handler(int fd, unsigned int frame, unsigned int sec,
 			 WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
 
 	crtc = drm_crtc_find(device, crtc_id);
-	assert(crtc);
+	if (!crtc) {
+		/* Some user-mode drivers (e.g. msm_drm) report crtc_id=0 in
+		 * flip events. Fall back to the CRTC with a pending flip. */
+		struct drm_crtc *c;
+		wl_list_for_each(c, &device->crtc_list, link) {
+			if (c->output && c->output->atomic_complete_pending) {
+				crtc = c;
+				break;
+			}
+		}
+	}
+	if (!crtc) {
+		weston_log("[atomic][CRTC:%u] flip event for unknown CRTC, ignoring\n",
+			   crtc_id);
+		return;
+	}
 
 	output = crtc->output;
 
@@ -1819,11 +1844,8 @@ init_kms_caps(struct drm_device *device)
 	}
 
 	if (!getenv("WESTON_DISABLE_ATOMIC")) {
-		ret = drmGetCap(device->drm.fd, DRM_CAP_CRTC_IN_VBLANK_EVENT, &cap);
-		if (ret != 0)
-			cap = 0;
 		ret = drmSetClientCap(device->drm.fd, DRM_CLIENT_CAP_ATOMIC, 1);
-		device->atomic_modeset = ((ret == 0) && (cap == 1));
+		device->atomic_modeset = (ret == 0);
 	}
 	weston_log("DRM: %s atomic modesetting\n",
 		   device->atomic_modeset ? "supports" : "does not support");

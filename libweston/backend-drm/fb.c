@@ -25,6 +25,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -44,6 +48,8 @@
 #include "drm-internal.h"
 #include "linux-dmabuf.h"
 
+#include <gbm_priv.h>
+
 static void
 drm_fb_destroy(struct drm_fb *fb)
 {
@@ -60,16 +66,20 @@ drm_fb_destroy(struct drm_fb *fb)
 static void
 drm_fb_destroy_dumb(struct drm_fb *fb)
 {
-	struct drm_mode_destroy_dumb destroy_arg;
-
 	assert(fb->type == BUFFER_PIXMAN_DUMB);
 
 	if (fb->map && fb->size > 0)
 		munmap(fb->map, fb->size);
 
-	memset(&destroy_arg, 0, sizeof(destroy_arg));
-	destroy_arg.handle = fb->handles[0];
-	drmIoctl(fb->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_arg);
+	if (fb->bo) {
+		/* GBM-backed dumb buffer: destroy the GBM BO. */
+		gbm_bo_destroy(fb->bo);
+	} else {
+		struct drm_mode_destroy_dumb destroy_arg;
+		memset(&destroy_arg, 0, sizeof(destroy_arg));
+		destroy_arg.handle = fb->handles[0];
+		drmIoctl(fb->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_arg);
+	}
 
 	drm_fb_destroy(fb);
 }
@@ -259,6 +269,94 @@ drm_fb_create_dumb(struct drm_device *device, int width, int height,
 {
 	struct drm_fb *fb;
 	int ret;
+
+#ifdef BUILD_DRM_GBM
+	if (device->backend->gbm) {
+		void *map_data = NULL;
+
+		fb = zalloc(sizeof *fb);
+		if (!fb)
+			return NULL;
+		fb->refcnt = 1;
+		fb->backend = device->backend;
+
+		fb->format = pixel_format_get_info(format);
+		if (!fb->format) {
+			weston_log("failed to look up format 0x%lx\n",
+				   (unsigned long) format);
+			free(fb);
+			return NULL;
+		}
+
+		fb->bo = gbm_bo_create(device->backend->gbm, width, height,
+				       format, GBM_BO_USE_SCANOUT);
+		if (!fb->bo) {
+			weston_log("failed to create GBM bo for dumb buffer\n");
+			free(fb);
+			return NULL;
+		}
+
+		fb->type = BUFFER_PIXMAN_DUMB;
+		fb->modifier = DRM_FORMAT_MOD_INVALID;
+
+		/*
+		 * On platforms where GBM uses dmabuf/ion internally (e.g. Qualcomm
+		 * with the DRM frontend), gbm_bo_get_handle().u32 returns 0 which the
+		 * FE rejects. Export to a dma-buf fd first, then re-import via
+		 * drmPrimeFDToHandle so the FE maps the fd to a valid dmabuf handle.
+		 */
+		fb->handles[0] = gbm_bo_get_handle(fb->bo).u32;
+		if (!fb->handles[0]) {
+			int bo_fd = gbm_bo_get_fd(fb->bo);
+			if (bo_fd < 0) {
+				weston_log("failed to get GBM bo fd\n");
+				gbm_bo_destroy(fb->bo);
+				free(fb);
+				return NULL;
+			}
+			ret = drmPrimeFDToHandle(device->drm.fd, bo_fd, &fb->handles[0]);
+			close(bo_fd);
+			if (ret || !fb->handles[0]) {
+				weston_log("failed to import GBM bo fd as handle: %s\n",
+					   strerror(errno));
+				gbm_bo_destroy(fb->bo);
+				free(fb);
+				return NULL;
+			}
+		}
+
+		fb->strides[0] = gbm_bo_get_stride(fb->bo);
+		fb->num_planes = 1;
+		fb->width = width;
+		fb->height = height;
+		/* gbm_perform(GBM_PERFORM_GET_BO_SIZE) writes a 64-bit value into a
+		 * uint32_t field, corrupting the adjacent handles[0]. Compute size
+		 * directly to avoid the memory corruption. */
+		fb->size = fb->strides[0] * height;
+		fb->fd = device->drm.fd;
+
+		if (drm_fb_addfb(device, fb) != 0) {
+			weston_log("failed to create kms fb: %s\n", strerror(errno));
+			gbm_bo_destroy(fb->bo);
+			free(fb);
+			return NULL;
+		}
+
+		fb->map = gbm_bo_map(fb->bo, 0, 0, width, height,
+				     GBM_BO_TRANSFER_READ_WRITE,
+				     &fb->strides[0], &map_data);
+		if (!fb->map || fb->map == MAP_FAILED) {
+			weston_log("failed to map GBM bo: %s\n", strerror(errno));
+			fb->map = NULL;
+			drmModeRmFB(device->drm.fd, fb->fb_id);
+			gbm_bo_destroy(fb->bo);
+			free(fb);
+			return NULL;
+		}
+
+		return fb;
+	}
+#endif
 
 	struct drm_mode_create_dumb create_arg;
 	struct drm_mode_destroy_dumb destroy_arg;
