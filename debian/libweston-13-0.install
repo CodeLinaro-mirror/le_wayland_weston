@@ -1,0 +1,7 @@
+usr/lib/*/libweston-13.so.*
+usr/lib/*/libweston-13/*.so
+#usr/lib/*/libsession-helper.so
+#usr/lib/*/liblibinput-backend.so
+#usr/lib/*/libbacklight.so
+usr/lib/*/weston/libexec_weston.so.0
+usr/lib/*/weston/libexec_weston.so.0.0.0

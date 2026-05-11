@@ -1,0 +1,58 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DEB_LDFLAGS_MAINT_APPEND = -Wl,-z,defs -Wl,--as-needed
+
+WESTON_MAJOR = 13
+
+%:
+	dh $@ --buildsystem=meson
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-Dbackend-drm=true \
+		-Dbackend-wayland=true \
+		-Dbackend-headless=true \
+		-Dbackend-drm-screencast-vaapi=false \
+		-Drenderer-gl=true \
+		-Dcolor-management-lcms=true \
+		-Dimage-jpeg=true \
+		-Dimage-webp=true \
+		-Dsystemd=true \
+		-Dxwayland=false \
+		-Dbackend-vnc=false \
+		-Dbackend-rdp=false \
+		-Ddeprecated-color-management-colord=false \
+		-Dsimple-clients=all \
+		-Ddemo-clients=true \
+		-Dremoting=false \
+		-Dscreenshare=true \
+		-Dshell-desktop=true \
+		-Dshell-fullscreen=true \
+		-Dshell-kiosk=true \
+		-Dshell-ivi=true \
+		-Dtest-junit-xml=false \
+		-Dpipewire=false \
+		-Dbackend-x11=false
+
+
+override_dh_auto_test:
+	    @echo "Skip tests"
+
+override_dh_auto_install:
+	dh_auto_install
+	# Remove .la files
+	find debian/tmp -name '*.la' -delete
+	# Move drm-backend to weston datadir (QTI specific)
+	install -d debian/tmp/usr/share/weston
+	find debian/tmp
+
+override_dh_strip:
+	dh_strip --dbgsym-migration='weston-dbg (<< 13.0.1-1~)'
+
+override_dh_makeshlibs:
+	dh_makeshlibs -plibweston-$(WESTON_MAJOR)-0 -V
+	dh_makeshlibs --remaining-packages
+
+override_dh_shlibdeps:
+	dh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info || true

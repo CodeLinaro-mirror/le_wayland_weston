@@ -1,0 +1,15 @@
+weston (13.0.1-1qti1) unstable; urgency=medium
+
+  * Weston 13.0.1 with Qualcomm SDM backend support
+  * Add TP10_UBWC pixel format support
+  * Add GBM buffer backend interface
+  * Add protected content rendering support
+  * Refine overlay view drawing logic
+  * Change default repaint window to 15ms
+  * Add atrace markers for debugging
+  * Port UMD-specific changes from weston-10
+  * Make YUV format use EXTERNAL_OES texture
+  * Enable ASAN and fix ODR violation errors
+  * Disable partial update
+
+ -- Chen Sun <chesun@qti.qualcomm.com>   Mon, 01 Jan 2024 00:00:00 +0000
