@@ -24,11 +24,6 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #ifndef GL_RENDERER_INTERNAL_H
@@ -146,9 +141,6 @@ struct gl_renderer {
 	EGLContext egl_context;
 	EGLConfig egl_config;
 
-	/* gbm device handle*/
-	struct gbm_device *gbm_hdle;
-
 	uint32_t gl_version;
 
 	struct wl_array vertices;
@@ -188,7 +180,6 @@ struct gl_renderer {
 	bool has_dmabuf_import;
 	struct wl_list dmabuf_images;
 	struct wl_list dmabuf_formats;
-	struct wl_list gbmbuf_images;
 
 	bool has_texture_type_2_10_10_10_rev;
 	bool has_gl_texture_rg;

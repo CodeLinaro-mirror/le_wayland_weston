@@ -23,11 +23,6 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #ifndef _WAYLAND_SYSTEM_COMPOSITOR_H_
@@ -78,11 +73,6 @@ struct weston_point2d_device_normalized {
 	double y;
 };
 
-struct surface_color {
-	bool is_pended;
-	float red, blue, green, alpha;
-};
-
 struct weston_surface;
 struct weston_buffer;
 struct shell_surface;
@@ -99,7 +89,6 @@ struct weston_color_transform;
 struct pixel_format_info;
 struct weston_output_capture_info;
 struct weston_tearing_control;
-struct gbm_buffer;
 
 enum weston_keyboard_modifier {
 	MODIFIER_CTRL = (1 << 0),
@@ -576,12 +565,8 @@ struct weston_output {
 			  uint16_t *g,
 			  uint16_t *b);
 
-	void (*enable_ppm)(struct weston_output *output, int32_t enable);
-	void (*set_ppm)(struct weston_output *output, int32_t ppm);
 	bool enabled; /**< is in the output_list, not pending list */
 	int scale;
-	/* Indicate current repainting need gpu do compositon. */
-	bool need_gpu_composition;
 
 	struct weston_color_profile *color_profile;
 	bool from_blend_to_output_by_backend;
@@ -1546,7 +1531,6 @@ struct weston_buffer {
 	enum {
 		WESTON_BUFFER_SHM,
 		WESTON_BUFFER_DMABUF,
-		WESTON_BUFFER_GBMBUF,
 		WESTON_BUFFER_RENDERER_OPAQUE,
 		WESTON_BUFFER_SOLID,
 	} type;
@@ -1554,7 +1538,6 @@ struct weston_buffer {
 	union {
 		struct wl_shm_buffer *shm_buffer;
 		void *dmabuf;
-		void *gbmbuf;
 		void *legacy_buffer;
 		struct weston_solid_buffer_values solid;
 	};
@@ -1755,12 +1738,6 @@ struct weston_view {
 
 	bool is_mapped;
 	struct weston_log_pacer subsurface_parent_log_pacer;
-
-	/* Indicate if this view is used for screen capture. */
-	bool is_capture_view;
-
-	/* Indicate if this view is completely covered by above opaque regions. */
-	bool is_completely_covered;
 };
 
 enum weston_surface_status {
@@ -1957,7 +1934,6 @@ struct weston_surface {
 
 	/* An list of per seat pointer constraints. */
 	struct wl_list pointer_constraints;
-	struct surface_color surf_color;
 
 	/* zwp_surface_synchronization_v1 resource for this surface */
 	struct wl_resource *synchronization_resource;
@@ -2408,33 +2384,6 @@ weston_log_paced(struct weston_log_pacer *pacer, unsigned int max_burst,
 		 unsigned int reset_ms, const char *fmt, ...)
 	__attribute__ ((format (printf, 4, 5)));
 
-void
-weston_place_marker(const char *name);
-
-bool
-weston_atrace_enable(void);
-
-void
-weston_atrace_marker(const char *type, const char *name);
-
-#define ATRACE_BEGIN(fmt_str, ...) \
-	do { \
-		if (weston_atrace_enable()) { \
-			char buf_begin[256]; \
-			snprintf(buf_begin, 256, fmt_str, ##__VA_ARGS__); \
-			weston_atrace_marker("B", buf_begin); \
-		} \
-	} while (0)
-
-#define ATRACE_END(fmt_str, ...) \
-	do { \
-		if (weston_atrace_enable()) { \
-			char buf_end[256]; \
-			snprintf(buf_end, 256, fmt_str, ##__VA_ARGS__); \
-			weston_atrace_marker("E", buf_end); \
-		} \
-	} while (0)
-
 enum weston_screenshooter_outcome {
 	WESTON_SCREENSHOOTER_SUCCESS,
 	WESTON_SCREENSHOOTER_NO_MEMORY,
@@ -2538,9 +2487,6 @@ weston_keyboard_send_keymap(struct weston_keyboard *kbd,
 
 int
 weston_compositor_load_xwayland(struct weston_compositor *compositor);
-
-int
-weston_compositor_load_gbm_buffer_backend();
 
 int
 weston_compositor_load_color_manager(struct weston_compositor *compositor);

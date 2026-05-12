@@ -25,12 +25,6 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-/*
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause-Clear
- */
 
 #include "config.h"
 
@@ -66,7 +60,6 @@
 #include <libweston/weston-log.h>
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-unstable-v1-server-protocol.h"
-#include "gbm-buffer-backend.h"
 #include "viewporter-server-protocol.h"
 #include "presentation-time-server-protocol.h"
 #include "xdg-output-unstable-v1-server-protocol.h"
@@ -100,9 +93,7 @@
  * \defgroup compositor Compositor
  */
 
-#define DEFAULT_REPAINT_WINDOW 15 /* milliseconds */
-
-static struct gbm_buffer_backend_c_interface *gbm_buffer_backend;
+#define DEFAULT_REPAINT_WINDOW 7 /* milliseconds */
 
 static void
 weston_output_transform_scale_init(struct weston_output *output,
@@ -609,7 +600,6 @@ weston_view_create_internal(struct weston_surface *surface)
 	pixman_region32_init(&view->geometry.scissor);
 	pixman_region32_init(&view->transform.boundingbox);
 	view->transform.dirty = 1;
-	view->is_completely_covered = false;
 	weston_view_update_transform(view);
 	pixman_region32_copy(&view->visible, &view->transform.boundingbox);
 
@@ -2601,7 +2591,6 @@ weston_buffer_from_resource(struct weston_compositor *ec,
 	struct weston_buffer *buffer;
 	struct wl_shm_buffer *shm;
 	struct linux_dmabuf_buffer *dmabuf;
-	struct gbm_buffer *gbmbuf;
 	struct wl_listener *listener;
 	struct weston_solid_buffer_values *solid;
 
@@ -2648,25 +2637,6 @@ weston_buffer_from_resource(struct weston_compositor *ec,
 		assert(buffer->pixel_format && !buffer->pixel_format->hide_from_clients);
 		buffer->format_modifier = dmabuf->attributes.modifier[0];
 		if (dmabuf->attributes.flags & ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT)
-			buffer->buffer_origin = ORIGIN_BOTTOM_LEFT;
-		else
-			buffer->buffer_origin = ORIGIN_TOP_LEFT;
-	} else if (gbm_buffer_backend && (gbmbuf = gbm_buffer_backend->buffer_get(buffer->resource))) {
-		buffer->type = WESTON_BUFFER_GBMBUF;
-		buffer->gbmbuf = gbmbuf;
-		buffer->width = gbmbuf->width;
-		buffer->height = gbmbuf->height;
-		buffer->pixel_format =
-			pixel_format_get_info(gbmbuf->format);
-		/* gbmbuf import should assure we don't create a buffer with an
-		 * unknown format */
-		assert(buffer->pixel_format && !buffer->pixel_format->hide_from_clients);
-		/*
-		* To be aligned with dmabuf buffers, since gbmbuf buffers also
-		* have the origin at top-left, invert the Y_INVERT flag to get
-		* the image right.
-		*/
-		if (gbmbuf->flags & ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT)
 			buffer->buffer_origin = ORIGIN_BOTTOM_LEFT;
 		else
 			buffer->buffer_origin = ORIGIN_TOP_LEFT;
@@ -3451,7 +3421,6 @@ weston_output_repaint(struct weston_output *output)
 		return 0;
 
 	TL_POINT(ec, "core_repaint_begin", TLP_OUTPUT(output), TLP_END);
-	ATRACE_BEGIN("%s", __func__);
 
 	/* Rebuild the surface list and update surface transforms up front. */
 	if (ec->view_list_needs_rebuild)
@@ -3538,7 +3507,6 @@ weston_output_repaint(struct weston_output *output)
 	weston_output_capture_info_repaint_done(output->capture_info);
 
 	TL_POINT(ec, "core_repaint_posted", TLP_OUTPUT(output), TLP_END);
-	ATRACE_END("%s", __func__);
 
 	return r;
 }
@@ -3752,12 +3720,7 @@ weston_output_finish_frame(struct weston_output *output,
 	struct timespec vblank_monotonic;
 	int64_t msec_rel;
 
-	ATRACE_BEGIN("%s", __func__);
-	//assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
-
-	if (REPAINT_AWAITING_COMPLETION != output->repaint_status) {
-		return;
-	}
+	assert(output->repaint_status == REPAINT_AWAITING_COMPLETION);
 
 	/*
 	 * If timestamp of latest vblank is given, it must always go forwards.
@@ -3829,7 +3792,6 @@ weston_output_finish_frame(struct weston_output *output,
 out:
 	output->repaint_status = REPAINT_SCHEDULED;
 	output_repaint_timer_arm(compositor);
-	ATRACE_END("%s", __func__);
 }
 
 
@@ -4683,7 +4645,6 @@ surface_commit(struct wl_client *client, struct wl_resource *resource)
 		return;
 	}
 
-	ATRACE_BEGIN("%s", __func__);
 	if (sub) {
 		status = weston_subsurface_commit(sub);
 	} else {
@@ -4694,7 +4655,6 @@ surface_commit(struct wl_client *client, struct wl_resource *resource)
 		}
 		status |= weston_surface_commit(surface);
 	}
-	ATRACE_END("%s", __func__);
 
 	if (status & WESTON_SURFACE_DIRTY_SUBSURFACE_CONFIG)
 		surface->compositor->view_list_needs_rebuild = true;
@@ -4996,7 +4956,6 @@ weston_subsurface_commit(struct weston_subsurface *sub)
 	enum weston_surface_status status = WESTON_SURFACE_CLEAN;
 	struct weston_subsurface *tmp;
 
-	ATRACE_BEGIN("%s", __func__);
 	/* Recursive check for effectively synchronized. */
 	if (weston_subsurface_is_synchronized(sub)) {
 		weston_subsurface_commit_to_cache(sub);
@@ -5014,7 +4973,6 @@ weston_subsurface_commit(struct weston_subsurface *sub)
 				status |= weston_subsurface_parent_commit(tmp, 0);
 		}
 	}
-	ATRACE_END("%s", __func__);
 
 	return status;
 }
@@ -9433,31 +9391,6 @@ weston_compositor_dmabuf_can_scanout(struct weston_compositor *compositor,
 	return true;
 }
 
-/** Import gbmbuf buffer into current renderer
- *
- * \param compositor
- * \param buffer the gbmbuf buffer to import
- * \return true on usable buffers, false otherwise
- *
- * This function tests that the gbm_buffer is usable
- * for the current renderer. Returns false on unusable buffers. Usually
- * usability is tested by importing the gbmbuf for composition.
- *
- * This hook is also used for detecting if the renderer supports
- * gbmbuf at all. If the renderer hook is NULL, dmabufs are not
- * supported.
- * */
-WL_EXPORT bool
-weston_compositor_import_gbm_buffer(struct weston_compositor *compositor,
-				struct gbm_buffer *buffer)
-{
-	struct weston_renderer *renderer;
-	renderer = compositor->renderer;
-	if (renderer->import_gbm_buffer == NULL)
-		return false;
-	return renderer->import_gbm_buffer(compositor, buffer);
-}
-
 WL_EXPORT void
 weston_version(int *major, int *minor, int *micro)
 {
@@ -9789,7 +9722,6 @@ weston_compositor_init_renderer(struct weston_compositor *compositor,
 
 		compositor->renderer->gl = gl_renderer;
 		weston_log("Using GL renderer\n");
-
 		break;
 	case WESTON_RENDERER_PIXMAN:
 		ret = pixman_renderer_init(compositor);
@@ -9820,20 +9752,6 @@ weston_compositor_load_xwayland(struct weston_compositor *compositor)
 	if (module_init(compositor) < 0)
 		return -1;
 	return 0;
-}
-
-/** weston_compositor_load_gbm_buffer_backend
- */
-WL_EXPORT int
-weston_compositor_load_gbm_buffer_backend()
-{
-		gbm_buffer_backend = weston_load_module("gbm-buffer-backend.so",
-						"gbm_buffer_backend_c_interface",
-						LIBWESTON_MODULEDIR);
-		if (!gbm_buffer_backend)
-			return -1;
-
-		return 0;
 }
 
 /** Load Little CMS color manager plugin

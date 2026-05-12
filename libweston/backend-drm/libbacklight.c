@@ -27,11 +27,6 @@
  * Authors:
  *    Matthew Garrett <mjg@redhat.com>
  *    Tiago Vignatti <vignatti@freedesktop.org>
- *
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "config.h"
@@ -48,7 +43,6 @@
 #include <malloc.h>
 #include <string.h>
 #include <errno.h>
-#include <wayland-util.h>
 
 #include "shared/string-helpers.h"
 
@@ -92,22 +86,22 @@ out:
 	return ret;
 }
 
-WL_EXPORT long backlight_get_brightness(struct backlight *backlight)
+long backlight_get_brightness(struct backlight *backlight)
 {
 	return backlight_get(backlight, "brightness");
 }
 
-WL_EXPORT long backlight_get_max_brightness(struct backlight *backlight)
+long backlight_get_max_brightness(struct backlight *backlight)
 {
 	return backlight_get(backlight, "max_brightness");
 }
 
-WL_EXPORT long backlight_get_actual_brightness(struct backlight *backlight)
+long backlight_get_actual_brightness(struct backlight *backlight)
 {
 	return backlight_get(backlight, "actual_brightness");
 }
 
-WL_EXPORT long backlight_set_brightness(struct backlight *backlight, long brightness)
+long backlight_set_brightness(struct backlight *backlight, long brightness)
 {
 	char *path;
 	char *buffer = NULL;
@@ -152,7 +146,7 @@ out:
 	return ret;
 }
 
-WL_EXPORT void backlight_destroy(struct backlight *backlight)
+void backlight_destroy(struct backlight *backlight)
 {
 	if (!backlight)
 		return;
@@ -163,7 +157,7 @@ WL_EXPORT void backlight_destroy(struct backlight *backlight)
 	free(backlight);
 }
 
-WL_EXPORT struct backlight *backlight_init(struct udev_device *drm_device,
+struct backlight *backlight_init(struct udev_device *drm_device,
 				 uint32_t connector_type)
 {
 	const char *syspath = NULL;

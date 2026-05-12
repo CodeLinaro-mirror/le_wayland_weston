@@ -220,9 +220,3 @@ option(
 	value: false,
 	description: 'Generate documentation'
 )
-option(
-	'ASAN',
-	type: 'boolean',
-	value: false,
-	description: 'Enable address sanitizers tool'
-)

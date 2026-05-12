@@ -34,9 +34,7 @@ deps_renderer_gl = [
 	dep_pixman,
 	dep_libweston_private,
 	dep_libdrm_headers,
-	dep_libcutils,
-	dep_vertex_clipping,
-	dep_gbm
+	dep_vertex_clipping
 ]
 
 foreach name : [ 'egl', 'glesv2' ]
@@ -57,8 +55,3 @@ plugin_gl = shared_library(
 	install_dir: dir_module_libweston
 )
 env_modmap += 'gl-renderer.so=@0@;'.format(plugin_gl.full_path())
-
-install_headers(
-	'gl-renderer.h',
-	subdir: dir_include_libweston_private_install
-)
