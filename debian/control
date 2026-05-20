@@ -1,0 +1,97 @@
+Source: weston
+Section: x11
+Priority: optional
+Maintainer: Chen Sun <chesun@qti.qualcomm.com>
+Build-Depends: debhelper-compat (= 13),
+               meson (>= 0.63.0),
+               pkg-config,
+               libwayland-dev (>= 1.20.0),
+               wayland-protocols (>= 1.31),
+               libinput-dev (>= 1.2.0),
+               libxkbcommon-dev (>= 0.5.0),
+               libpixman-1-dev (>= 0.25.2),
+               libcairo2-dev (>= 1.10.0),
+               libpango1.0-dev,
+               libgdk-pixbuf-2.0-dev,
+               libglib2.0-dev,
+               libegl-dev,
+               libgles-dev,
+               gbm-sa-dev,
+               libdrm-sa-dev (>= 2.4.108),
+               libudev-dev,
+               libseat-dev,
+               libsystemd-dev,
+               libdbus-1-dev,
+               libjpeg-dev,
+               libwebp-dev,
+               liblcms2-dev,
+               libcolord-dev,
+               freerdp2-dev,
+               libpipewire-0.3-dev,
+               display-commonsys-intf-linux-dev,
+               libcutils-dev,
+               linux-libc-dev,
+               libkiumd-dev,
+               bootkpi-logging-dev,
+               openwfd-client-dev,
+               libsoftsku-dev,
+               qlf-client-dev,
+               libtpp-dev,
+               compute-osal-dev,
+               safe-xml-parser-dev,
+               compute-resmgr-dev
+Standards-Version: 4.5.0
+Homepage: http://wayland.freedesktop.org
+
+Package: weston
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends},
+         adduser
+Recommends: liberation-fonts
+Suggests: weston-examples
+Description: Reference implementation of a Wayland compositor
+ Weston is the reference implementation of a Wayland compositor, as well
+ as a useful environment in and of itself.
+ .
+ Out of the box, Weston provides a very basic desktop, or a full-featured
+ environment for non-desktop uses such as automotive, embedded, in-flight,
+ industrial, kiosks, set-top boxes and TVs. It also provides a library
+ allowing other projects to build their own full-featured environments on
+ top of Weston's core.
+ .
+ This package includes the Weston compositor with SDM backend support for
+ Qualcomm platforms.
+
+Package: libweston-13-0
+Section: libs
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends},
+         seatd,
+         libseat1
+Description: Reference implementation of a Wayland compositor (shared libs)
+ Weston is the reference implementation of a Wayland compositor, as well
+ as a useful environment in and of itself.
+ .
+ This package contains the libweston-13 shared libraries.
+
+Package: libweston-13-dev
+Section: libdevel
+Architecture: any
+Depends: libweston-13-0 (= ${binary:Version}),
+         ${misc:Depends},
+         libwayland-dev,
+         libpixman-1-dev,
+         libxkbcommon-dev
+Recommends: wayland-protocols
+Description: Reference implementation of a Wayland compositor (development)
+ Weston is the reference implementation of a Wayland compositor.
+ .
+ This package contains the development files for libweston-13.
+
+Package: weston-examples
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Reference implementation of a Wayland compositor (examples)
+ Weston is the reference implementation of a Wayland compositor.
+ .
+ This package contains example and demo clients.

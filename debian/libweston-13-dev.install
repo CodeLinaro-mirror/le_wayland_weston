@@ -1,0 +1,9 @@
+usr/include/libweston-13/
+#usr/include/shared
+usr/include/weston
+
+usr/lib/*/libweston-13.so
+usr/lib/*/pkgconfig/*.pc
+usr/share/pkgconfig/*.pc
+usr/share/libweston-13/protocols
+usr/lib/*/weston/libexec_weston.so
