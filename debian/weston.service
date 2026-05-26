@@ -1,0 +1,29 @@
+[Unit]
+Description=Weston reference Wayland compositor
+Conflicts=getty@tty2.service shutdown.target
+Requires=openwfd_server_@0.service systemd-user-sessions.service
+After=dbus.service rc.pvr.service openwfd_server_@0.service systemd-user-sessions.service
+DefaultDependencies=no
+Before=shutdown.target
+
+[Service]
+User=root
+PAMName=weston-autologin
+Environment="XDG_RUNTIME_DIR=/run/user/0"
+Slice=pvm.slice
+ExecStartPre=/bin/mkdir -p /run/user/0
+ExecStartPre=/bin/chmod 700 /run/user
+ExecStartPre=/bin/chmod 700 /run/user/0
+ExecStartPre=/bin/mkdir -p /run/early
+ExecStartPre=/bin/chmod 700 /run/early
+ExecStart=weston --idle-time=0 --socket=wayland-0 --modules=systemd-notify.so --log=/tmp/weston.log
+Type=notify
+PIDFile=/run/early/weston.pid
+Restart=always
+RestartSec=2
+StartLimitInterval=100s
+StartLimitBurst=5
+TTYPath=/dev/tty2
+
+[Install]
+WantedBy=multi-user.target

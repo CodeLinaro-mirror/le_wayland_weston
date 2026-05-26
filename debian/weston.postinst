@@ -1,0 +1,68 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+
+##        # -------------------------------------------------------
+##        # Create groups (mirror GROUPADD_PARAM)
+##        # -r wayland; -r render
+##        # -------------------------------------------------------
+##        if ! getent group wayland > /dev/null 2>&1; then
+##            addgroup --system wayland
+##        fi
+##        if ! getent group render > /dev/null 2>&1; then
+##            addgroup --system render
+##        fi
+##
+##        # -------------------------------------------------------
+##        # Create weston user (mirror USERADD_PARAM)
+##        # --home /home/weston --shell /bin/sh --user-group
+##        # -G video,input,render,wayland weston
+##        # -------------------------------------------------------
+##        if ! getent passwd weston > /dev/null 2>&1; then
+##            adduser --system \
+##                    --home /home/weston \
+##                    --shell /bin/sh \
+##                    --ingroup weston \
+##                    --no-create-home \
+##                    weston
+##            # Add to supplementary groups
+##            for grp in video input render wayland; do
+##                if getent group "$grp" > /dev/null 2>&1; then
+##                    adduser weston "$grp" || true
+##                fi
+##            done
+##        fi
+##
+##        # Ensure home directory exists with correct ownership
+##        if [ ! -d /home/weston ]; then
+##            mkdir -p /home/weston
+##        fi
+##        chown weston:weston /home/weston
+##        chmod 0755 /home/weston
+
+#        # -------------------------------------------------------
+#        # QTI-UMD: pre-create /run/user/0 and /run/early
+#        # (mirrors ExecStartPre lines injected by bbappend)
+#        # -------------------------------------------------------
+#        mkdir -p /run/user/0  || true
+#        chmod 700 /run/user/0 || true
+#        mkdir -p /run/user     || true
+#        chmod 700 /run/user    || true
+#        mkdir -p /run/early    || true
+#        chmod 700 /run/early   || true
+
+
+        # Enable and start weston.socket on install/upgrade
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload >/dev/null || true
+            systemctl enable weston.service >/dev/null || true
+            systemctl enable weston.socket  >/dev/null || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

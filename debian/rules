@@ -45,7 +45,21 @@ override_dh_auto_install:
 	find debian/tmp -name '*.la' -delete
 	# Move drm-backend to weston datadir (QTI specific)
 	install -d debian/tmp/usr/share/weston
+	# Install systemd service and socket files
+	install -d debian/tmp/usr/lib/systemd/system
+	install -m 0644 debian/weston.service debian/tmp/usr/lib/systemd/system/weston.service
+	install -m 0644 debian/weston.socket  debian/tmp/usr/lib/systemd/system/weston.socket
+	# Install weston.ini
+	install -d debian/tmp/etc/xdg/weston
+	install -m 0644 debian/weston.ini debian/tmp/etc/xdg/weston/weston.ini
+	# Install weston-autologin
+	install -d debian/tmp/etc/pam.d
+	install -m 0644 debian/weston-autologin debian/tmp/etc/pam.d/weston-autologin
 	find debian/tmp
+
+override_dh_installsystemd:
+	dh_installsystemd -p weston --name=weston --no-start weston.service
+	dh_installsystemd -p weston --name=weston weston.socket
 
 override_dh_strip:
 	dh_strip --dbgsym-migration='weston-dbg (<< 13.0.1-1~)'

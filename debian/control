@@ -46,7 +46,11 @@ Homepage: http://wayland.freedesktop.org
 Package: weston
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends},
-         adduser
+         adduser,
+         kbd,
+         systemd,
+         libpam-runtime,
+         libpam-systemd
 Recommends: liberation-fonts
 Suggests: weston-examples
 Description: Reference implementation of a Wayland compositor

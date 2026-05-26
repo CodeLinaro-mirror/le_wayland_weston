@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        # Stop and disable weston services before removal
+        if [ -d /run/systemd/system ]; then
+            systemctl stop  weston.service >/dev/null || true
+            systemctl stop  weston.socket  >/dev/null || true
+            systemctl disable weston.service >/dev/null || true
+            systemctl disable weston.socket  >/dev/null || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
