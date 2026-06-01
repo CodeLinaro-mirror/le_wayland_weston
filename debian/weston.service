@@ -16,6 +16,9 @@ ExecStartPre=/bin/chmod 700 /run/user
 ExecStartPre=/bin/chmod 700 /run/user/0
 ExecStartPre=/bin/mkdir -p /run/early
 ExecStartPre=/bin/chmod 700 /run/early
+ExecStartPre=/bin/chown root:root /sbin/setup-gpu-libs.sh
+ExecStartPre=/bin/chmod 700 /sbin/setup-gpu-libs.sh
+ExecStartPre=/sbin/setup-gpu-libs.sh
 ExecStart=weston --idle-time=0 --socket=wayland-0 --modules=systemd-notify.so --log=/tmp/weston.log
 Type=notify
 PIDFile=/run/early/weston.pid

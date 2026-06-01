@@ -52,6 +52,9 @@ override_dh_auto_install:
 	# Install weston.ini
 	install -d debian/tmp/etc/xdg/weston
 	install -m 0644 debian/weston.ini debian/tmp/etc/xdg/weston/weston.ini
+	# Install GPU library setup script
+	install -d debian/tmp/sbin
+	install -m 0755 debian/setup-gpu-libs.sh debian/tmp/sbin/setup-gpu-libs.sh
 	# Install weston-autologin
 	install -d debian/tmp/etc/pam.d
 	install -m 0644 debian/weston-autologin debian/tmp/etc/pam.d/weston-autologin

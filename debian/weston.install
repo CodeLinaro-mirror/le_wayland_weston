@@ -20,6 +20,7 @@ usr/share/weston/
 usr/share/wayland-sessions/
 etc/pam.d/weston-autologin
 etc/xdg/weston/weston.ini
+sbin/setup-gpu-libs.sh
 usr/lib/systemd/system/weston.service
 usr/lib/systemd/system/weston.socket
 usr/share/man/man1/weston*.1
