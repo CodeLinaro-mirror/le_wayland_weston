@@ -1127,7 +1127,6 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
 		}
 
 		if (!stale_timestamp) {
-			drm_output_update_msc(output, vbl.reply.sequence);
 			weston_output_finish_frame(output_base, &ts, flags);
 			return 0;
 		}
