@@ -4332,6 +4332,8 @@ weston_output_repaint_from_present(const struct weston_output *output,
 	int64_t frames_since;
 	int refresh_nsec = millihz_to_nsec(output->current_mode->refresh);
 	struct timespec actual_present_time;
+	struct timespec cycle_before;
+	bool valid_last_time = false;
 	bool late = false;
 
 	if (timespec_sub_to_nsec(now, present_time) > 0)
@@ -4340,29 +4342,55 @@ weston_output_repaint_from_present(const struct weston_output *output,
 	if (output->frame_flags & WESTON_FINISH_FRAME_TEARING)
 		return late ? *now : *present_time;
 
-	if (output->forced_present.valid &&
-	    output->vrr_mode == WESTON_VRR_MODE_GAME) {
-		actual_present_time = *present_time;
-		goto out;
-	}
-
-	/* At the start of the repaint loop with VRR enabled - we may
-	 * be able to paint early, so give it a try.
+	/* If we can query the last cycle time, cycle_before will be the cycle
+	 * immediately before the current time. Otherwise it will be some
+	 * known frame time in the past.
+	 *
+	 * This has a potential race condition where the last cycle start
+	 * could be more recent than the presentation time we're requesting,
+	 * so following code needs to check for that.
 	 */
-	if (output->repaint_status == REPAINT_AWAITING_COMPLETION &&
-	    output->frame_flags & WP_PRESENTATION_FEEDBACK_INVALID &&
-	    output->vrr_mode == WESTON_VRR_MODE_GAME)
-		return late ? *now : *present_time;
+	if (output->last_cycle_start)
+		valid_last_time = output->last_cycle_start(output, &cycle_before);
+	if (!valid_last_time)
+		cycle_before = output->frame_time;
 
-	/* The provided time might be in the middle of a frame, so round it
-	 * back to the start of the frame that time is in.
+	/* Time since is the time from the last known cycle time to the intended
+	 * presentation time, with a single nanosecond subtracted to ensure any
+	 * rounding hits the past frame.
 	 */
-	time_since = timespec_sub_to_nsec(present_time, &output->frame_time);
+	time_since = timespec_sub_to_nsec(present_time, &cycle_before);
 	time_since--;
-	frames_since = time_since / refresh_nsec;
-	timespec_add_nsec(&actual_present_time, &output->frame_time, refresh_nsec * (frames_since + 1));
 
-out:
+	/* In VRR, refresh_nsec is the shortest possible display cycle time,
+	 * so for refresh_nsec after a vblank, VRR can't provoke an immediate
+	 * page flip.
+	 *
+	 * Since our repaint time is after the shortest cycle time, we're
+	 * either late and an immediate repaint might present immediately,
+	 * or we're scheduling into the future somewhere.
+	 *
+	 * Either way, we can claim the ideal repaint time is the presentation
+	 * time.
+	 *
+	 * If we're just a little late, that lets VRR do its magic to prevent
+	 * a full frame delay, and if we're scheduling into the future we
+	 * can't really reason about what will happen to vblank times between
+	 * now and then anyway.
+	 */
+	if (output->vrr_mode == WESTON_VRR_MODE_GAME &&
+	    (time_since > refresh_nsec ||
+	     time_since < 0))
+		return *present_time;
+
+	/* The provided time might be in the middle of a frame. Round off
+	 * so actual_present_time is the expected start time of the scanout
+	 * immediately after present_time.
+	 */
+	frames_since = time_since / refresh_nsec;
+	frames_since = MAX(0, frames_since);
+	timespec_add_nsec(&actual_present_time, &cycle_before, refresh_nsec * (frames_since + 1));
+
 	/* Subtract the "repaint window" time to get the deadline for the presentation time */
 	timespec_add_msec(&repaint_time, &actual_present_time, -weston_output_repaint_msec(output));
 
