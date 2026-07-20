@@ -770,6 +770,14 @@ to_drm_output(struct weston_output *base)
 	return container_of(base, struct drm_output, base);
 }
 
+static inline const struct drm_output *
+to_const_drm_output(const struct weston_output *base)
+{
+	if (base->destroy != drm_output_destroy)
+		return NULL;
+	return container_of(base, struct drm_output, base);
+}
+
 static inline struct drm_backend *
 to_drm_backend(struct weston_compositor *base)
 {

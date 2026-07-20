@@ -1026,9 +1026,10 @@ drm_waitvblank_pipe(struct drm_crtc *crtc)
 }
 
 static bool
-drm_output_last_frame_time(struct weston_output *output_base, struct timespec *ts)
+drm_output_last_frame_time(const struct weston_output *output_base,
+			   struct timespec *ts)
 {
-	struct drm_output *output = to_drm_output(output_base);
+	const struct drm_output *output = to_const_drm_output(output_base);
 	struct drm_device *device = output->device;
 	struct drm_backend *backend = device->backend;
 	struct weston_compositor *compositor = backend->compositor;
