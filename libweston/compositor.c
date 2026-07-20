@@ -4836,7 +4836,7 @@ weston_output_finish_frame(struct weston_output *output,
 out:
 	output->next_repaint = weston_output_repaint_from_present(output, &now,
 								  &output->next_present);
-	output->forced_present.valid = false;
+	weston_commit_timing_clear_target(&output->forced_present);
 	output->repaint_status = REPAINT_SCHEDULED;
 	weston_repaint_timer_arm(compositor);
 }
