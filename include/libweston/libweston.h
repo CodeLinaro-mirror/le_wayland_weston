@@ -571,6 +571,7 @@ struct weston_output {
 	void (*destroy)(struct weston_output *output);
 	void (*assign_planes)(struct weston_output *output);
 	int (*switch_mode)(struct weston_output *output, struct weston_mode *mode);
+	bool (*last_cycle_start)(const struct weston_output *output, struct timespec *time);
 
 	/* backlight values are on 0-255 range, where higher is brighter */
 	int32_t backlight_current;

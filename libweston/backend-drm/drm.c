@@ -1026,8 +1026,8 @@ drm_waitvblank_pipe(struct drm_crtc *crtc)
 }
 
 static bool
-drm_output_last_frame_time(const struct weston_output *output_base,
-			   struct timespec *ts)
+drm_output_last_cycle_start(const struct weston_output *output_base,
+			    struct timespec *ts)
 {
 	const struct drm_output *output = to_const_drm_output(output_base);
 	struct drm_device *device = output->device;
@@ -1136,7 +1136,7 @@ drm_output_start_repaint_loop(struct weston_output *output_base)
 		goto finish_frame;
 	}
 
-	stale_timestamp = !drm_output_last_frame_time(output_base, &ts);
+	stale_timestamp = !drm_output_last_cycle_start(output_base, &ts);
 	if (!stale_timestamp) {
 		weston_output_finish_frame(output_base, &ts, flags);
 		return 0;
@@ -2960,6 +2960,7 @@ drm_output_enable(struct weston_output *base)
 	output->base.assign_planes = drm_assign_planes;
 	output->base.set_dpms = drm_set_dpms;
 	output->base.switch_mode = drm_output_switch_mode;
+	output->base.last_cycle_start = drm_output_last_cycle_start;
 
 	weston_output_update_capture_info(base,
 					  WESTON_OUTPUT_CAPTURE_SOURCE_WRITEBACK,
