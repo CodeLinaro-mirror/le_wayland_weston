@@ -246,7 +246,7 @@ weston_commit_timing_surface_state_ready(struct weston_surface *surface,
 		return false;
 	}
 
-	target_repaint = weston_output_repaint_from_present(output, &now_ts,
+	target_repaint = weston_output_repaint_from_present(output,
 							    &state->update_time.time);
 
 	if (timespec_sub_to_nsec(&target_repaint, &now_ts) < 0)
