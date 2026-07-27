@@ -4334,13 +4334,9 @@ weston_output_repaint_from_present(const struct weston_output *output,
 	struct timespec actual_present_time;
 	struct timespec cycle_before;
 	bool valid_last_time = false;
-	bool late = false;
-
-	if (timespec_sub_to_nsec(now, present_time) > 0)
-		late = true;
 
 	if (output->frame_flags & WESTON_FINISH_FRAME_TEARING)
-		return late ? *now : *present_time;
+		return *present_time;
 
 	/* If we can query the last cycle time, cycle_before will be the cycle
 	 * immediately before the current time. Otherwise it will be some
