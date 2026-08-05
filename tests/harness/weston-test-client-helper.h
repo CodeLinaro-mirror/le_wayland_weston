@@ -41,6 +41,7 @@
 #include "shared/client-buffer-util.h"
 #include "single-pixel-buffer-v1-client-protocol.h"
 #include "weston-test-runner.h"
+#include "weston-fast-forward-client-protocol.h"
 #include "weston-test-client-protocol.h"
 #include "viewporter-client-protocol.h"
 #include "weston-output-capture-client-protocol.h"
@@ -71,6 +72,7 @@ struct client {
 	struct wp_viewporter *viewporter;
 	struct wp_color_representation_manager_v1 *color_representation;
 	struct color_manager_client *color_manager;
+	struct weston_fast_forward_manager_v1 *weston_fast_forward_manager;
 	struct weston_restricted_buffer_v1 *restricted_buffer;
 
 	struct test *test;

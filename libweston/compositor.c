@@ -95,6 +95,7 @@
 
 #include <libweston/commit-timing.h>
 #include <libweston/fifo.h>
+#include <libweston/weston-fast-forward.h>
 #include "weston-log-internal.h"
 
 /**
@@ -10787,6 +10788,9 @@ weston_compositor_create(struct wl_display *display,
 		goto fail;
 
 	if (weston_input_init(ec) != 0)
+		goto fail;
+
+	if (weston_fast_forward_setup(ec) != 0)
 		goto fail;
 
 	weston_compositor_install_capture_protocol(ec);

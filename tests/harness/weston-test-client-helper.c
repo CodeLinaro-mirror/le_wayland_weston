@@ -1032,6 +1032,10 @@ handle_global(void *data, struct wl_registry *registry,
 		client->restricted_buffer =
 			wl_registry_bind(registry, id,
 					 &weston_restricted_buffer_v1_interface, 1);
+	} else if (strcmp(interface, weston_fast_forward_manager_v1_interface.name) == 0) {
+		client->weston_fast_forward_manager =
+			wl_registry_bind(registry, id,
+					 &weston_fast_forward_manager_v1_interface, 1);
 	}
 }
 
@@ -1309,6 +1313,9 @@ client_destroy(struct client *client)
 
 	if (client->commit_timing_manager)
 		wp_commit_timing_manager_v1_destroy(client->commit_timing_manager);
+
+	if (client->weston_fast_forward_manager)
+		weston_fast_forward_manager_v1_destroy(client->weston_fast_forward_manager);
 
 	if (client->alpha_modifier)
 		wp_alpha_modifier_v1_destroy(client->alpha_modifier);

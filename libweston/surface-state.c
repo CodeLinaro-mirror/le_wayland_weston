@@ -31,6 +31,7 @@
 #include <libweston/libweston.h>
 #include <libweston/commit-timing.h>
 #include <libweston/fifo.h>
+#include <libweston/weston-fast-forward.h>
 #include "libweston-internal.h"
 
 #include "backend.h"
@@ -170,6 +171,8 @@ weston_surface_state_init(struct weston_surface *surface,
 	state->update_time.satisfied = false;
 	state->update_time.time.tv_sec = 0;
 	state->update_time.time.tv_nsec = 0;
+
+	state->fast_forward = false;
 }
 
 void
@@ -572,6 +575,13 @@ weston_surface_apply_state(struct weston_surface *surface,
 
 	weston_commit_timing_clear_target(&state->update_time);
 
+	/* When we reach the state that engaged fast forward when committed,
+	 * we turn fast forwarding off.
+	 */
+	if (state->fast_forward)
+		surface->fast_forwarding = false;
+	state->fast_forward = false;
+
 	state->status = WESTON_SURFACE_CLEAN;
 
 	return status;
@@ -870,6 +880,9 @@ weston_surface_state_ready(struct weston_surface *surface,
 {
 	WESTON_TRACE_FUNC(("surface state flow", &state->flow));
 
+	if (surface->fast_forwarding)
+		return true;
+
 	if (!weston_fifo_surface_state_ready(surface, state))
 		return false;
 
@@ -887,6 +900,15 @@ weston_surface_commit(struct weston_surface *surface)
 	struct weston_subsurface *sub = weston_surface_to_subsurface(surface);
 	struct weston_surface_state *state = &surface->pending;
 	struct weston_transaction_queue *tq;
+
+	/* Fast forward begins at commit, and concludes at state application */
+	if (surface->pending.fast_forward) {
+		WESTON_TRACE_ANNOTATE(("surface state flow",
+				       &surface->pending.flow));
+		WESTON_TRACE_COMMIT_ANNOTATION("applying fast forward");
+		surface->fast_forwarding = true;
+		weston_compositor_apply_transactions(comp);
+	}
 
 	if (sub) {
 		weston_surface_state_merge_from(&sub->cached,

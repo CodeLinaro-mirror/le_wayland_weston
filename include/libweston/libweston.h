@@ -2037,6 +2037,9 @@ struct weston_surface_state {
 
 	/* wp_alpha_modifier_v1 */
 	float alpha_modifier;
+
+	/* weston_fast_forward_v1 */
+	bool fast_forward;
 };
 
 struct weston_surface_activation_data {
@@ -2256,6 +2259,10 @@ struct weston_surface {
 	/** wl_surface v6 preferences */
 	int32_t preferred_buffer_scale;
 	uint32_t preferred_buffer_transform;
+
+	/** weston_fast_forward_v1 */
+	struct weston_fast_forward *fast_forwarder;
+	bool fast_forwarding;
 };
 
 struct weston_subsurface {

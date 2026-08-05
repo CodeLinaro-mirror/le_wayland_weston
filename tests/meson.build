@@ -46,6 +46,7 @@ tests = [
 	},
 	{	'name': 'color-representation-protocol', },
 	{	'name': 'commit-timing', },
+	{	'name': 'fast-forward', },
 	{	'name': 'config-parser', },
 	{
 		'name': 'constraints',

@@ -45,6 +45,8 @@ lib_test_client = static_library(
 		presentation_time_protocol_c,
 		single_pixel_buffer_v1_client_protocol_h,
 		single_pixel_buffer_v1_protocol_c,
+		weston_fast_forward_client_protocol_h,
+		weston_fast_forward_protocol_c,
 		weston_test_client_protocol_h,
 		weston_test_protocol_c,
 		weston_output_capture_client_protocol_h,
