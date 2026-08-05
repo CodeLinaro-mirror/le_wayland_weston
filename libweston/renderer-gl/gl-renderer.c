@@ -1299,6 +1299,10 @@ draw_paint_node(struct weston_paint_node *pnode,
 	GLint filter;
 	struct gl_shader_config sconf;
 
+	/* touch-only surface: participates in input hit only, skip GL compositing */
+	if (pnode->surface && pnode->surface->is_touch_only)
+		return;
+
 	if (gb->shader_variant == SHADER_VARIANT_NONE &&
 	    !buffer->direct_display)
 		return;
