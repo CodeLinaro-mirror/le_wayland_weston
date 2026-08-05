@@ -178,6 +178,8 @@ simple_clients = [
 			single_pixel_buffer_v1_protocol_c,
 			viewporter_client_protocol_h,
 			viewporter_protocol_c,
+			weston_fast_forward_client_protocol_h,
+			weston_fast_forward_protocol_c,
 		],
 		'dep_objs': [ dep_wayland_client, dep_libshared ]
 	},

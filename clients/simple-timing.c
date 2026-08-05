@@ -50,6 +50,7 @@
 #include "fifo-v1-client-protocol.h"
 #include "presentation-time-client-protocol.h"
 #include "single-pixel-buffer-v1-client-protocol.h"
+#include "weston-fast-forward-client-protocol.h"
 #include "viewporter-client-protocol.h"
 
 #define ARRAY_SIZE(array) (sizeof(array) / sizeof(array[0]))
@@ -69,6 +70,7 @@ struct display {
 	struct wp_single_pixel_buffer_manager_v1 *spb_manager;
 	struct wp_viewporter *viewporter;
 	struct wp_presentation *presentation;
+	struct weston_fast_forward_manager_v1 *fast_forward_manager;
 	bool have_clock_id;
 	clockid_t presentation_clock_id;
 	int64_t first_frame_time;
@@ -96,6 +98,7 @@ struct window {
 	struct wp_fifo_v1 *fifo;
 	struct wp_commit_timer_v1 *commit_timer;
 	struct wp_viewport *viewport;
+	struct weston_fast_forward_v1 *fast_forward;
 	bool wait_for_configure;
 	bool maximized;
 	bool fullscreen;
@@ -392,6 +395,11 @@ create_window(struct display *display, int width, int height)
 	window->surface = wl_compositor_create_surface(display->compositor);
 	window->fifo = wp_fifo_manager_v1_get_fifo(display->fifo_manager,
 						   window->surface);
+	if (display->fast_forward_manager)
+		window->fast_forward =
+			weston_fast_forward_manager_v1_get_fast_forward(display->fast_forward_manager,
+									window->surface);
+
 	window->commit_timer = wp_commit_timing_manager_v1_get_timer(display->commit_timing_manager,
 								     window->surface);
 	if (display->viewporter)
@@ -449,6 +457,9 @@ destroy_window(struct window *window)
 
 	if (window->commit_timer)
 		wp_commit_timer_v1_destroy(window->commit_timer);
+
+	if (window->fast_forward)
+		weston_fast_forward_v1_destroy(window->fast_forward);
 
 	if (window->viewport)
 		wp_viewport_destroy(window->viewport);
@@ -770,6 +781,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
 		d->wm_base = wl_registry_bind(registry,
 					      id, &xdg_wm_base_interface, 1);
 		xdg_wm_base_add_listener(d->wm_base, &xdg_wm_base_listener, d);
+	} else if (strcmp(interface, weston_fast_forward_manager_v1_interface.name) == 0) {
+		d->fast_forward_manager = wl_registry_bind(registry, id,
+							   &weston_fast_forward_manager_v1_interface, 1);
 	} else if (strcmp(interface, "wl_seat") == 0) {
 		d->seat = wl_registry_bind(registry, id,
 					   &wl_seat_interface, 1);
@@ -856,6 +870,9 @@ destroy_display(struct display *display)
 
 	if (display->commit_timing_manager)
 		wp_commit_timing_manager_v1_destroy(display->commit_timing_manager);
+
+	if (display->fast_forward_manager)
+		weston_fast_forward_manager_v1_destroy(display->fast_forward_manager);
 
 	if (display->keyboard)
 		wl_keyboard_destroy(display->keyboard);
