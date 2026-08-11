@@ -1954,6 +1954,8 @@ struct weston_surface {
 
 	bool is_mapped, is_unmapping, is_mapping;
 	bool is_opaque;
+	/* Indicate the surface receives touch events but is not rendered. */
+	bool is_touch_only;
 
 	/* An list of per seat pointer constraints. */
 	struct wl_list pointer_constraints;

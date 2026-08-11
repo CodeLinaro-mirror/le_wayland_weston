@@ -486,9 +486,14 @@ static void
 draw_paint_node(struct weston_paint_node *pnode,
 		pixman_region32_t *damage /* in global coordinates */)
 {
-	struct pixman_surface_state *ps = get_surface_state(pnode->surface);
+	struct weston_surface *surface = pnode->surface;
+	struct pixman_surface_state *ps = get_surface_state(surface);
 	/* repaint bounding region in global coordinates: */
 	pixman_region32_t repaint;
+
+	/* touch-only surface: participates in input hit only, skip pixman compositing */
+	if (surface && surface->is_touch_only)
+		return;
 
 	if (!pnode->surf_xform_valid)
 		return;
