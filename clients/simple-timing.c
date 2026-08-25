@@ -35,7 +35,6 @@
 #include <sys/mman.h>
 #include <signal.h>
 #include <errno.h>
-#include <assert.h>
 
 #include <linux/input.h>
 
@@ -72,7 +71,6 @@ struct display {
 	struct wp_presentation *presentation;
 	struct weston_fast_forward_manager_v1 *fast_forward_manager;
 	bool have_clock_id;
-	clockid_t presentation_clock_id;
 	int64_t first_frame_time;
 	int64_t refresh_nsec;
 };
@@ -115,7 +113,7 @@ struct feedback {
 static int running = 1;
 
 static void
-draw_for_time(void *data, int64_t time, bool wait_fifo);
+draw_for_time(void *data, int64_t time);
 
 static void
 finish_run(struct window *window);
@@ -127,6 +125,7 @@ alloc_buffer(struct window *window, int width, int height)
 
 	buffer->width = width;
 	buffer->height = height;
+	buffer->window = window;
 	wl_list_insert(&window->buffer_list, &buffer->buffer_link);
 
 	return buffer;
@@ -319,7 +318,7 @@ handle_xdg_surface_configure(void *data, struct xdg_surface *surface,
 	xdg_surface_ack_configure(surface, serial);
 
 	if (window->wait_for_configure) {
-		draw_for_time(window, 0, false);
+		draw_for_time(window, 0);
 		window->wait_for_configure = false;
 	}
 }
@@ -562,22 +561,22 @@ queue_some_frames(struct window *window)
 
 	for (i = 0; i < 60; i++) {
 		target_nsec += display->refresh_nsec * 2;
-		draw_for_time(window, target_nsec, false);
+		draw_for_time(window, target_nsec);
 	}
 
 	for (i = 0; i < 30; i++) {
 		target_nsec += display->refresh_nsec * 4;
-		draw_for_time(window, target_nsec, false);
+		draw_for_time(window, target_nsec);
 	}
 
 	for (i = 0; i < 10; i++) {
 		target_nsec += display->refresh_nsec * 10;
-		draw_for_time(window, target_nsec, false);
+		draw_for_time(window, target_nsec);
 	}
 
 	for (i = 0; i < 10; i++) {
 		target_nsec += display->refresh_nsec * 100;
-		draw_for_time(window, target_nsec, false);
+		draw_for_time(window, target_nsec);
 	}
 
 	finish_run(window);
@@ -693,7 +692,7 @@ finish_run(struct window *window)
 }
 
 static void
-draw_for_time(void *data, int64_t time, bool wait_fifo)
+draw_for_time(void *data, int64_t time)
 {
 	struct window *window = data;
 	struct display *display = window->display;
@@ -759,7 +758,6 @@ presentation_handle_clock_id(void *data,
 {
 	struct display *display = data;
 
-	display->presentation_clock_id = clock_id;
 	display->have_clock_id = true;
 }
 
