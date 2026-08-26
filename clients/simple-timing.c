@@ -83,6 +83,7 @@ struct buffer {
 	int width, height;
 	size_t size;	/* width * 4 * height */
 	struct wl_list buffer_link; /** window::buffer_list */
+	uint8_t green_color;
 };
 
 struct window {
@@ -122,11 +123,16 @@ static struct buffer *
 alloc_buffer(struct window *window, int width, int height)
 {
 	struct buffer *buffer = calloc(1, sizeof(*buffer));
+	static uint8_t buffer_green = 0;
 
 	buffer->width = width;
 	buffer->height = height;
 	buffer->window = window;
 	wl_list_insert(&window->buffer_list, &buffer->buffer_link);
+
+	buffer->green_color = buffer_green;
+	/* Let's have some kind of visible change per buffer. */
+	buffer_green += 5;
 
 	return buffer;
 }
@@ -187,17 +193,32 @@ static int
 create_sp_buffer(struct window *window, struct buffer *buffer)
 {
 	struct display *display = window->display;
+	uint32_t green;
 
 	if (!display->spb_manager || !window->viewport)
 		return -1;
 
+	green = buffer->green_color * (UINT32_MAX / 255);
+
 	buffer->buffer =
 		wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer(display->spb_manager,
-									 0.0, UINT32_MAX,
-									 0.0, UINT32_MAX);
+									 0, /* red */
+									 green,
+									 0, /* blue */
+									 UINT32_MAX /* alpha */);
 	wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
 
 	return 0;
+}
+
+static void
+paint_pixels(uint32_t *image, int width, int height, uint8_t buffer_green)
+{
+	uint32_t color = 0xff000000 | (buffer_green << 8);
+	int i;
+
+	for (i = 0; i < width * height; i++)
+		*image++ = color;
 }
 
 static int
@@ -240,6 +261,8 @@ create_shm_buffer(struct window *window, struct buffer *buffer)
 
 	buffer->size = size;
 	buffer->shm_data = data;
+
+	paint_pixels(data, width, height, buffer->green_color);
 
 	return 0;
 }
@@ -492,56 +515,9 @@ window_next_buffer(struct window *window)
 			ret = create_shm_buffer(window, buffer);
 		if (ret < 0)
 			return NULL;
-
-		/* paint the padding */
-		if (buffer->shm_data)
-			memset(buffer->shm_data, 0xff,
-			       window->width * window->height * 4);
 	}
 
 	return buffer;
-}
-
-static void
-paint_pixels(void *image, int width, int height, uint32_t time)
-{
-	const int halfh = height / 2;
-	const int halfw = width / 2;
-	int ir, or;
-	uint32_t *pixel = image;
-	int y;
-
-	/* squared radii thresholds */
-	or = (halfw < halfh ? halfw : halfh) - 8;
-	ir = or - 32;
-	or *= or;
-	ir *= ir;
-
-	for (y = 0; y < height; y++) {
-		int x;
-		int y2 = (y - halfh) * (y - halfh);
-
-		for (x = 0; x < width; x++) {
-			uint32_t v;
-
-			/* squared distance from center */
-			int r2 = (x - halfw) * (x - halfw) + y2;
-
-			if (r2 < ir)
-				v = (r2 / 32 + time / 64) * 0x0080401;
-			else if (r2 < or)
-				v = (y + time / 32) * 0x0080401;
-			else
-				v = (x + time / 16) * 0x0080401;
-			v &= 0x00ffffff;
-
-			/* cross if compositor uses X from XRGB as alpha */
-			if (abs(x - y) > 6 && abs(x + y - height) > 6)
-				v |= 0xff000000;
-
-			*pixel++ = v;
-		}
-	}
 }
 
 static void
@@ -670,10 +646,6 @@ finish_run(struct window *window)
 	buffer = window_next_buffer(window);
 	assert(buffer);
 
-	if (buffer->shm_data)
-		paint_pixels(buffer->shm_data, window->width,
-			     window->height, 1);
-
 	if (window->viewport)
 		wp_viewport_set_destination(window->viewport,
 					    window->width,
@@ -705,10 +677,6 @@ draw_for_time(void *data, int64_t time)
 
 	buffer = window_next_buffer(window);
 	assert(buffer);
-
-	if (buffer->shm_data)
-		paint_pixels(buffer->shm_data, window->width,
-			     window->height, time / 1000000);
 
 	if (window->viewport)
 		wp_viewport_set_destination(window->viewport,
