@@ -115,7 +115,7 @@ struct feedback {
 static int running = 1;
 
 static void
-draw_for_time(void *data, int64_t time);
+submit_buffer_for_time(struct buffer *buffer, int64_t time);
 
 static void
 finish_run(struct window *window);
@@ -340,16 +340,22 @@ static const struct wl_seat_listener seat_listener = {
 	seat_handle_capabilities,
 };
 
+static struct buffer *
+window_next_buffer(struct window *window);
+
 static void
 handle_xdg_surface_configure(void *data, struct xdg_surface *surface,
 			     uint32_t serial)
 {
 	struct window *window = data;
+	struct buffer *buffer;
 
 	xdg_surface_ack_configure(surface, serial);
 
 	if (window->wait_for_configure) {
-		draw_for_time(window, 0);
+		buffer = window_next_buffer(window);
+		assert(buffer);
+		submit_buffer_for_time(buffer, 0);
 		window->wait_for_configure = false;
 	}
 }
@@ -503,6 +509,8 @@ window_next_buffer(struct window *window)
 	struct buffer *buffer = NULL;
 	int ret = 0;
 
+	prune_old_released_buffers(window);
+
 	if (window->needs_update_buffer) {
 		int i;
 
@@ -532,6 +540,7 @@ static void
 queue_some_frames(struct window *window)
 {
 	struct display *display = window->display;
+	struct buffer *buffer;
 	int64_t target_nsec;
 	int i;
 
@@ -545,22 +554,30 @@ queue_some_frames(struct window *window)
 
 	for (i = 0; i < 60; i++) {
 		target_nsec += display->refresh_nsec * 2;
-		draw_for_time(window, target_nsec);
+		buffer = window_next_buffer(window);
+		assert(buffer);
+		submit_buffer_for_time(buffer, target_nsec);
 	}
 
 	for (i = 0; i < 30; i++) {
 		target_nsec += display->refresh_nsec * 4;
-		draw_for_time(window, target_nsec);
+		buffer = window_next_buffer(window);
+		assert(buffer);
+		submit_buffer_for_time(buffer, target_nsec);
 	}
 
 	for (i = 0; i < 10; i++) {
 		target_nsec += display->refresh_nsec * 10;
-		draw_for_time(window, target_nsec);
+		buffer = window_next_buffer(window);
+		assert(buffer);
+		submit_buffer_for_time(buffer, target_nsec);
 	}
 
 	for (i = 0; i < 10; i++) {
 		target_nsec += display->refresh_nsec * 100;
-		draw_for_time(window, target_nsec);
+		buffer = window_next_buffer(window);
+		assert(buffer);
+		submit_buffer_for_time(buffer, target_nsec);
 	}
 
 	finish_run(window);
@@ -672,19 +689,13 @@ finish_run(struct window *window)
 }
 
 static void
-draw_for_time(void *data, int64_t time)
+submit_buffer_for_time(struct buffer *buffer, int64_t time)
 {
-	struct window *window = data;
+	struct window *window = buffer->window;
 	struct display *display = window->display;
-	struct buffer *buffer;
 	struct feedback *feedback;
 
 	assert(display->have_clock_id);
-
-	prune_old_released_buffers(window);
-
-	buffer = window_next_buffer(window);
-	assert(buffer);
 
 	if (window->viewport)
 		wp_viewport_set_destination(window->viewport,
