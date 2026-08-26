@@ -70,8 +70,9 @@ struct display {
 	struct wp_viewporter *viewporter;
 	struct wp_presentation *presentation;
 	struct weston_fast_forward_manager_v1 *fast_forward_manager;
+	struct window *window;
 	bool have_clock_id;
-	int64_t first_frame_time;
+	int64_t current_frame_time;
 	int64_t refresh_nsec;
 };
 
@@ -89,6 +90,7 @@ struct buffer {
 
 struct window {
 	struct display *display;
+	struct buffer *latest_presented_buffer;
 	int width, height;
 	int init_width, init_height;
 	struct wl_surface *surface;
@@ -102,12 +104,14 @@ struct window {
 	bool wait_for_configure;
 	bool maximized;
 	bool fullscreen;
+	bool paused;
 	bool needs_update_buffer;
 };
 
 struct feedback {
 	struct wp_presentation_feedback *fb;
 	struct window *window;
+	struct buffer *buffer;
 	int64_t target_time;
 	bool final;
 };
@@ -129,7 +133,7 @@ alloc_buffer(struct window *window, int width, int height)
 	buffer->width = width;
 	buffer->height = height;
 	buffer->window = window;
-	wl_list_insert(&window->buffer_list, &buffer->buffer_link);
+	wl_list_insert(window->buffer_list.prev, &buffer->buffer_link);
 
 	buffer->green_color = buffer_green;
 	/* Let's have some kind of visible change per buffer. */
@@ -152,9 +156,21 @@ destroy_buffer(struct buffer *buffer)
 static struct buffer *
 pick_free_buffer(struct window *window)
 {
+	struct wl_list *start, *node;
 	struct buffer *b;
 
-	wl_list_for_each(b, &window->buffer_list, buffer_link) {
+	/* Pick next buffer after the latest presented. This is important
+	 * for resuming after pause, so we can see a clear sequence. */
+	start = window->latest_presented_buffer ?
+		&window->latest_presented_buffer->buffer_link :
+		&window->buffer_list;
+
+	for (node = start->next; node != start; node = node->next) {
+		if (node == &window->buffer_list)
+			continue;
+
+		b = wl_container_of(node, b, buffer_link);
+
 		if (b->waiting_release_refcount == 0)
 			return b;
 	}
@@ -297,12 +313,50 @@ keyboard_handle_leave(void *data, struct wl_keyboard *keyboard,
 }
 
 static void
+pause_playback(struct window *window)
+{
+	window->paused = true;
+
+	assert(window->fast_forward);
+	weston_fast_forward_v1_fast_forward(window->fast_forward);
+	submit_buffer_for_time(window->latest_presented_buffer, 0);
+	wl_display_flush(window->display->display);
+}
+
+static void
+resume_playback(struct window *window)
+{
+	window->paused = false;
+
+	submit_buffer_for_time(window->latest_presented_buffer, 0);
+}
+
+static void
 keyboard_handle_key(void *data, struct wl_keyboard *keyboard,
 		    uint32_t serial, uint32_t time, uint32_t key,
 		    uint32_t state)
 {
+	struct display *d = data;
+	struct window *window = d->window;
+
 	if (key == KEY_ESC && state)
 		running = 0;
+
+	/* Pause/resume when the spacebar is pressed */
+	if (key == KEY_SPACE && state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+		/*
+		 * We don't support pausing without fast_forward. It's difficult
+		 * to implement reliably when the pending content update queue
+		 * is too large, as is the case with this client.
+		 */
+		if (!window->fast_forward)
+			return;
+
+		if (window->paused)
+			resume_playback(window);
+		else
+			pause_playback(window);
+	}
 }
 
 static void
@@ -417,6 +471,8 @@ create_window(struct display *display, int width, int height)
 {
 	struct window *window;
 	int i;
+
+	assert(!display->window);
 
 	window = zalloc(sizeof *window);
 	if (!window)
@@ -540,13 +596,13 @@ queue_some_frames(struct window *window)
 	int64_t target_nsec;
 	int i;
 
-	assert(display->first_frame_time);
+	assert(display->current_frame_time);
 
 	/* Round off error will cause us problems if we don't
 	 * reduce this a bit, because we could end up rounding
 	 * to either side of a refresh.
 	 */
-	target_nsec = display->first_frame_time - 100000;
+	target_nsec = display->current_frame_time - 100000;
 
 	for (i = 0; i < 60; i++) {
 		target_nsec += display->refresh_nsec * 2;
@@ -604,17 +660,24 @@ feedback_presented(void *data,
 	int64_t ntime = timespec_to_nsec(&pres_ts);
 	double delay;
 
+	window->latest_presented_buffer = feedback->buffer;
+
 	if (feedback->final) {
 		running = 0;
 		goto out;
 	}
 
+	if (window->paused)
+		goto out;
+
 	if (!feedback->target_time) {
-		display->first_frame_time = ntime;
+		display->current_frame_time = ntime;
 		display->refresh_nsec = refresh_nsec;
 		queue_some_frames(window);
 		goto out;
 	}
+
+	display->current_frame_time = ntime;
 
 	delay = (ntime - feedback->target_time) / 1000000.0;
 
@@ -632,10 +695,11 @@ feedback_discarded(void *data,
 		   struct wp_presentation_feedback *presentation_feedback)
 {
 	struct feedback *feedback = data;
+	struct window *window = feedback->window;
 
 	printf("Warning: a frame was discarded\n");
 
-	if (feedback->final)
+	if (feedback->final && !window->paused)
 		running = 0;
 
 	wp_presentation_feedback_destroy(feedback->fb);
@@ -655,12 +719,13 @@ finish_run(struct window *window)
 	struct feedback *feedback;
 	struct buffer *buffer;
 
+	buffer = window_next_buffer(window);
+
 	feedback = xzalloc(sizeof *feedback);
+	feedback->buffer = buffer;
 	feedback->window = window;
 	feedback->final = true;
 	feedback->target_time = 0;
-
-	buffer = window_next_buffer(window);
 
 	if (window->viewport)
 		wp_viewport_set_destination(window->viewport,
@@ -698,6 +763,7 @@ submit_buffer_for_time(struct buffer *buffer, int64_t time)
 
 	feedback = xzalloc(sizeof *feedback);
 	feedback->window = window;
+	feedback->buffer = buffer;
 
 	feedback->fb = wp_presentation_feedback(display->presentation,
 						window->surface);
@@ -894,7 +960,6 @@ main(int argc, char **argv)
 {
 	struct sigaction sigint;
 	struct display *display;
-	struct window *window;
 	int ret = 0, i;
 
 	for (i = 1; i < argc; i++) {
@@ -909,8 +974,8 @@ main(int argc, char **argv)
 	}
 
 	display = create_display();
-	window = create_window(display, 256, 256);
-	if (!window)
+	display->window = create_window(display, 256, 256);
+	if (!display->window)
 		return 1;
 
 	sigint.sa_handler = signal_int;
@@ -923,7 +988,7 @@ main(int argc, char **argv)
 
 	fprintf(stderr, "simple-timing exiting\n");
 
-	destroy_window(window);
+	destroy_window(display->window);
 	destroy_display(display);
 
 	return 0;
