@@ -78,8 +78,9 @@ struct display {
 struct buffer {
 	struct window *window;
 	struct wl_buffer *buffer;
+	struct wl_callback *buffer_release;
 	void *shm_data;
-	int busy;
+	int waiting_release_refcount;
 	int width, height;
 	size_t size;	/* width * 4 * height */
 	struct wl_list buffer_link; /** window::buffer_list */
@@ -152,16 +153,13 @@ static struct buffer *
 pick_free_buffer(struct window *window)
 {
 	struct buffer *b;
-	struct buffer *buffer = NULL;
 
 	wl_list_for_each(b, &window->buffer_list, buffer_link) {
-		if (!b->busy) {
-			buffer = b;
-			break;
-		}
+		if (b->waiting_release_refcount == 0)
+			return b;
 	}
 
-	return buffer;
+	return NULL;
 }
 
 static void
@@ -171,23 +169,35 @@ prune_old_released_buffers(struct window *window)
 
 	wl_list_for_each_safe(b, b_next,
 			      &window->buffer_list, buffer_link) {
-		if (!b->busy && (b->width != window->width ||
-		    b->height != window->height))
+		if (b->waiting_release_refcount == 0 && (b->width != window->width ||
+							 b->height != window->height))
 			destroy_buffer(b);
 	}
 }
 
 static void
-buffer_release(void *data, struct wl_buffer *buffer)
+buffer_release_callback_handler(void *data,
+				struct wl_callback *buffer_release,
+				uint32_t callback_data)
 {
-	struct buffer *mybuf = data;
+	struct buffer *buffer = data;
 
-	mybuf->busy = 0;
+	buffer->waiting_release_refcount--;
+	wl_callback_destroy(buffer_release);
 }
 
-static const struct wl_buffer_listener buffer_listener = {
-	buffer_release
+static const struct wl_callback_listener buffer_release_listener = {
+	.done = buffer_release_callback_handler,
 };
+
+static void
+buffer_create_get_release(struct buffer *buffer)
+{
+	buffer->buffer_release = wl_surface_get_release(buffer->window->surface);
+	wl_callback_add_listener(buffer->buffer_release,
+				 &buffer_release_listener, buffer);
+	buffer->waiting_release_refcount++;
+}
 
 static int
 create_sp_buffer(struct window *window, struct buffer *buffer)
@@ -206,7 +216,6 @@ create_sp_buffer(struct window *window, struct buffer *buffer)
 									 green,
 									 0, /* blue */
 									 UINT32_MAX /* alpha */);
-	wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
 
 	return 0;
 }
@@ -255,7 +264,6 @@ create_shm_buffer(struct window *window, struct buffer *buffer)
 						   width, height,
 						   stride,
 						   WL_SHM_FORMAT_XRGB8888);
-	wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
 	wl_shm_pool_destroy(pool);
 	close(fd);
 
@@ -705,8 +713,8 @@ draw_for_time(void *data, int64_t time)
 						 target.tv_nsec);
 	}
 	wp_fifo_v1_set_barrier(window->fifo);
+	buffer_create_get_release(buffer);
 	wl_surface_commit(window->surface);
-	buffer->busy = 1;
 }
 
 static void
@@ -742,7 +750,8 @@ registry_handle_global(void *data, struct wl_registry *registry,
 	if (strcmp(interface, "wl_compositor") == 0) {
 		d->compositor =
 			wl_registry_bind(registry,
-					 id, &wl_compositor_interface, 1);
+					 id, &wl_compositor_interface,
+					 MIN(version, 7));
 	} else if (strcmp(interface, "xdg_wm_base") == 0) {
 		d->wm_base = wl_registry_bind(registry,
 					      id, &xdg_wm_base_interface, 1);
