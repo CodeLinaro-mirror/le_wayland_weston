@@ -354,7 +354,6 @@ handle_xdg_surface_configure(void *data, struct xdg_surface *surface,
 
 	if (window->wait_for_configure) {
 		buffer = window_next_buffer(window);
-		assert(buffer);
 		submit_buffer_for_time(buffer, 0);
 		window->wait_for_configure = false;
 	}
@@ -521,16 +520,13 @@ window_next_buffer(struct window *window)
 	}
 
 	buffer = pick_free_buffer(window);
-
-	if (!buffer)
-		return NULL;
+	assert(buffer);
 
 	if (!buffer->buffer) {
 		ret = create_sp_buffer(window, buffer);
 		if (ret < 0)
 			ret = create_shm_buffer(window, buffer);
-		if (ret < 0)
-			return NULL;
+		assert(ret >= 0);
 	}
 
 	return buffer;
@@ -555,28 +551,24 @@ queue_some_frames(struct window *window)
 	for (i = 0; i < 60; i++) {
 		target_nsec += display->refresh_nsec * 2;
 		buffer = window_next_buffer(window);
-		assert(buffer);
 		submit_buffer_for_time(buffer, target_nsec);
 	}
 
 	for (i = 0; i < 30; i++) {
 		target_nsec += display->refresh_nsec * 4;
 		buffer = window_next_buffer(window);
-		assert(buffer);
 		submit_buffer_for_time(buffer, target_nsec);
 	}
 
 	for (i = 0; i < 10; i++) {
 		target_nsec += display->refresh_nsec * 10;
 		buffer = window_next_buffer(window);
-		assert(buffer);
 		submit_buffer_for_time(buffer, target_nsec);
 	}
 
 	for (i = 0; i < 10; i++) {
 		target_nsec += display->refresh_nsec * 100;
 		buffer = window_next_buffer(window);
-		assert(buffer);
 		submit_buffer_for_time(buffer, target_nsec);
 	}
 
@@ -669,7 +661,6 @@ finish_run(struct window *window)
 	feedback->target_time = 0;
 
 	buffer = window_next_buffer(window);
-	assert(buffer);
 
 	if (window->viewport)
 		wp_viewport_set_destination(window->viewport,
