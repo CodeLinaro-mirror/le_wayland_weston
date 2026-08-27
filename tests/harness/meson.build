@@ -57,6 +57,7 @@ lib_test_client = static_library(
 		xdg_shell_protocol_c,
 		'color-manager-client.c',
 		'color_util.c',
+		'image-util.c',
 	],
 	include_directories: common_inc,
 	dependencies: [
