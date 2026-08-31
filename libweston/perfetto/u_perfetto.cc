@@ -43,6 +43,7 @@ PERFETTO_DEFINE_CATEGORIES(
 	perfetto::Category(UTIL_PERFETTO_CATEGORY_DEFAULT_STR)
 	.SetDescription("Weston default events"),
 	perfetto::Category(UTIL_PERFETTO_CATEGORY_OVERHEAD_STR)
+	.SetTags("debug")
 	.SetDescription("Perfetto overhead"));
 
 PERFETTO_TRACK_EVENT_STATIC_STORAGE();
