@@ -2348,6 +2348,13 @@ gl_renderer_capture_screen(struct weston_output *output,
 			   gbm_buf->width,
 			   gbm_buf->height);
 
+	/* Capture dst is a client buffer with no buffer-age guarantee, so
+	 * the repaint path's partial-update exemption does not apply. Clear
+	 * it first; otherwise any pixel no view covers is left as the client
+	 * last wrote it (stale frames from the client's ring buffer). */
+	glClearColor(0.0, 0.0, 0.0, 0.0);
+	glClear(GL_COLOR_BUFFER_BIT);
+
 	/* Calculate the global GL matrix */
 	go->output_matrix = output->matrix;
 	weston_matrix_translate(&go->output_matrix,
@@ -2366,7 +2373,9 @@ gl_renderer_capture_screen(struct weston_output *output,
 				 z_order_link) {
 		if (screen_capture_backend->is_screen_capture_view(pnode->view))
 			continue;
-		draw_paint_node(pnode, &rb->base.damage);
+		/* Redraw the full output region, not incremental damage,
+		 * so the cleared capture buffer gets a complete frame. */
+		draw_paint_node(pnode, &output->region);
 	}
 
 	draw_output_borders(output, rb->border_damage);
